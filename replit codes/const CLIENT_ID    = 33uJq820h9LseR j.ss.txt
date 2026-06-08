@@ -1,0 +1,320 @@
+const CLIENT_ID    = "33uJq820h9LseRDAZ80iZ";
+const REDIRECT_URI = "https://tradingbot270.netlify.app/";
+const API_BASE     = "https://tradingbot270.netlify.app/.netlify/functions";
+
+/* ── STATE ──────────────────────────────────────────────────── */
+let ws              = null;
+let wsAuthorized    = false;
+let running         = false;
+let paused          = false;
+let martingaleLevel = 0;
+const martingale    = [1, 11.57, 11.42];
+let lastTradeTime   = 0;
+const COOLDOWN      = 3000;
+let token           = null;
+
+// Local tick history — persists in browser memory (no cold-start resets)
+let ticks           = [];
+
+// Trade execution state machine — prevents overlapping orders
+let tradeState      = "idle"; // idle | proposing | buying
+let pendingBarrier  = null;
+let pendingStake    = null;
+let pendingSignal   = null;
+
+/* ── DOM ────────────────────────────────────────────────────── */
+const $     = id => document.getElementById(id);
+const logEl = $("log");
+
+function log(msg) {
+  const line = document.createElement("div");
+  line.textContent = "[" + new Date().toLocaleTimeString() + "] " + msg;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+/* ── AUTH HELPERS ───────────────────────────────────────────── */
+function setLoggedIn(t) {
+  token = t;
+  localStorage.setItem("deriv_token", t);
+  $("login").style.display    = "none";
+  $("logout").style.display   = "block";
+  $("authStatus").textContent = "Logged in ✓";
+  $("authStatus").classList.add("connected");
+  log("Authenticated successfully.");
+}
+
+function setLoggedOut() {
+  token         = null;
+  wsAuthorized  = false;
+  localStorage.removeItem("deriv_token");
+  localStorage.removeItem("oauth_state");
+  $("login").style.display    = "block";
+  $("logout").style.display   = "none";
+  $("authStatus").textContent = "Not logged in";
+  $("authStatus").classList.remove("connected");
+}
+
+/* ── LOGIN ──────────────────────────────────────────────────── */
+$("login").onclick = () => {
+  const state = crypto.randomUUID();
+  localStorage.setItem("oauth_state", state);
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id:     CLIENT_ID,
+    redirect_uri:  REDIRECT_URI,
+    scope:         "trade",
+    state
+  });
+  window.location.href = "https://oauth.deriv.com/oauth2/auth?" + params.toString();
+};
+
+$("logout").onclick = () => {
+  running = false;
+  if (ws) { ws.close(); ws = null; }
+  setLoggedOut();
+  log("Logged out.");
+};
+
+/* ── OAUTH CALLBACK ─────────────────────────────────────────── */
+async function handleOAuthCallback() {
+  const params        = new URLSearchParams(window.location.search);
+  const code          = params.get("code");
+  const returnedState = params.get("state");
+  if (!code) return;
+
+  // Clear URL immediately — prevents re-exchange on refresh
+  window.history.replaceState({}, document.title, "/");
+
+  const savedState = localStorage.getItem("oauth_state");
+  if (!savedState || savedState !== returnedState) {
+    log("Auth error: state mismatch. Please log in again.");
+    setLoggedOut();
+    return;
+  }
+  localStorage.removeItem("oauth_state");
+
+  log("Exchanging code for token…");
+  try {
+    const res  = await fetch(API_BASE + "/oauth-exchange", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ code, redirect_uri: REDIRECT_URI })
+    });
+    const data = await res.json();
+    if (!data.access_token) {
+      log("Token exchange failed: " + (data.error || "no access_token"));
+      setLoggedOut();
+      return;
+    }
+    setLoggedIn(data.access_token);
+  } catch (err) {
+    log("Token exchange error: " + err.message);
+    setLoggedOut();
+  }
+}
+
+/* ── MODE BUTTONS ───────────────────────────────────────────── */
+$("demoBtn").onclick = () => log("Demo mode selected");
+$("liveBtn").onclick = () => log("Live mode selected");
+
+/* ── LOCAL STRATEGY (no Netlify call — runs instantly) ─────── */
+function lastDigit(price) {
+  const s = String(price);
+  return Number(s[s.length - 1]);
+}
+
+function findPattern(arr) {
+  for (let i = 0; i < arr.length - 1; i++) {
+    if (arr[i] === 2 && arr[i + 1] === 3) return i;
+  }
+  return -1;
+}
+
+function runStrategy(price) {
+  const d = lastDigit(price);
+  ticks.push(d);
+  if (ticks.length > 60) ticks.shift();
+
+  if (ticks.length < 4) return { signal: "HOLD" };
+
+  const idx = findPattern(ticks);
+  if (idx === -1) return { signal: "HOLD" };
+  if (idx + 3 >= ticks.length) return { signal: "HOLD" };
+
+  const activation = ticks[idx + 3];
+  if (activation === 9) return { signal: "IGNORE_9" };
+
+  const barrier     = activation + 1;
+  const latestDigit = ticks[ticks.length - 1];
+  const signal      = latestDigit !== barrier ? "WIN" : "LOSS";
+
+  return { signal, activation, barrier: String(barrier) };
+}
+
+/* ── WEBSOCKET — handles ticks + auth + trades on one connection */
+function connect() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    return; // Already open — do not duplicate
+  }
+
+  ws           = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${CLIENT_ID}`);
+  wsAuthorized = false;
+  tradeState   = "idle";
+
+  ws.onopen = () => {
+    log("Connected to Deriv. Authorizing…");
+    // Authorize first — required before proposals or buys
+    ws.send(JSON.stringify({ authorize: token }));
+  };
+
+  ws.onmessage = (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+
+    /* ── Global error handler ── */
+    if (msg.error) {
+      log("Error: " + msg.error.message + " [" + msg.error.code + "]");
+      // If trade errored, reset state machine so next tick can retry
+      if (tradeState === "proposing" || tradeState === "buying") {
+        tradeState = "idle";
+      }
+      return;
+    }
+
+    /* ── Step 1: Authorization confirmed ── */
+    if (msg.msg_type === "authorize") {
+      wsAuthorized = true;
+      log("Authorized. Subscribing to R_100 ticks…");
+      ws.send(JSON.stringify({ ticks: "R_100", subscribe: 1 }));
+      // Also subscribe to balance updates
+      ws.send(JSON.stringify({ balance: 1, subscribe: 1 }));
+      return;
+    }
+
+    /* ── Balance updates ── */
+    if (msg.msg_type === "balance") {
+      $("balance").textContent = "$" + Number(msg.balance.balance).toFixed(2);
+      return;
+    }
+
+    /* ── Step 2: Tick received — run strategy instantly ── */
+    if (msg.msg_type === "tick") {
+      const price = msg.tick.quote;
+      $("price").textContent = price;
+
+      if (!running || paused || !wsAuthorized) return;
+      if (tradeState !== "idle") return; // Trade already in progress
+      if (Date.now() - lastTradeTime < COOLDOWN) return;
+
+      const result = runStrategy(price);
+
+      if (!result || result.signal === "HOLD") return;
+      if (result.signal === "IGNORE_9") { log("Skipped — digit 9 activation"); return; }
+
+      const stake = martingale[martingaleLevel];
+
+      log(`▶ Signal: ${result.signal} | Barrier: ${result.barrier} | Stake: $${stake}`);
+
+      // Store for use when proposal & buy responses arrive
+      pendingBarrier = result.barrier;
+      pendingStake   = stake;
+      pendingSignal  = result.signal;
+      tradeState     = "proposing";
+
+      // Send proposal immediately on the same open WebSocket — zero extra latency
+      ws.send(JSON.stringify({
+        proposal:      1,
+        amount:        stake,
+        basis:         "stake",
+        contract_type: "DIGITDIFF",
+        currency:      "USD",
+        duration:      1,
+        duration_unit: "t",
+        barrier:       result.barrier,
+        symbol:        "R_100"
+      }));
+      return;
+    }
+
+    /* ── Step 3: Proposal received — buy immediately ── */
+    if (msg.msg_type === "proposal" && tradeState === "proposing") {
+      tradeState = "buying";
+      // Buy the proposal instantly — no delay, same WebSocket
+      ws.send(JSON.stringify({
+        buy:   msg.proposal.id,
+        price: pendingStake
+      }));
+      return;
+    }
+
+    /* ── Step 4: Buy confirmed ── */
+    if (msg.msg_type === "buy" && tradeState === "buying") {
+      lastTradeTime   = Date.now();
+      martingaleLevel = pendingSignal === "LOSS"
+        ? Math.min(martingaleLevel + 1, martingale.length - 1)
+        : 0;
+
+      $("level").textContent = martingaleLevel;
+      log(`✔ Trade executed | Contract: ${msg.buy.contract_id} | Bought at: $${msg.buy.buy_price}`);
+
+      // Reset for next trade
+      tradeState     = "idle";
+      pendingBarrier = null;
+      pendingStake   = null;
+      pendingSignal  = null;
+      return;
+    }
+  };
+
+  ws.onerror = () => {
+    log("WebSocket error.");
+    tradeState = "idle";
+  };
+
+  ws.onclose = () => {
+    log("WebSocket closed.");
+    ws           = null;
+    wsAuthorized = false;
+    tradeState   = "idle";
+  };
+}
+
+/* ── BOT CONTROLS ───────────────────────────────────────────── */
+$("start").onclick = () => {
+  if (!token) { log("Please log in before starting."); return; }
+  running = true;
+  paused  = false;
+  connect();
+  log("Bot started.");
+};
+
+$("pause").onclick = () => {
+  paused = !paused;
+  log(paused ? "Bot paused." : "Bot resumed.");
+};
+
+$("stop").onclick = () => {
+  running = false;
+  if (ws) { ws.close(); ws = null; }
+  log("Bot stopped.");
+};
+
+$("reset").onclick = () => {
+  running         = false;
+  paused          = false;
+  martingaleLevel = 0;
+  lastTradeTime   = 0;
+  tradeState      = "idle";
+  ticks           = [];
+  if (ws) { ws.close(); ws = null; }
+  $("level").textContent = "0";
+  log("Bot reset.");
+};
+
+/* ── INIT ───────────────────────────────────────────────────── */
+(async () => {
+  const saved = localStorage.getItem("deriv_token");
+  if (saved) { setLoggedIn(saved); return; }
+  await handleOAuthCallback();
+})();
