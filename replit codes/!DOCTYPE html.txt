@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>PRO Deriv Bot</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="container">
+  <h1>PRO DERIV BOT</h1>
+
+  <div class="auth-status" id="authStatus">Not logged in</div>
+
+  <div class="row">
+    <button id="demoBtn">Demo</button>
+    <button id="liveBtn">Live</button>
+  </div>
+
+  <button id="login">Login with Deriv</button>
+  <button id="logout" style="display:none;">Logout</button>
+
+  <div class="buttons">
+    <button id="start">Start</button>
+    <button id="pause">Pause</button>
+    <button id="stop">Stop</button>
+    <button id="reset">Reset</button>
+  </div>
+
+  <div class="stats">
+    <div>Price: <span id="price">-</span></div>
+    <div>Balance: <span id="balance">-</span></div>
+    <div>Level: <span id="level">0</span></div>
+  </div>
+
+  <div id="log" class="log"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
