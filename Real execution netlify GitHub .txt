@@ -1,0 +1,59 @@
+const WebSocket = require("ws");
+
+exports.handler = async (event) => {
+
+  const { barrier, stake } = JSON.parse(event.body);
+
+  const ws = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
+
+  return new Promise((resolve) => {
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        buy: 1,
+        price: Number(stake),
+        parameters: {
+          amount: Number(stake),
+          basis: "stake",
+          contract_type: "DIGITDIFF",
+          currency: "USD",
+          duration: 1,
+          duration_unit: "t",
+          barrier,
+          symbol: "R_100"
+        }
+      }));
+    };
+
+    ws.onmessage = (msg) => {
+      const data = JSON.parse(msg.data);
+
+      if (data.msg_type === "buy") {
+        ws.close();
+        resolve({
+          statusCode: 200,
+          body: JSON.stringify({
+            status: "TRADE_EXECUTED",
+            contract_id: data.buy.contract_id
+          })
+        });
+      }
+
+      if (data.error) {
+        ws.close();
+        resolve({
+          statusCode: 500,
+          body: JSON.stringify(data)
+        });
+      }
+    };
+
+    ws.onerror = () => {
+      ws.close();
+      resolve({
+        statusCode: 500,
+        body: JSON.stringify({ error: "WS error" })
+      });
+    };
+  });
+};

@@ -1,0 +1,111 @@
+const CLIENT_ID = "33uJq820h9LseRDAZ80iZ";
+const API_BASE = "https://tradingbot270.netlify.app/.netlify/functions";
+
+let ws;
+let running = false;
+let paused = false;
+let martingaleLevel = 0;
+const martingale = [1, 11.57, 11.42];
+
+let lastTradeTime = 0;
+const COOLDOWN = 3000;
+
+const $ = id => document.getElementById(id);
+const logEl = $("log");
+
+function log(msg) {
+  logEl.innerHTML += msg + "<br>";
+}
+
+/* LOGIN */
+$("login").onclick = () => {
+  window.location.href =
+    "https://oauth.deriv.com/oauth2/auth" +
+    "?response_type=code" +
+    `&client_id=${CLIENT_ID}` +
+    `&redirect_uri=${encodeURIComponent("https://tradingbot270.netlify.app/")}` +
+    "&scope=trade";
+};
+
+/* MODE */
+$("demoBtn").onclick = () => log("Demo mode selected");
+$("liveBtn").onclick = () => log("Live mode selected");
+
+/* STRATEGY CALL */
+async function strategy(price) {
+  const res = await fetch(API_BASE + "/strategy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ price })
+  });
+
+  return res.json();
+}
+
+/* TRADE CALL */
+async function trade(barrier, stake) {
+  const res = await fetch(API_BASE + "/trade", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ barrier, stake })
+  });
+
+  return res.json();
+}
+
+/* DERIV STREAM */
+function connect() {
+
+  ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${CLIENT_ID}`);
+
+  ws.onopen = () => log("Connected to Deriv");
+
+  ws.onmessage = async (e) => {
+
+    const msg = JSON.parse(e.data);
+    if (msg.msg_type !== "tick") return;
+
+    const price = msg.tick.quote;
+    $("price").innerText = price;
+
+    if (!running || paused) return;
+    if (Date.now() - lastTradeTime < COOLDOWN) return;
+
+    const result = await strategy(price);
+
+    if (!result || result.signal === "HOLD") return;
+
+    if (result.signal === "IGNORE_9") {
+      log("Ignored 9");
+      return;
+    }
+
+    const stake = martingale[martingaleLevel];
+
+    log(`Signal: ${result.signal}`);
+    log(`Barrier: ${result.barrier}`);
+
+    const exec = await trade(result.barrier, stake);
+
+    if (exec.status === "TRADE_EXECUTED") {
+
+      lastTradeTime = Date.now();
+
+      if (result.signal === "LOSS") {
+        martingaleLevel = Math.min(martingaleLevel + 1, 2);
+      } else {
+        martingaleLevel = 0;
+      }
+
+      $("level").innerText = martingaleLevel;
+    }
+  };
+
+  ws.onerror = () => log("Error");
+}
+
+/* CONTROLS */
+$("start").onclick = () => { running = true; connect(); log("Started"); };
+$("pause").onclick = () => { paused = !paused; log("Pause toggle"); };
+$("stop").onclick = () => { running = false; ws?.close(); log("Stopped"); };
+$("reset").onclick = () => { running = false; paused = false; martingaleLevel = 0; ws?.close(); log("Reset"); };

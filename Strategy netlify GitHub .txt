@@ -1,0 +1,45 @@
+let ticks = [];
+
+function digit(price) {
+  return Number(String(price).slice(-1));
+}
+
+function pattern(arr) {
+  for (let i = 0; i < arr.length - 1; i++) {
+    if (arr[i] === 2 && arr[i + 1] === 3) return i;
+  }
+  return -1;
+}
+
+exports.handler = async (event) => {
+
+  const { price } = JSON.parse(event.body);
+
+  const d = digit(price);
+  ticks.push(d);
+  if (ticks.length > 60) ticks.shift();
+
+  const idx = pattern(ticks);
+
+  if (idx === -1) return json({ signal: "HOLD" });
+
+  const activation = ticks[idx + 3];
+
+  if (activation === 9) return json({ signal: "IGNORE_9" });
+
+  const barrier = activation + 1;
+
+  const next = ticks[ticks.length - 1];
+
+  const signal = next === barrier ? "LOSS" : "WIN";
+
+  return json({ signal, activation, barrier });
+};
+
+function json(data) {
+  return {
+    statusCode: 200,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data)
+  };
+}
