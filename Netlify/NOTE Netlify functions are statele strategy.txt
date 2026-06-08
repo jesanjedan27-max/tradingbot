@@ -1,0 +1,70 @@
+// NOTE: Netlify functions are stateless — this in-memory ticks array resets
+// on every cold start. For reliable tick history in production, persist it to
+// a database or Netlify Blobs so state survives between function invocations.
+
+let ticks = [];
+
+function lastDigit(price) {
+  const s = String(price);
+  return Number(s[s.length - 1]);
+}
+
+// Finds first occurrence of digit 2 immediately followed by digit 3
+function findPattern(arr) {
+  for (let i = 0; i < arr.length - 1; i++) {
+    if (arr[i] === 2 && arr[i + 1] === 3) return i;
+  }
+  return -1;
+}
+
+exports.handler = async (event) => {
+  try {
+    const { price } = JSON.parse(event.body || "{}");
+
+    if (price === undefined || price === null) {
+      return respond({ signal: "HOLD" });
+    }
+
+    const d = lastDigit(price);
+    ticks.push(d);
+    if (ticks.length > 60) ticks.shift();
+
+    // Need at least 4 ticks to safely read idx+3
+    if (ticks.length < 4) return respond({ signal: "HOLD" });
+
+    const idx = findPattern(ticks);
+
+    // No pattern found
+    if (idx === -1) return respond({ signal: "HOLD" });
+
+    // Pattern found but idx+3 not yet in array
+    if (idx + 3 >= ticks.length) return respond({ signal: "HOLD" });
+
+    const activation = ticks[idx + 3];
+
+    // Avoid barrier = 10 (invalid for DIGITDIFF)
+    if (activation === 9) return respond({ signal: "IGNORE_9" });
+
+    const barrier     = activation + 1;
+    const latestDigit = ticks[ticks.length - 1];
+
+    // DIGITDIFF wins when final digit does NOT equal the barrier
+    const signal = latestDigit !== barrier ? "WIN" : "LOSS";
+
+    return respond({ signal, activation, barrier: String(barrier) });
+
+  } catch (err) {
+    return respond({ signal: "HOLD", error: err.message });
+  }
+};
+
+function respond(data) {
+  return {
+    statusCode: 200,
+    headers: {
+      "Content-Type":               "application/json",
+      "Access-Control-Allow-Origin": "*"
+    },
+    body: JSON.stringify(data)
+  };
+}
