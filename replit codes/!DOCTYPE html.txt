@@ -1,40 +1,98 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>PRO Deriv Bot</title>
-  <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PRO Deriv Bot — Authorized</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #050e20;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .card {
+      background: #0a1628;
+      border: 1px solid #1e3a5f;
+      border-radius: 16px;
+      padding: 40px 48px;
+      text-align: center;
+      max-width: 420px;
+      width: 90%;
+    }
+    .icon { font-size: 48px; margin-bottom: 16px; }
+    h1 { font-size: 20px; font-weight: 700; color: #38bdf8; margin-bottom: 8px; }
+    p  { font-size: 14px; color: #64748b; line-height: 1.6; }
+    .dot {
+      display: inline-block;
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: #10b981;
+      margin-right: 6px;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    .status {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 20px;
+      font-size: 13px;
+      color: #10b981;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  </style>
 </head>
 <body>
-
-<div class="container">
-  <h1>PRO DERIV BOT</h1>
-
-  <div class="auth-status" id="authStatus">Not logged in</div>
-
-  <div class="row">
-    <button id="demoBtn">Demo</button>
-    <button id="liveBtn">Live</button>
+  <div class="card" id="card">
+    <div class="icon">🔐</div>
+    <h1>Connecting…</h1>
+    <p>Authorizing with Deriv. Please wait.</p>
   </div>
 
-  <button id="login">Login with Deriv</button>
-  <button id="logout" style="display:none;">Logout</button>
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+      var token1 = params.get("token1");
+      var acct1  = params.get("acct1");
 
-  <div class="buttons">
-    <button id="start">Start</button>
-    <button id="pause">Pause</button>
-    <button id="stop">Stop</button>
-    <button id="reset">Reset</button>
-  </div>
+      // ── CASE 1: OAuth popup redirect (token in URL) ──────────────
+      if (token1) {
+        if (window.opener && !window.opener.closed) {
+          // Send token back to the bot app that opened this popup
+          window.opener.postMessage(
+            { type: "deriv_token", token: token1, account: acct1 },
+            "*"
+          );
+          document.getElementById("card").innerHTML =
+            '<div class="icon">✅</div>' +
+            '<h1 style="color:#10b981">Authorized!</h1>' +
+            '<p>Connected to Deriv successfully.<br>This window will close automatically.</p>' +
+            '<div class="status"><span class="dot"></span>Sending token to bot…</div>';
+          setTimeout(function () { window.close(); }, 1800);
+        } else {
+          // Direct navigation (not a popup) — show guidance
+          window.history.replaceState({}, "", window.location.pathname);
+          document.getElementById("card").innerHTML =
+            '<div class="icon">⚠️</div>' +
+            '<h1 style="color:#f59e0b">Window not found</h1>' +
+            '<p>Please go back to the bot app and click<br>' +
+            '<strong>Login with Deriv</strong> again to open a proper popup.</p>';
+        }
+        return;
+      }
 
-  <div class="stats">
-    <div>Price: <span id="price">-</span></div>
-    <div>Balance: <span id="balance">-</span></div>
-    <div>Level: <span id="level">0</span></div>
-  </div>
-
-  <div id="log" class="log"></div>
-</div>
-
-<script src="app.js"></script>
+      // ── CASE 2: Regular direct visit (no token) ──────────────────
+      document.getElementById("card").innerHTML =
+        '<div class="icon">🤖</div>' +
+        '<h1>PRO Deriv Bot</h1>' +
+        '<p>This page is the OAuth relay for the PRO Deriv Bot.<br><br>' +
+        'Open the bot in your browser and click ' +
+        '<strong style="color:#38bdf8">Login with Deriv</strong> to connect.</p>';
+    })();
+  </script>
 </body>
 </html>
