@@ -2,307 +2,472 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Deriv Dual Balance Bot</title>
-
 <style>
-body{background:#020617;color:#fff;font-family:Arial}
-.container{max-width:520px;margin:20px auto;padding:20px;background:#0f172a;border-radius:12px}
-
-h2{text-align:center;color:#38bdf8}
-
-input{width:100%;padding:10px;margin:6px 0;border:none;border-radius:6px}
-
-.mode{display:flex;gap:6px;margin-bottom:10px}
-.mode button{flex:1;padding:10px;border:none;border-radius:6px;font-weight:bold;cursor:pointer}
-
-#demo{background:#22c55e}
-#real{background:#ef4444}
-.active{outline:3px solid #38bdf8}
-
-.stats{font-size:14px;margin-top:10px}
-.stats span{color:#22c55e;font-weight:bold}
-
-.buttons{display:flex;gap:6px;margin-top:10px}
-button{flex:1;padding:10px;border:none;border-radius:6px;font-weight:bold}
-
-#start{background:#60a5fa}
-#pause{background:#facc15}
-#stop{background:#ef4444}
-#reset{background:#22c55e}
-
+body{
+  background:#020617;
+  color:#fff;
+  font-family:Arial, sans-serif;
+  margin:0;
+  padding:0;
+}
+.container{
+  max-width:520px;
+  margin:20px auto;
+  padding:20px;
+  background:#0f172a;
+  border-radius:12px;
+  box-shadow:0 12px 30px rgba(0,0,0,.35);
+}
+h2{
+  text-align:center;
+  color:#38bdf8;
+  margin-top:0;
+}
+input{
+  width:100%;
+  padding:10px;
+  margin:6px 0;
+  border:none;
+  border-radius:6px;
+  box-sizing:border-box;
+  outline:none;
+}
+.mode{
+  display:flex;
+  gap:6px;
+  margin-bottom:10px;
+}
+.mode button{
+  flex:1;
+  padding:10px;
+  border:none;
+  border-radius:6px;
+  font-weight:bold;
+  cursor:pointer;
+  color:#fff;
+}
+#demo{background:#22c55e;}
+#real{background:#ef4444;}
+.active{outline:3px solid #38bdf8;}
+.stats{
+  font-size:14px;
+  margin-top:10px;
+  line-height:1.8;
+}
+.stats span{
+  color:#22c55e;
+  font-weight:bold;
+}
+.buttons{
+  display:flex;
+  gap:6px;
+  margin-top:10px;
+}
+button{
+  flex:1;
+  padding:10px;
+  border:none;
+  border-radius:6px;
+  font-weight:bold;
+}
+#start{background:#60a5fa;}
+#pause{background:#facc15;}
+#stop{background:#ef4444;}
+#reset{background:#22c55e;}
 #log{
-height:240px;
-overflow:auto;
-background:#111827;
-padding:8px;
-border-radius:6px;
-font-size:12px;
-margin-top:10px;
+  height:240px;
+  overflow:auto;
+  background:#111827;
+  padding:8px;
+  border-radius:6px;
+  font-size:12px;
+  margin-top:10px;
+  white-space:pre-wrap;
+  word-break:break-word;
 }
 </style>
 </head>
-
 <body>
-
 <div class="container">
+  <h2>DERIV DUAL ACCOUNT SYSTEM</h2>
 
-<h2>DERIV DUAL ACCOUNT SYSTEM</h2>
+  <input id="token" type="password" placeholder="Enter DEMO token">
 
-<input id="demoToken" type="password" placeholder="Demo Token (DOT92927394)">
-<input id="realToken" type="password" placeholder="Real Token (ROT91650098)">
+  <div class="mode">
+    <button id="demo" class="active">DEMO</button>
+    <button id="real">REAL</button>
+  </div>
 
-<div class="mode">
-<button id="demo" class="active">DEMO</button>
-<button id="real">REAL</button>
-</div>
+  <div class="stats">
+    Mode: <span id="mode">DEMO</span><br>
+    Balance: <span id="balance">--</span><br>
+    Price: <span id="price">--</span><br>
+    Profit: <span id="profit">0.00</span><br>
+    Status: <span id="status">STOPPED</span>
+  </div>
 
-<div class="stats">
-Mode: <span id="mode">DEMO</span><br>
-Balance: <span id="balance">--</span><br>
-Price: <span id="price">--</span><br>
-Profit: <span id="profit">0.00</span><br>
-Status: <span id="status">STOPPED</span>
-</div>
+  <div class="buttons">
+    <button id="start">START</button>
+    <button id="pause">PAUSE</button>
+    <button id="stop">STOP</button>
+    <button id="reset">RESET</button>
+  </div>
 
-<div class="buttons">
-<button id="start">START</button>
-<button id="pause">PAUSE</button>
-<button id="stop">STOP</button>
-<button id="reset">RESET</button>
-</div>
-
-<div id="log"></div>
-
+  <div id="log"></div>
 </div>
 
 <script>
-document.addEventListener("DOMContentLoaded",()=>{
+document.addEventListener("DOMContentLoaded", () => {
+  const $ = (id) => document.getElementById(id);
 
-const $=id=>document.getElementById(id);
+  const demoBtn = $("demo");
+  const realBtn = $("real");
+  const tokenEl = $("token");
+  const logEl = $("log");
+  const priceEl = $("price");
+  const balanceEl = $("balance");
+  const modeEl = $("mode");
+  const statusEl = $("status");
+  const profitEl = $("profit");
 
-const demoBtn=$("demo");
-const realBtn=$("real");
+  const APP_ID = "1089";
+  const SYMBOL = "R_100";
 
-const logEl=$("log");
-const priceEl=$("price");
-const balanceEl=$("balance");
-const modeEl=$("mode");
-const statusEl=$("status");
-const profitEl=$("profit");
+  let ws = null;
+  let running = false;
+  let paused = false;
+  let mode = "DEMO";
 
-const APP_ID="1089";
-const SYMBOL="R_100";
+  let digits = [];
+  let warmup = 0;
+  let active = false;
 
-/* STATE */
-let ws;
-let token;
-let running=false;
-let paused=false;
-let mode="DEMO";
+  let tradeLock = false;
+  let ladder = 1;
+  let profit = 0;
 
-let digits=[];
-let warmup=0;
-let active=false;
+  let currentContractId = null;
+  let contractSettled = false;
+  let awaitingProposal = false;
+  let lastBarrier = null;
 
-let tradeLock=false;
-let ladder=1;
-let profit=0;
+  function log(msg) {
+    logEl.innerHTML += (logEl.innerHTML ? "<br>" : "") + msg;
+    logEl.scrollTop = logEl.scrollHeight;
+  }
 
-/* LOG */
-function log(msg){
-logEl.innerHTML+="<br>"+msg;
-logEl.scrollTop=logEl.scrollHeight;
-}
+  function send(data) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(data));
+    }
+  }
 
-/* SEND */
-function send(d){
-if(ws && ws.readyState===1){
-ws.send(JSON.stringify(d));
-}
-}
+  function lastDigit(price) {
+    const s = Number(price).toFixed(2);
+    return Number(s[s.length - 1]);
+  }
 
-/* DIGIT ENGINE */
-function lastDigit(p){
-const s=p.toFixed(2);
-return Number(s[s.length-1]);
-}
+  function stake() {
+    if (ladder === 1) return 0.35;
+    if (ladder === 2) return 4.05;
+    return 46.8;
+  }
 
-/* STAKE (PRESERVED) */
-function stake(){
-if(ladder===1) return 0.35;
-if(ladder===2) return 4.05;
-return 46.8;
-}
+  function tokenKey(accountMode) {
+    return accountMode === "DEMO" ? "deriv_demo_token" : "deriv_real_token";
+  }
 
-/* MODE SWITCH */
-function setMode(m){
+  function loadToken(accountMode) {
+    return localStorage.getItem(tokenKey(accountMode)) || "";
+  }
 
-mode=m;
-modeEl.textContent=m;
+  function saveToken(accountMode, value) {
+    localStorage.setItem(tokenKey(accountMode), value);
+  }
 
-demoBtn.classList.remove("active");
-realBtn.classList.remove("active");
+  function refreshTokenField() {
+    const saved = loadToken(mode);
+    tokenEl.value = saved;
+    tokenEl.placeholder = mode === "DEMO" ? "Enter DEMO token" : "Enter REAL token";
+  }
 
-if(m==="DEMO"){
-demoBtn.classList.add("active");
-}else{
-realBtn.classList.add("active");
-}
+  function resetSessionState() {
+    digits = [];
+    warmup = 0;
+    active = false;
+    tradeLock = false;
+    awaitingProposal = false;
+    currentContractId = null;
+    contractSettled = false;
+  }
 
-log("MODE → "+m);
-connect(); // reconnect with correct token
-}
+  function setStatus(text) {
+    statusEl.textContent = text;
+  }
 
-/* CONNECT (FIXED PER ACCOUNT) */
-function connect(){
+  function closeSocket() {
+    if (ws) {
+      try {
+        ws.close();
+      } catch (e) {}
+      ws = null;
+    }
+  }
 
-if(ws) ws.close();
+  function connect() {
+    const token = tokenEl.value.trim() || loadToken(mode);
 
-let t = mode==="DEMO"
-? $("demoToken").value.trim()
-: $("realToken").value.trim();
+    if (!token) {
+      log("Missing token for " + mode);
+      setStatus("NO TOKEN");
+      return;
+    }
 
-if(!t){
-log("❌ Missing token for "+mode);
-return;
-}
+    saveToken(mode, token);
 
-token=t;
+    closeSocket();
+    resetSessionState();
 
-log("CONNECTING → "+mode);
+    log("CONNECTING → " + mode);
+    setStatus("CONNECTING");
 
-ws=new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`);
+    ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`);
 
-ws.onopen=()=>{
-log("CONNECTED");
-send({authorize:token});
-};
+    ws.onopen = () => {
+      log("CONNECTED");
+      send({ authorize: token });
+    };
 
-ws.onmessage=(e)=>{
+    ws.onclose = () => {
+      log("DISCONNECTED");
+      if (running && !paused) {
+        setStatus("DISCONNECTED");
+      } else if (!running) {
+        setStatus("STOPPED");
+      }
+    };
 
-const msg=JSON.parse(e.data);
+    ws.onerror = () => {
+      log("WEBSOCKET ERROR");
+    };
 
-/* AUTH */
-if(msg.msg_type==="authorize"){
-log("AUTHORIZED → "+mode);
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
 
-send({balance:1,subscribe:1});
-send({ticks:SYMBOL,subscribe:1});
-}
+      if (msg.error) {
+        log("ERROR → " + msg.error.message);
+        if (awaitingProposal) {
+          awaitingProposal = false;
+          tradeLock = false;
+        }
+        if (msg.msg_type === "authorize") {
+          setStatus("AUTH ERROR");
+        }
+        return;
+      }
 
-/* BALANCE */
-if(msg.msg_type==="balance"){
-balanceEl.textContent=Number(msg.balance.balance).toFixed(2);
-}
+      if (msg.msg_type === "authorize") {
+        log("AUTHORIZED → " + mode);
+        setStatus(running ? "RUNNING" : "READY");
+        send({ balance: 1, subscribe: 1 });
+        send({ ticks: SYMBOL, subscribe: 1 });
+        return;
+      }
 
-/* TICK */
-if(msg.msg_type==="tick"){
+      if (msg.msg_type === "balance") {
+        if (msg.balance && typeof msg.balance.balance !== "undefined") {
+          balanceEl.textContent = Number(msg.balance.balance).toFixed(2);
+        }
+        return;
+      }
 
-const price=msg.tick.quote;
-const d=lastDigit(price);
+      if (msg.msg_type === "tick") {
+        const price = msg.tick.quote;
+        const d = lastDigit(price);
 
-priceEl.textContent=price.toFixed(2)+" → "+d;
+        priceEl.textContent = Number(price).toFixed(2) + " → " + d;
 
-/* warmup */
-if(!active){
-warmup++;
-if(warmup>=10){
-active=true;
-statusEl.textContent="RUNNING";
-log("BOT ACTIVE");
-}
-return;
-}
+        if (!active) {
+          warmup++;
+          if (warmup >= 10) {
+            active = true;
+            if (running && !paused) setStatus("RUNNING");
+            log("BOT ACTIVE");
+          }
+          return;
+        }
 
-/* digits */
-digits.push(d);
-if(digits.length>3) digits.shift();
+        digits.push(d);
+        if (digits.length > 3) digits.shift();
 
-/* signal */
-if(digits.length===3){
-if(digits[0]===digits[1]&&digits[1]===digits[2]&&!tradeLock){
-trade(digits[2]);
-}
-}
+        if (digits.length === 3) {
+          if (digits[0] === digits[1] && digits[1] === digits[2] && !tradeLock && running && !paused) {
+            placeTrade(digits[2]);
+          }
+        }
+        return;
+      }
 
-}
+      if (msg.msg_type === "proposal") {
+        if (!awaitingProposal || !msg.proposal || !msg.proposal.id) return;
 
-/* RESULT */
-if(msg.msg_type==="proposal_open_contract"){
+        const proposalId = msg.proposal.id;
+        log("PROPOSAL READY → " + lastBarrier);
 
-const c=msg.proposal_open_contract;
+        send({
+          buy: proposalId,
+          price: stake()
+        });
 
-if(c.is_sold){
-const pnl=Number(c.profit);
+        return;
+      }
 
-profit+=pnl;
-profitEl.textContent=profit.toFixed(2);
+      if (msg.msg_type === "buy") {
+        if (!msg.buy || !msg.buy.contract_id) {
+          log("BUY FAILED");
+          tradeLock = false;
+          awaitingProposal = false;
+          return;
+        }
 
-log("RESULT → "+pnl);
+        currentContractId = msg.buy.contract_id;
+        contractSettled = false;
+        awaitingProposal = false;
 
-if(pnl>0) ladder=1;
-else ladder=Math.min(ladder+1,3);
+        log("BOUGHT → contract " + currentContractId);
 
-tradeLock=false;
-}
+        send({
+          proposal_open_contract: 1,
+          contract_id: currentContractId,
+          subscribe: 1
+        });
 
-}
+        return;
+      }
 
-};
+      if (msg.msg_type === "proposal_open_contract") {
+        const c = msg.proposal_open_contract;
+        if (!c || !currentContractId) return;
+        if (String(c.contract_id) !== String(currentContractId)) return;
 
-}
+        if (c.is_sold && !contractSettled) {
+          contractSettled = true;
 
-/* TRADE */
-function trade(barrier){
+          const pnl = Number(c.profit || 0);
+          profit += pnl;
+          profitEl.textContent = profit.toFixed(2);
 
-if(!running||paused||tradeLock) return;
+          log("RESULT → " + pnl.toFixed(2));
 
-tradeLock=true;
+          if (pnl > 0) {
+            ladder = 1;
+          } else {
+            ladder = Math.min(ladder + 1, 3);
+          }
 
-const amount=stake();
+          tradeLock = false;
+          currentContractId = null;
+        }
 
-send({
-buy:1,
-price:amount,
-parameters:{
-amount,
-basis:"stake",
-contract_type:"DIGITDIFF",
-currency:"USD",
-duration:1,
-duration_unit:"t",
-symbol:SYMBOL,
-barrier
-}
-});
+        return;
+      }
+    };
+  }
 
-log("TRADE "+mode+" → "+barrier);
-}
+  function placeTrade(barrier) {
+    if (!running || paused || tradeLock) return;
 
-/* BUTTONS */
+    tradeLock = true;
+    awaitingProposal = true;
+    lastBarrier = barrier;
 
-$("start").onclick=()=>{
-running=true;
-connect();
-};
+    const amount = stake();
 
-$("pause").onclick=()=>paused=!paused;
+    log("PROPOSAL → " + mode + " / barrier " + barrier + " / stake " + amount.toFixed(2));
 
-$("stop").onclick=()=>{
-running=false;
-ws?.close();
-statusEl.textContent="STOPPED";
-};
+    send({
+      proposal: 1,
+      amount: amount,
+      basis: "stake",
+      contract_type: "DIGITDIFF",
+      currency: "USD",
+      duration: 1,
+      duration_unit: "t",
+      symbol: SYMBOL,
+      barrier: barrier
+    });
+  }
 
-$("reset").onclick=()=>{
-location.reload();
-};
+  function setMode(newMode) {
+    mode = newMode;
+    modeEl.textContent = newMode;
 
-demoBtn.onclick=()=>setMode("DEMO");
-realBtn.onclick=()=>setMode("REAL");
+    demoBtn.classList.remove("active");
+    realBtn.classList.remove("active");
 
+    if (newMode === "DEMO") {
+      demoBtn.classList.add("active");
+    } else {
+      realBtn.classList.add("active");
+    }
+
+    refreshTokenField();
+    log("MODE → " + newMode);
+
+    if (running) {
+      connect();
+    } else {
+      setStatus("READY");
+      connect();
+    }
+  }
+
+  $("start").onclick = () => {
+    running = true;
+    paused = false;
+    setStatus("CONNECTING");
+    connect();
+  };
+
+  $("pause").onclick = () => {
+    if (!running) return;
+    paused = !paused;
+    setStatus(paused ? "PAUSED" : "RUNNING");
+    log(paused ? "PAUSED" : "RESUMED");
+  };
+
+  $("stop").onclick = () => {
+    running = false;
+    paused = false;
+    tradeLock = false;
+    awaitingProposal = false;
+    currentContractId = null;
+    contractSettled = false;
+    closeSocket();
+    setStatus("STOPPED");
+    log("STOPPED");
+  };
+
+  $("reset").onclick = () => {
+    location.reload();
+  };
+
+  demoBtn.onclick = () => setMode("DEMO");
+  realBtn.onclick = () => setMode("REAL");
+
+  tokenEl.addEventListener("input", () => {
+    saveToken(mode, tokenEl.value.trim());
+  });
+
+  refreshTokenField();
+  setStatus("READY");
+
+  if (tokenEl.value.trim()) {
+    connect();
+  }
 });
 </script>
-
 </body>
-  </html>
+            </html>
