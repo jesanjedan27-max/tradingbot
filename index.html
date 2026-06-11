@@ -3,26 +3,77 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Deriv DigitDiff Stable Bot</title>
+<title>Deriv Digit Bot Pro</title>
 
 <style>
 body{background:#020617;color:#fff;font-family:Arial}
 .container{max-width:520px;margin:20px auto;padding:20px;background:#0f172a;border-radius:12px}
+
 h2{text-align:center;color:#38bdf8}
 
 input{width:100%;padding:10px;margin:6px 0;border:none;border-radius:6px}
 
-.stats{font-size:14px;margin-top:10px}
-.stats span{color:#22c55e;font-weight:bold}
+.mode{
+display:flex;
+gap:6px;
+margin-bottom:10px;
+}
 
-.buttons{display:flex;gap:6px;margin-top:10px}
-button{flex:1;padding:10px;border:none;border-radius:6px;font-weight:bold;cursor:pointer}
-#start{background:#22c55e}
+.mode button{
+flex:1;
+padding:10px;
+border:none;
+border-radius:6px;
+font-weight:bold;
+cursor:pointer;
+}
+
+#demo{background:#22c55e}
+#real{background:#ef4444}
+
+.active{
+outline:3px solid #38bdf8;
+}
+
+.stats{
+font-size:14px;
+margin-top:10px;
+}
+
+.stats span{
+color:#22c55e;
+font-weight:bold;
+}
+
+.buttons{
+display:flex;
+gap:6px;
+margin-top:10px;
+}
+
+button{
+flex:1;
+padding:10px;
+border:none;
+border-radius:6px;
+font-weight:bold;
+cursor:pointer;
+}
+
+#start{background:#60a5fa}
 #pause{background:#facc15}
 #stop{background:#ef4444}
-#reset{background:#60a5fa}
+#reset{background:#22c55e}
 
-#log{height:260px;overflow:auto;background:#111827;padding:8px;border-radius:6px;font-size:12px;margin-top:10px}
+#log{
+height:240px;
+overflow:auto;
+background:#111827;
+padding:8px;
+border-radius:6px;
+font-size:12px;
+margin-top:10px;
+}
 </style>
 </head>
 
@@ -30,11 +81,17 @@ button{flex:1;padding:10px;border:none;border-radius:6px;font-weight:bold;cursor
 
 <div class="container">
 
-<h2>DERIV DIGIT BOT (STABLE)</h2>
+<h2>DERIV DIGIT BOT PRO</h2>
 
 <input id="token" type="password" placeholder="Enter Deriv API Token">
 
+<div class="mode">
+<button id="demo" class="active">DEMO</button>
+<button id="real">REAL</button>
+</div>
+
 <div class="stats">
+Mode: <span id="mode">DEMO</span><br>
 Balance: <span id="balance">--</span><br>
 Price: <span id="price">--</span><br>
 Profit: <span id="profit">0.00</span><br>
@@ -57,20 +114,26 @@ document.addEventListener("DOMContentLoaded",()=>{
 
 const $=id=>document.getElementById(id);
 
+const demoBtn=$("demo");
+const realBtn=$("real");
+
 const logEl=$("log");
 const priceEl=$("price");
 const balanceEl=$("balance");
 const profitEl=$("profit");
 const statusEl=$("status");
+const modeEl=$("mode");
 
 const APP_ID="1089";
 const SYMBOL="R_100";
 
-/* STATE */
+/* ================= STATE ================= */
+
 let ws;
 let token;
 let running=false;
 let paused=false;
+let mode="DEMO";
 
 let digits=[];
 let warmup=0;
@@ -80,61 +143,54 @@ let tradeLock=false;
 let ladder=1;
 let profit=0;
 
-/* LOG */
+/* ================= LOG ================= */
+
 function log(msg){
 console.log(msg);
 logEl.innerHTML+="<br>"+msg;
 logEl.scrollTop=logEl.scrollHeight;
 }
 
-/* SEND */
-function send(data){
+/* ================= SEND ================= */
+
+function send(d){
 if(ws && ws.readyState===1){
-ws.send(JSON.stringify(data));
+ws.send(JSON.stringify(d));
 }
 }
 
-/* DIGIT */
+/* ================= DIGIT ================= */
+
 function lastDigit(price){
 const s=price.toFixed(2);
 return Number(s[s.length-1]);
 }
 
-/* STAKE */
+/* ================= STAKE (MARTINGALE PRESERVED) ================= */
+
 function stake(){
 if(ladder===1) return 0.35;
 if(ladder===2) return 4.05;
 return 46.8;
 }
 
-/* TRADE */
-function trade(barrier){
+/* ================= MODE SWITCH ================= */
 
-if(!running||paused||tradeLock) return;
+function setMode(m){
+mode=m;
+modeEl.textContent=m;
 
-tradeLock=true;
+demoBtn.classList.remove("active");
+realBtn.classList.remove("active");
 
-const amount=stake();
+if(m==="DEMO") demoBtn.classList.add("active");
+else realBtn.classList.add("active");
 
-log("TRADE → "+barrier+" | $"+amount);
-
-send({
-buy:1,
-price:amount,
-parameters:{
-amount,
-basis:"stake",
-contract_type:"DIGITDIFF",
-currency:"USD",
-duration:1,
-duration_unit:"t",
-symbol:SYMBOL,
-barrier
-}
-});
+log("MODE → "+m);
 }
 
-/* CONNECT */
+/* ================= CONNECT ================= */
+
 function connect(){
 
 log("CONNECTING...");
@@ -145,7 +201,6 @@ ws.onopen=()=>{
 log("CONNECTED");
 statusEl.textContent="CONNECTED";
 send({authorize:token});
-log("AUTH SENT");
 };
 
 ws.onerror=()=>log("WS ERROR");
@@ -158,8 +213,7 @@ const msg=JSON.parse(e.data);
 
 /* AUTH */
 if(msg.msg_type==="authorize"){
-log("AUTHORIZED");
-statusEl.textContent="AUTHORIZED";
+log("AUTHORIZED ("+mode+")");
 
 send({ticks:SYMBOL,subscribe:1});
 send({balance:1,subscribe:1});
@@ -178,8 +232,6 @@ const d=lastDigit(price);
 
 priceEl.textContent=price.toFixed(2)+" → "+d;
 
-log("TICK "+d);
-
 /* warmup */
 if(!active){
 warmup++;
@@ -191,17 +243,15 @@ log("BOT ACTIVE");
 return;
 }
 
-/* digit array */
+/* digit engine */
 digits.push(d);
 if(digits.length>3) digits.shift();
 
 /* pattern */
 if(digits.length===3){
-
 if(digits[0]===digits[1]&&digits[1]===digits[2]&&!tradeLock){
 trade(digits[2]);
 }
-
 }
 
 }
@@ -231,7 +281,36 @@ tradeLock=false;
 
 }
 
-/* BUTTONS */
+/* ================= TRADE ================= */
+
+function trade(barrier){
+
+if(!running||paused||tradeLock) return;
+
+tradeLock=true;
+
+const amount=stake();
+
+log("TRADE "+mode+" → "+barrier+" | $"+amount);
+
+send({
+buy:1,
+price:amount,
+parameters:{
+amount,
+basis:"stake",
+contract_type:"DIGITDIFF",
+currency:"USD",
+duration:1,
+duration_unit:"t",
+symbol:SYMBOL,
+barrier
+}
+});
+
+}
+
+/* ================= BUTTONS ================= */
 
 $("start").onclick=()=>{
 
@@ -243,10 +322,7 @@ connect();
 
 };
 
-$("pause").onclick=()=>{
-paused=!paused;
-log(paused?"PAUSED":"RESUMED");
-};
+$("pause").onclick=()=>paused=!paused;
 
 $("stop").onclick=()=>{
 running=false;
@@ -258,6 +334,11 @@ log("STOPPED");
 $("reset").onclick=()=>{
 location.reload();
 };
+
+/* MODE */
+
+demoBtn.onclick=()=>setMode("DEMO");
+realBtn.onclick=()=>setMode("REAL");
 
 });
 </script>
