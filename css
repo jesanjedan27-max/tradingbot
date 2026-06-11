@@ -1,0 +1,117 @@
+body {
+  background: #020617;
+  color: #ffffff;
+  font-family: Arial, sans-serif;
+}
+
+.container {
+  max-width: 520px;
+  margin: 30px auto;
+  padding: 20px;
+  background: #0f172a;
+  border-radius: 12px;
+}
+
+h1 {
+  text-align: center;
+  color: #38bdf8;
+  font-size: 20px;
+}
+
+input {
+  width: 100%;
+  padding: 10px;
+  margin: 6px 0;
+  border: none;
+  border-radius: 6px;
+}
+
+.row {
+  display: flex;
+  gap: 6px;
+}
+
+.stats {
+  background: #020617;
+  padding: 10px;
+  border-radius: 8px;
+  margin-top: 8px;
+  font-size: 14px;
+}
+
+.buttons {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+button {
+  flex: 1;
+  padding: 10px;
+  border: none;
+  border-radius: 6px;
+  font-weight: bold;
+  cursor: pointer;
+  color: white;
+}
+
+#start { background: #22c55e; }
+#pause { background: #facc15; color: black; }
+#stop  { background: #ef4444; }
+#reset { background: #60a5fa; }
+
+#price,
+#currentStake,
+#balance {
+  color: #ef4444;
+  font-weight: bold;
+}
+
+#profit {
+  color: #22c55e;
+  font-weight: bold;
+}
+
+#recoveryContainer {
+  width: 100%;
+  height: 15px;
+  background: #1f2937;
+  border-radius: 6px;
+  margin-top: 10px;
+  overflow: hidden;
+}
+
+#recoveryBar {
+  height: 100%;
+  width: 0%;
+  background: #facc15;
+  transition: width 0.2s ease;
+}
+
+.logs {
+  margin-top: 12px;
+}
+
+.log-box {
+  background: #374151;
+  border-radius: 6px;
+  padding: 6px;
+}
+
+.log-box h3 {
+  text-align: center;
+  font-size: 12px;
+  margin: 4px 0;
+  color: #38bdf8;
+}
+
+.log {
+  background: #4b5563;
+  color: #e5e7eb;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: monospace;
+  max-height: 220px;
+}
