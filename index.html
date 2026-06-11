@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Deriv Digit Bot Pro</title>
+<title>Deriv Digit Bot Stable Pro</title>
 
 <style>
 body{background:#020617;color:#fff;font-family:Arial}
@@ -13,52 +13,17 @@ h2{text-align:center;color:#38bdf8}
 
 input{width:100%;padding:10px;margin:6px 0;border:none;border-radius:6px}
 
-.mode{
-display:flex;
-gap:6px;
-margin-bottom:10px;
-}
-
-.mode button{
-flex:1;
-padding:10px;
-border:none;
-border-radius:6px;
-font-weight:bold;
-cursor:pointer;
-}
-
+.mode{display:flex;gap:6px;margin-bottom:10px}
+.mode button{flex:1;padding:10px;border:none;border-radius:6px;font-weight:bold;cursor:pointer}
 #demo{background:#22c55e}
 #real{background:#ef4444}
+.active{outline:3px solid #38bdf8}
 
-.active{
-outline:3px solid #38bdf8;
-}
+.stats{font-size:14px;margin-top:10px}
+.stats span{color:#22c55e;font-weight:bold}
 
-.stats{
-font-size:14px;
-margin-top:10px;
-}
-
-.stats span{
-color:#22c55e;
-font-weight:bold;
-}
-
-.buttons{
-display:flex;
-gap:6px;
-margin-top:10px;
-}
-
-button{
-flex:1;
-padding:10px;
-border:none;
-border-radius:6px;
-font-weight:bold;
-cursor:pointer;
-}
+.buttons{display:flex;gap:6px;margin-top:10px}
+button{flex:1;padding:10px;border:none;border-radius:6px;font-weight:bold;cursor:pointer}
 
 #start{background:#60a5fa}
 #pause{background:#facc15}
@@ -81,9 +46,9 @@ margin-top:10px;
 
 <div class="container">
 
-<h2>DERIV DIGIT BOT PRO</h2>
+<h2>DERIV BOT PRO (STABLE)</h2>
 
-<input id="token" type="password" placeholder="Enter Deriv API Token">
+<input id="token" type="password" placeholder="Enter Deriv Token">
 
 <div class="mode">
 <button id="demo" class="active">DEMO</button>
@@ -127,8 +92,7 @@ const modeEl=$("mode");
 const APP_ID="1089";
 const SYMBOL="R_100";
 
-/* ================= STATE ================= */
-
+/* STATE */
 let ws;
 let token;
 let running=false;
@@ -143,40 +107,37 @@ let tradeLock=false;
 let ladder=1;
 let profit=0;
 
-/* ================= LOG ================= */
+let balanceReady=false;
 
+/* LOG */
 function log(msg){
-console.log(msg);
 logEl.innerHTML+="<br>"+msg;
 logEl.scrollTop=logEl.scrollHeight;
 }
 
-/* ================= SEND ================= */
-
+/* SEND */
 function send(d){
 if(ws && ws.readyState===1){
 ws.send(JSON.stringify(d));
 }
 }
 
-/* ================= DIGIT ================= */
-
+/* DIGIT ENGINE (UNCHANGED LOGIC) */
 function lastDigit(price){
 const s=price.toFixed(2);
 return Number(s[s.length-1]);
 }
 
-/* ================= STAKE (MARTINGALE PRESERVED) ================= */
-
+/* STAKE (MARTINGALE PRESERVED) */
 function stake(){
 if(ladder===1) return 0.35;
 if(ladder===2) return 4.05;
 return 46.8;
 }
 
-/* ================= MODE SWITCH ================= */
-
+/* MODE SWITCH */
 function setMode(m){
+
 mode=m;
 modeEl.textContent=m;
 
@@ -189,9 +150,10 @@ else realBtn.classList.add("active");
 log("MODE → "+m);
 }
 
-/* ================= CONNECT ================= */
-
+/* CONNECT */
 function connect(){
+
+if(ws) ws.close();
 
 log("CONNECTING...");
 
@@ -204,7 +166,6 @@ send({authorize:token});
 };
 
 ws.onerror=()=>log("WS ERROR");
-
 ws.onclose=()=>log("DISCONNECTED");
 
 ws.onmessage=(e)=>{
@@ -215,16 +176,31 @@ const msg=JSON.parse(e.data);
 if(msg.msg_type==="authorize"){
 log("AUTHORIZED ("+mode+")");
 
-send({ticks:SYMBOL,subscribe:1});
+/* RESET STREAM FLAGS */
+balanceReady=false;
+
+/* IMPORTANT: fresh subscriptions per session */
 send({balance:1,subscribe:1});
+send({ticks:SYMBOL,subscribe:1});
 }
 
-/* BALANCE */
+/* BALANCE FIX (REAL + DEMO) */
 if(msg.msg_type==="balance"){
-balanceEl.textContent=Number(msg.balance.balance).toFixed(2);
+
+if(!balanceReady){
+log("BALANCE STREAM ACTIVE");
+balanceReady=true;
 }
 
-/* TICK */
+const bal = msg.balance?.balance ?? msg.balance?.cash_balance;
+
+if(bal !== undefined){
+balanceEl.textContent=Number(bal).toFixed(2);
+log("BALANCE → "+bal);
+}
+}
+
+/* TICK ENGINE */
 if(msg.msg_type==="tick"){
 
 const price=msg.tick.quote;
@@ -232,7 +208,7 @@ const d=lastDigit(price);
 
 priceEl.textContent=price.toFixed(2)+" → "+d;
 
-/* warmup */
+/* warmup safety */
 if(!active){
 warmup++;
 if(warmup>=10){
@@ -243,11 +219,11 @@ log("BOT ACTIVE");
 return;
 }
 
-/* digit engine */
+/* digit buffer */
 digits.push(d);
 if(digits.length>3) digits.shift();
 
-/* pattern */
+/* signal */
 if(digits.length===3){
 if(digits[0]===digits[1]&&digits[1]===digits[2]&&!tradeLock){
 trade(digits[2]);
@@ -281,8 +257,7 @@ tradeLock=false;
 
 }
 
-/* ================= TRADE ================= */
-
+/* TRADE */
 function trade(barrier){
 
 if(!running||paused||tradeLock) return;
@@ -310,16 +285,14 @@ barrier
 
 }
 
-/* ================= BUTTONS ================= */
+/* BUTTONS */
 
 $("start").onclick=()=>{
-
 token=$("token").value.trim();
 if(!token) return alert("Enter token");
 
 running=true;
 connect();
-
 };
 
 $("pause").onclick=()=>paused=!paused;
@@ -335,8 +308,6 @@ $("reset").onclick=()=>{
 location.reload();
 };
 
-/* MODE */
-
 demoBtn.onclick=()=>setMode("DEMO");
 realBtn.onclick=()=>setMode("REAL");
 
@@ -344,4 +315,4 @@ realBtn.onclick=()=>setMode("REAL");
 </script>
 
 </body>
-           </html>
+                  </html>
