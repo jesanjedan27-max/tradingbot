@@ -2,8 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Deriv Digit Bot Stable Pro</title>
+<title>Deriv Dual Balance Bot</title>
 
 <style>
 body{background:#020617;color:#fff;font-family:Arial}
@@ -15,6 +14,7 @@ input{width:100%;padding:10px;margin:6px 0;border:none;border-radius:6px}
 
 .mode{display:flex;gap:6px;margin-bottom:10px}
 .mode button{flex:1;padding:10px;border:none;border-radius:6px;font-weight:bold;cursor:pointer}
+
 #demo{background:#22c55e}
 #real{background:#ef4444}
 .active{outline:3px solid #38bdf8}
@@ -23,7 +23,7 @@ input{width:100%;padding:10px;margin:6px 0;border:none;border-radius:6px}
 .stats span{color:#22c55e;font-weight:bold}
 
 .buttons{display:flex;gap:6px;margin-top:10px}
-button{flex:1;padding:10px;border:none;border-radius:6px;font-weight:bold;cursor:pointer}
+button{flex:1;padding:10px;border:none;border-radius:6px;font-weight:bold}
 
 #start{background:#60a5fa}
 #pause{background:#facc15}
@@ -46,9 +46,10 @@ margin-top:10px;
 
 <div class="container">
 
-<h2>DERIV BOT PRO (STABLE)</h2>
+<h2>DERIV DUAL ACCOUNT SYSTEM</h2>
 
-<input id="token" type="password" placeholder="Enter Deriv Token">
+<input id="demoToken" type="password" placeholder="Demo Token (DOT92927394)">
+<input id="realToken" type="password" placeholder="Real Token (ROT91650098)">
 
 <div class="mode">
 <button id="demo" class="active">DEMO</button>
@@ -85,9 +86,9 @@ const realBtn=$("real");
 const logEl=$("log");
 const priceEl=$("price");
 const balanceEl=$("balance");
-const profitEl=$("profit");
-const statusEl=$("status");
 const modeEl=$("mode");
+const statusEl=$("status");
+const profitEl=$("profit");
 
 const APP_ID="1089";
 const SYMBOL="R_100";
@@ -107,8 +108,6 @@ let tradeLock=false;
 let ladder=1;
 let profit=0;
 
-let balanceReady=false;
-
 /* LOG */
 function log(msg){
 logEl.innerHTML+="<br>"+msg;
@@ -122,13 +121,13 @@ ws.send(JSON.stringify(d));
 }
 }
 
-/* DIGIT ENGINE (UNCHANGED LOGIC) */
-function lastDigit(price){
-const s=price.toFixed(2);
+/* DIGIT ENGINE */
+function lastDigit(p){
+const s=p.toFixed(2);
 return Number(s[s.length-1]);
 }
 
-/* STAKE (MARTINGALE PRESERVED) */
+/* STAKE (PRESERVED) */
 function stake(){
 if(ladder===1) return 0.35;
 if(ladder===2) return 4.05;
@@ -144,29 +143,40 @@ modeEl.textContent=m;
 demoBtn.classList.remove("active");
 realBtn.classList.remove("active");
 
-if(m==="DEMO") demoBtn.classList.add("active");
-else realBtn.classList.add("active");
-
-log("MODE → "+m);
+if(m==="DEMO"){
+demoBtn.classList.add("active");
+}else{
+realBtn.classList.add("active");
 }
 
-/* CONNECT */
+log("MODE → "+m);
+connect(); // reconnect with correct token
+}
+
+/* CONNECT (FIXED PER ACCOUNT) */
 function connect(){
 
 if(ws) ws.close();
 
-log("CONNECTING...");
+let t = mode==="DEMO"
+? $("demoToken").value.trim()
+: $("realToken").value.trim();
+
+if(!t){
+log("❌ Missing token for "+mode);
+return;
+}
+
+token=t;
+
+log("CONNECTING → "+mode);
 
 ws=new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`);
 
 ws.onopen=()=>{
 log("CONNECTED");
-statusEl.textContent="CONNECTED";
 send({authorize:token});
 };
-
-ws.onerror=()=>log("WS ERROR");
-ws.onclose=()=>log("DISCONNECTED");
 
 ws.onmessage=(e)=>{
 
@@ -174,33 +184,18 @@ const msg=JSON.parse(e.data);
 
 /* AUTH */
 if(msg.msg_type==="authorize"){
-log("AUTHORIZED ("+mode+")");
+log("AUTHORIZED → "+mode);
 
-/* RESET STREAM FLAGS */
-balanceReady=false;
-
-/* IMPORTANT: fresh subscriptions per session */
 send({balance:1,subscribe:1});
 send({ticks:SYMBOL,subscribe:1});
 }
 
-/* BALANCE FIX (REAL + DEMO) */
+/* BALANCE */
 if(msg.msg_type==="balance"){
-
-if(!balanceReady){
-log("BALANCE STREAM ACTIVE");
-balanceReady=true;
+balanceEl.textContent=Number(msg.balance.balance).toFixed(2);
 }
 
-const bal = msg.balance?.balance ?? msg.balance?.cash_balance;
-
-if(bal !== undefined){
-balanceEl.textContent=Number(bal).toFixed(2);
-log("BALANCE → "+bal);
-}
-}
-
-/* TICK ENGINE */
+/* TICK */
 if(msg.msg_type==="tick"){
 
 const price=msg.tick.quote;
@@ -208,7 +203,7 @@ const d=lastDigit(price);
 
 priceEl.textContent=price.toFixed(2)+" → "+d;
 
-/* warmup safety */
+/* warmup */
 if(!active){
 warmup++;
 if(warmup>=10){
@@ -219,7 +214,7 @@ log("BOT ACTIVE");
 return;
 }
 
-/* digit buffer */
+/* digits */
 digits.push(d);
 if(digits.length>3) digits.shift();
 
@@ -266,8 +261,6 @@ tradeLock=true;
 
 const amount=stake();
 
-log("TRADE "+mode+" → "+barrier+" | $"+amount);
-
 send({
 buy:1,
 price:amount,
@@ -283,14 +276,12 @@ barrier
 }
 });
 
+log("TRADE "+mode+" → "+barrier);
 }
 
 /* BUTTONS */
 
 $("start").onclick=()=>{
-token=$("token").value.trim();
-if(!token) return alert("Enter token");
-
 running=true;
 connect();
 };
@@ -301,7 +292,6 @@ $("stop").onclick=()=>{
 running=false;
 ws?.close();
 statusEl.textContent="STOPPED";
-log("STOPPED");
 };
 
 $("reset").onclick=()=>{
@@ -315,4 +305,4 @@ realBtn.onclick=()=>setMode("REAL");
 </script>
 
 </body>
-                  </html>
+  </html>
