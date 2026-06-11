@@ -3,14 +3,18 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Deriv Digit Bot FIXED</title>
+<title>Deriv DigitDiff Stable Bot</title>
 
 <style>
 body{background:#020617;color:#fff;font-family:Arial}
 .container{max-width:520px;margin:20px auto;padding:20px;background:#0f172a;border-radius:12px}
-h1{text-align:center;color:#38bdf8}
+h2{text-align:center;color:#38bdf8}
 
 input{width:100%;padding:10px;margin:6px 0;border:none;border-radius:6px}
+
+.stats{font-size:14px;margin-top:10px}
+.stats span{color:#22c55e;font-weight:bold}
+
 .buttons{display:flex;gap:6px;margin-top:10px}
 button{flex:1;padding:10px;border:none;border-radius:6px;font-weight:bold;cursor:pointer}
 #start{background:#22c55e}
@@ -18,9 +22,7 @@ button{flex:1;padding:10px;border:none;border-radius:6px;font-weight:bold;cursor
 #stop{background:#ef4444}
 #reset{background:#60a5fa}
 
-.stats{margin-top:10px;font-size:14px}
-#log{height:240px;overflow:auto;background:#111827;padding:8px;border-radius:6px;font-size:12px}
-#price,#balance,#profit{color:#22c55e;font-weight:bold}
+#log{height:260px;overflow:auto;background:#111827;padding:8px;border-radius:6px;font-size:12px;margin-top:10px}
 </style>
 </head>
 
@@ -28,15 +30,15 @@ button{flex:1;padding:10px;border:none;border-radius:6px;font-weight:bold;cursor
 
 <div class="container">
 
-<h1>DERIV DIGIT BOT (FIXED)</h1>
+<h2>DERIV DIGIT BOT (STABLE)</h2>
 
-<input id="token" type="password" placeholder="Deriv API Token">
+<input id="token" type="password" placeholder="Enter Deriv API Token">
 
 <div class="stats">
-<div>Balance: <span id="balance">--</span></div>
-<div>Price: <span id="price">--</span></div>
-<div>Profit: <span id="profit">0.00</span></div>
-<div>Status: <span id="status">Stopped</span></div>
+Balance: <span id="balance">--</span><br>
+Price: <span id="price">--</span><br>
+Profit: <span id="profit">0.00</span><br>
+Status: <span id="status">STOPPED</span>
 </div>
 
 <div class="buttons">
@@ -55,11 +57,6 @@ document.addEventListener("DOMContentLoaded",()=>{
 
 const $=id=>document.getElementById(id);
 
-const start=$("start");
-const pause=$("pause");
-const stop=$("stop");
-const reset=$("reset");
-
 const logEl=$("log");
 const priceEl=$("price");
 const balanceEl=$("balance");
@@ -69,10 +66,11 @@ const statusEl=$("status");
 const APP_ID="1089";
 const SYMBOL="R_100";
 
+/* STATE */
 let ws;
+let token;
 let running=false;
 let paused=false;
-let token=null;
 
 let digits=[];
 let warmup=0;
@@ -82,89 +80,94 @@ let tradeLock=false;
 let ladder=1;
 let profit=0;
 
-/* ================= LOG ================= */
-
+/* LOG */
 function log(msg){
-  console.log(msg);
-  logEl.innerHTML+=msg+"<br>";
-  logEl.scrollTop=logEl.scrollHeight;
+console.log(msg);
+logEl.innerHTML+="<br>"+msg;
+logEl.scrollTop=logEl.scrollHeight;
 }
 
-/* ================= SEND ================= */
-
-function send(d){
-  if(ws&&ws.readyState===1){
-    ws.send(JSON.stringify(d));
-  }
+/* SEND */
+function send(data){
+if(ws && ws.readyState===1){
+ws.send(JSON.stringify(data));
+}
 }
 
-/* ================= DIGIT ================= */
-
-function lastDigit(p){
-  const s=p.toFixed(2);
-  return Number(s[s.length-1]);
+/* DIGIT */
+function lastDigit(price){
+const s=price.toFixed(2);
+return Number(s[s.length-1]);
 }
 
-/* ================= STAKE ================= */
-
+/* STAKE */
 function stake(){
-  if(ladder===1) return 0.35;
-  if(ladder===2) return 4.05;
-  return 46.8;
+if(ladder===1) return 0.35;
+if(ladder===2) return 4.05;
+return 46.8;
 }
 
-/* ================= TRADE ================= */
+/* TRADE */
+function trade(barrier){
 
-function buy(barrier){
-  if(tradeLock||paused||!running) return;
+if(!running||paused||tradeLock) return;
 
-  tradeLock=true;
+tradeLock=true;
 
-  const amount=stake();
+const amount=stake();
 
-  log("BUY SIGNAL → "+barrier+" | $"+amount);
+log("TRADE → "+barrier+" | $"+amount);
 
-  send({
-    buy:1,
-    price:amount,
-    parameters:{
-      amount,
-      basis:"stake",
-      contract_type:"DIGITDIFF",
-      currency:"USD",
-      duration:1,
-      duration_unit:"t",
-      symbol:SYMBOL,
-      barrier
-    }
-  });
+send({
+buy:1,
+price:amount,
+parameters:{
+amount,
+basis:"stake",
+contract_type:"DIGITDIFF",
+currency:"USD",
+duration:1,
+duration_unit:"t",
+symbol:SYMBOL,
+barrier
+}
+});
 }
 
-/* ================= CONNECT ================= */
-
+/* CONNECT */
 function connect(){
+
+log("CONNECTING...");
 
 ws=new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`);
 
 ws.onopen=()=>{
-  log("CONNECTED TO DERIV");
-  send({authorize:token});
+log("CONNECTED");
+statusEl.textContent="CONNECTED";
+send({authorize:token});
+log("AUTH SENT");
 };
 
+ws.onerror=()=>log("WS ERROR");
+
+ws.onclose=()=>log("DISCONNECTED");
+
 ws.onmessage=(e)=>{
+
 const msg=JSON.parse(e.data);
 
 /* AUTH */
 if(msg.msg_type==="authorize"){
-  log("AUTH SUCCESS");
-  send({ticks:SYMBOL,subscribe:1});
-  send({balance:1,subscribe:1});
+log("AUTHORIZED");
+statusEl.textContent="AUTHORIZED";
+
+send({ticks:SYMBOL,subscribe:1});
+send({balance:1,subscribe:1});
 }
 
 /* BALANCE */
 if(msg.msg_type==="balance"){
-  const bal=msg.balance.balance;
-  balanceEl.textContent=Number(bal).toFixed(2);
+balanceEl.textContent=Number(msg.balance.balance).toFixed(2);
 }
 
 /* TICK */
@@ -180,7 +183,7 @@ log("TICK "+d);
 /* warmup */
 if(!active){
 warmup++;
-if(warmup>10){
+if(warmup>=10){
 active=true;
 statusEl.textContent="RUNNING";
 log("BOT ACTIVE");
@@ -188,7 +191,7 @@ log("BOT ACTIVE");
 return;
 }
 
-/* build digits */
+/* digit array */
 digits.push(d);
 if(digits.length>3) digits.shift();
 
@@ -196,14 +199,14 @@ if(digits.length>3) digits.shift();
 if(digits.length===3){
 
 if(digits[0]===digits[1]&&digits[1]===digits[2]&&!tradeLock){
-buy(digits[2]);
+trade(digits[2]);
 }
 
 }
 
 }
 
-/* CONTRACT RESULT */
+/* RESULT */
 if(msg.msg_type==="proposal_open_contract"){
 
 const c=msg.proposal_open_contract;
@@ -228,26 +231,31 @@ tradeLock=false;
 
 }
 
-/* ================= BUTTONS ================= */
+/* BUTTONS */
 
-start.onclick=()=>{
+$("start").onclick=()=>{
+
 token=$("token").value.trim();
 if(!token) return alert("Enter token");
 
 running=true;
 connect();
+
 };
 
-pause.onclick=()=>paused=!paused;
+$("pause").onclick=()=>{
+paused=!paused;
+log(paused?"PAUSED":"RESUMED");
+};
 
-stop.onclick=()=>{
+$("stop").onclick=()=>{
 running=false;
 ws?.close();
 statusEl.textContent="STOPPED";
 log("STOPPED");
 };
 
-reset.onclick=()=>{
+$("reset").onclick=()=>{
 location.reload();
 };
 
@@ -255,4 +263,4 @@ location.reload();
 </script>
 
 </body>
-  </html>
+           </html>
