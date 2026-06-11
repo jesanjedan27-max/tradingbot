@@ -105,7 +105,7 @@ button{
     Balance: <span id="balance">--</span><br>
     Price: <span id="price">--</span><br>
     Profit: <span id="profit">0.00</span><br>
-    Status: <span id="status">STOPPED</span>
+    Status: <span id="status">READY</span>
   </div>
 
   <div class="buttons">
@@ -153,6 +153,11 @@ document.addEventListener("DOMContentLoaded", () => {
   let awaitingProposal = false;
   let lastBarrier = null;
 
+  const tokens = {
+    DEMO: localStorage.getItem("deriv_demo_token") || "",
+    REAL: localStorage.getItem("deriv_real_token") || ""
+  };
+
   function log(msg) {
     logEl.innerHTML += (logEl.innerHTML ? "<br>" : "") + msg;
     logEl.scrollTop = logEl.scrollHeight;
@@ -179,17 +184,13 @@ document.addEventListener("DOMContentLoaded", () => {
     return accountMode === "DEMO" ? "deriv_demo_token" : "deriv_real_token";
   }
 
-  function loadToken(accountMode) {
-    return localStorage.getItem(tokenKey(accountMode)) || "";
-  }
-
   function saveToken(accountMode, value) {
+    tokens[accountMode] = value;
     localStorage.setItem(tokenKey(accountMode), value);
   }
 
   function refreshTokenField() {
-    const saved = loadToken(mode);
-    tokenEl.value = saved;
+    tokenEl.value = tokens[mode] || "";
     tokenEl.placeholder = mode === "DEMO" ? "Enter DEMO token" : "Enter REAL token";
   }
 
@@ -217,16 +218,15 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function connect() {
-    const token = tokenEl.value.trim() || loadToken(mode);
+    const token = tokens[mode] || tokenEl.value.trim();
 
     if (!token) {
-      log("Missing token for " + mode);
-      setStatus("NO TOKEN");
+      setStatus("ENTER TOKEN");
+      log("Missing " + mode + " token");
       return;
     }
 
     saveToken(mode, token);
-
     closeSocket();
     resetSessionState();
 
@@ -242,35 +242,34 @@ document.addEventListener("DOMContentLoaded", () => {
 
     ws.onclose = () => {
       log("DISCONNECTED");
-      if (running && !paused) {
-        setStatus("DISCONNECTED");
-      } else if (!running) {
-        setStatus("STOPPED");
-      }
+      if (running) setStatus(paused ? "PAUSED" : "DISCONNECTED");
+      else setStatus("STOPPED");
     };
 
     ws.onerror = () => {
       log("WEBSOCKET ERROR");
+      setStatus("ERROR");
     };
 
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
 
       if (msg.error) {
-        log("ERROR → " + msg.error.message);
+        const err = msg.error.message || "Unknown error";
+        log("ERROR → " + err);
+        if (msg.msg_type === "authorize") {
+          setStatus("AUTH FAILED");
+        }
         if (awaitingProposal) {
           awaitingProposal = false;
           tradeLock = false;
-        }
-        if (msg.msg_type === "authorize") {
-          setStatus("AUTH ERROR");
         }
         return;
       }
 
       if (msg.msg_type === "authorize") {
         log("AUTHORIZED → " + mode);
-        setStatus(running ? "RUNNING" : "READY");
+        setStatus(running ? (paused ? "PAUSED" : "RUNNING") : "READY");
         send({ balance: 1, subscribe: 1 });
         send({ ticks: SYMBOL, subscribe: 1 });
         return;
@@ -286,7 +285,6 @@ document.addEventListener("DOMContentLoaded", () => {
       if (msg.msg_type === "tick") {
         const price = msg.tick.quote;
         const d = lastDigit(price);
-
         priceEl.textContent = Number(price).toFixed(2) + " → " + d;
 
         if (!active) {
@@ -302,10 +300,15 @@ document.addEventListener("DOMContentLoaded", () => {
         digits.push(d);
         if (digits.length > 3) digits.shift();
 
-        if (digits.length === 3) {
-          if (digits[0] === digits[1] && digits[1] === digits[2] && !tradeLock && running && !paused) {
-            placeTrade(digits[2]);
-          }
+        if (
+          digits.length === 3 &&
+          digits[0] === digits[1] &&
+          digits[1] === digits[2] &&
+          !tradeLock &&
+          running &&
+          !paused
+        ) {
+          placeTrade(digits[2]);
         }
         return;
       }
@@ -314,13 +317,12 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!awaitingProposal || !msg.proposal || !msg.proposal.id) return;
 
         const proposalId = msg.proposal.id;
-        log("PROPOSAL READY → " + lastBarrier);
+        log("PROPOSAL READY → " + mode + " / barrier " + lastBarrier);
 
         send({
           buy: proposalId,
           price: stake()
         });
-
         return;
       }
 
@@ -343,7 +345,6 @@ document.addEventListener("DOMContentLoaded", () => {
           contract_id: currentContractId,
           subscribe: 1
         });
-
         return;
       }
 
@@ -370,7 +371,6 @@ document.addEventListener("DOMContentLoaded", () => {
           tradeLock = false;
           currentContractId = null;
         }
-
         return;
       }
     };
@@ -407,27 +407,35 @@ document.addEventListener("DOMContentLoaded", () => {
     demoBtn.classList.remove("active");
     realBtn.classList.remove("active");
 
-    if (newMode === "DEMO") {
-      demoBtn.classList.add("active");
-    } else {
-      realBtn.classList.add("active");
-    }
+    if (newMode === "DEMO") demoBtn.classList.add("active");
+    else realBtn.classList.add("active");
 
     refreshTokenField();
     log("MODE → " + newMode);
 
-    if (running) {
+    if (tokens[mode]) {
       connect();
     } else {
-      setStatus("READY");
-      connect();
+      closeSocket();
+      setStatus("ENTER TOKEN");
     }
   }
+
+  demoBtn.onclick = () => setMode("DEMO");
+  realBtn.onclick = () => setMode("REAL");
+
+  tokenEl.addEventListener("input", () => {
+    saveToken(mode, tokenEl.value.trim());
+  });
 
   $("start").onclick = () => {
     running = true;
     paused = false;
-    setStatus("CONNECTING");
+    if (!tokens[mode] && !tokenEl.value.trim()) {
+      setStatus("ENTER TOKEN");
+      log("Missing " + mode + " token");
+      return;
+    }
     connect();
   };
 
@@ -454,20 +462,10 @@ document.addEventListener("DOMContentLoaded", () => {
     location.reload();
   };
 
-  demoBtn.onclick = () => setMode("DEMO");
-  realBtn.onclick = () => setMode("REAL");
-
-  tokenEl.addEventListener("input", () => {
-    saveToken(mode, tokenEl.value.trim());
-  });
-
   refreshTokenField();
-  setStatus("READY");
-
-  if (tokenEl.value.trim()) {
-    connect();
-  }
-});
+  setStatus(tokens[mode] ? "READY" : "ENTER TOKEN");
+  balanceEl.textContent = "--";
+})();
 </script>
 </body>
-            </html>
+  </html>
