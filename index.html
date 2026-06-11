@@ -1,52 +1,254 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Deriv Pro RSI Digit Bot (V108)</title>
-  <link rel="stylesheet" href="style.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deriv DigitDiff Bot</title>
+
+<style>
+body{background:#020617;color:#fff;font-family:Arial}
+.container{max-width:520px;margin:20px auto;padding:20px;background:#0f172a;border-radius:12px}
+h1{text-align:center;color:#38bdf8;font-size:20px}
+
+input{width:100%;padding:10px;margin:6px 0;border-radius:6px;border:none}
+.row{display:flex;gap:6px}
+
+.stats{background:#020617;padding:10px;border-radius:8px;font-size:14px;margin-top:10px}
+.buttons{display:flex;gap:6px;margin-top:10px}
+
+button{flex:1;padding:10px;border:none;border-radius:6px;font-weight:bold;color:#fff;cursor:pointer}
+#start{background:#22c55e}
+#pause{background:#facc15;color:#000}
+#stop{background:#ef4444}
+#reset{background:#60a5fa}
+
+#price,#balance{color:#ef4444;font-weight:bold}
+#profit{color:#22c55e;font-weight:bold}
+
+.log{background:#111827;padding:8px;border-radius:6px;height:220px;overflow-y:auto;font-size:12px}
+</style>
 </head>
+
 <body>
 
 <div class="container">
-  <h1>Deriv Pro RSI Digit Bot (V108)</h1>
 
-  <input id="token" type="password" placeholder="Enter Deriv API Token">
+<h1>Deriv DigitDiff Bot</h1>
 
-  <div class="row">
-    <input id="stake" type="number" step="0.01" value="0.35" placeholder="Stake">
-    <input id="tp" type="number" value="20" placeholder="Take Profit">
-    <input id="sl" type="number" value="10" placeholder="Stop Loss">
-  </div>
+<input id="token" type="password" placeholder="Deriv API Token">
 
-  <div class="stats">
-    <div>Balance: <span id="balance">--</span></div>
-    <div>Price: <span id="price">--</span></div>
-    <div>RSI: <span id="rsi">--</span></div>
-    <div>Stake: <span id="currentStake">0.00</span></div>
-    <div>Profit: <span id="profit">0.00</span></div>
-    <div>Status: <span id="status">Stopped</span></div>
-  </div>
-
-  <div id="recoveryContainer">
-    <div id="recoveryBar"></div>
-  </div>
-
-  <div class="buttons">
-    <button id="start">START</button>
-    <button id="pause">PAUSE</button>
-    <button id="stop">STOP</button>
-    <button id="reset">RESET</button>
-  </div>
-
-  <div class="logs">
-    <div class="log-box">
-      <h3>TRADE LOG</h3>
-      <div id="log" class="log"></div>
-    </div>
-  </div>
+<div class="row">
+<input id="stake" value="0.35" type="number">
+<input id="tp" value="20" type="number">
+<input id="sl" value="10" type="number">
 </div>
 
-<script src="bot.js"></script>
+<div class="stats">
+<div>Balance: <span id="balance">--</span></div>
+<div>Price: <span id="price">--</span></div>
+<div>Profit: <span id="profit">0.00</span></div>
+<div>Status: <span id="status">Stopped</span></div>
+</div>
+
+<div class="buttons">
+<button id="start">START</button>
+<button id="pause">PAUSE</button>
+<button id="stop">STOP</button>
+<button id="reset">RESET</button>
+</div>
+
+<div class="log" id="log"></div>
+
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded",()=>{
+
+const $=id=>document.getElementById(id);
+
+const start=$("start");
+const pause=$("pause");
+const stop=$("stop");
+const reset=$("reset");
+
+const logEl=$("log");
+const priceEl=$("price");
+const balanceEl=$("balance");
+const profitEl=$("profit");
+const statusEl=$("status");
+
+/* ================= CONFIG ================= */
+
+const APP_ID="33wHQaHO4yQY1z44Hl4oB";
+const SYMBOL="R_100";
+
+/* ================= STATE ================= */
+
+let ws;
+let running=false;
+let paused=false;
+let token=null;
+
+let digits=[0,0,0];
+let warmup=0;
+let active=false;
+
+let tradeLock=false;
+let ladder=1;
+let profit=0;
+
+/* ================= LOG ================= */
+
+function log(msg){
+  logEl.innerHTML+=msg+"<br>";
+  logEl.scrollTop=logEl.scrollHeight;
+}
+
+/* ================= SAFE SEND ================= */
+
+function send(d){
+  if(ws&&ws.readyState===1){
+    ws.send(JSON.stringify(d));
+  }
+}
+
+/* ================= DIGIT ================= */
+
+function lastDigit(p){
+  const s=p.toFixed(2);
+  return s.charCodeAt(s.length-1)-48;
+}
+
+/* ================= STAKE ================= */
+
+function stake(){
+  if(ladder===1) return 0.35;
+  if(ladder===2) return 4.05;
+  return 46.8;
+}
+
+/* ================= TRADE ================= */
+
+function buy(barrier){
+
+  if(tradeLock||paused||!running) return;
+
+  tradeLock=true;
+
+  const amount=stake();
+
+  send({
+    buy:1,
+    price:amount,
+    parameters:{
+      amount,
+      basis:"stake",
+      contract_type:"DIGITDIFF",
+      currency:"USD",
+      duration:1,
+      duration_unit:"t",
+      symbol:SYMBOL,
+      barrier
+    }
+  });
+
+  log("TRADE "+barrier+" $"+amount);
+}
+
+/* ================= CONNECT ================= */
+
+function connect(){
+
+ws=new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`);
+
+ws.onopen=()=>{
+  log("CONNECTED");
+  send({authorize:token});
+};
+
+ws.onmessage=(e)=>{
+const msg=JSON.parse(e.data);
+
+/* AUTH */
+if(msg.msg_type==="authorize"){
+  send({ticks:SYMBOL,subscribe:1});
+  send({balance:1,subscribe:1});
+}
+
+/* BALANCE */
+if(msg.msg_type==="balance"){
+  balanceEl.textContent=Number(msg.balance.balance).toFixed(2);
+}
+
+/* TICK */
+if(msg.msg_type==="tick"){
+
+const price=msg.tick.quote;
+const d=lastDigit(price);
+
+priceEl.textContent=price.toFixed(2)+" → "+d;
+
+if(!active){
+  warmup++;
+  if(warmup>10){
+    active=true;
+    statusEl.textContent="Running";
+  }
+  return;
+}
+
+/* SHIFT DIGITS */
+digits.shift();
+digits.push(d);
+
+/* PATTERN */
+if(digits[0]===digits[1]&&digits[1]===digits[2]&&!tradeLock){
+  buy(digits[2]);
+}
+
+}
+
+/* CONTRACT RESULT */
+if(msg.msg_type==="proposal_open_contract"){
+const c=msg.proposal_open_contract;
+
+if(c.is_sold){
+const pnl=Number(c.profit);
+profit+=pnl;
+
+profitEl.textContent=profit.toFixed(2);
+
+if(pnl>0) ladder=1;
+else ladder=Math.min(ladder+1,3);
+
+tradeLock=false;
+}
+}
+
+};
+
+}
+
+/* ================= BUTTONS ================= */
+
+start.onclick=()=>{
+token=$("token").value;
+running=true;
+connect();
+};
+
+pause.onclick=()=>paused=!paused;
+
+stop.onclick=()=>{
+running=false;
+ws?.close();
+statusEl.textContent="Stopped";
+};
+
+reset.onclick=()=>location.reload();
+
+});
+</script>
+
 </body>
-</html>
+  </html>
