@@ -72,20 +72,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     return base64url(await sha256(verifier));
   }
 
-  // ================= LOGIN (FIXED) =================
+  // ================= LOGIN (FIXED SCOPES) =================
   loginBtn.onclick = async () => {
     const verifier = generateVerifier();
     const challenge = await createChallenge(verifier);
 
     sessionStorage.setItem("pkce_verifier", verifier);
-    sessionStorage.setItem("oauth_state", "active");
+    sessionStorage.removeItem("oauth_done");
 
     const authUrl =
       `https://auth.deriv.com/oauth2/authorize` +
       `?response_type=code` +
       `&client_id=${CLIENT_ID}` +
       `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-      `&scope=trade` +
+      `&scope=trade` +   // ✅ FIXED (REMOVED account_info)
       `&state=xyz123` +
       `&code_challenge=${challenge}` +
       `&code_challenge_method=S256`;
@@ -93,16 +93,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     window.location.href = authUrl;
   };
 
-  // ================= CALLBACK HANDLER (FIXED & SAFE) =================
+  // ================= CALLBACK HANDLER =================
   async function handleOAuthCallback() {
     const url = new URL(window.location.href);
-
     const code = url.searchParams.get("code");
     const error = url.searchParams.get("error");
-    const error_desc = url.searchParams.get("error_description");
 
     if (error) {
-      log(`OAuth Error: ${error_desc || error}`, "red");
+      log("OAuth Error: " + error, "red");
       return;
     }
 
@@ -133,7 +131,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       const data = await res.json();
 
       if (!data.access_token) {
-        log("OAuth failed - no token", "red");
+        log("OAuth failed (no token)", "red");
         return;
       }
 
@@ -142,7 +140,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       sessionStorage.setItem("oauth_done", "true");
 
-      // FIX: keep correct page route (NOT "/")
+      // clean URL correctly
       window.history.replaceState({}, document.title, REDIRECT_URI);
 
       log("OAuth SUCCESS", "lime");
