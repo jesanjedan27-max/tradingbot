@@ -2,795 +2,234 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Deriv Dual Balance Bot</title>
-<style>
-:root{
-  --bg:#020617;
-  --panel:rgba(15,23,42,.88);
-  --panel2:rgba(2,6,23,.78);
-  --stroke:rgba(148,163,184,.18);
-  --text:#e2e8f0;
-  --muted:#94a3b8;
-  --blue:#38bdf8;
-  --green:#22c55e;
-  --red:#ef4444;
-  --yellow:#facc15;
-  --shadow:0 30px 90px rgba(0,0,0,.45);
-  --radius:24px;
-}
-*{box-sizing:border-box}
-html,body{height:100%}
-body{
-  margin:0;
-  color:var(--text);
-  font-family:"Segoe UI",system-ui,-apple-system,sans-serif;
-  background:
-    radial-gradient(circle at top left, rgba(56,189,248,.16), transparent 26%),
-    radial-gradient(circle at right center, rgba(34,197,94,.12), transparent 22%),
-    radial-gradient(circle at bottom, rgba(239,68,68,.10), transparent 24%),
-    linear-gradient(180deg, #020617 0%, #07111f 54%, #020617 100%);
-}
-body::before{
-  content:"";
-  position:fixed;
-  inset:0;
-  pointer-events:none;
-  background:
-    linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
-  background-size:36px 36px;
-  opacity:.35;
-  mask-image:linear-gradient(180deg, rgba(0,0,0,.45), transparent 95%);
-}
-.shell{
-  min-height:100%;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  padding:24px;
-}
-.container{
-  width:min(1180px,100%);
-  display:grid;
-  grid-template-columns:1.08fr .92fr;
-  gap:18px;
-}
-.hero,.panel{
-  border:1px solid var(--stroke);
-  border-radius:var(--radius);
-  background:linear-gradient(180deg, rgba(15,23,42,.92), rgba(2,6,23,.88));
-  backdrop-filter:blur(18px);
-  box-shadow:var(--shadow);
-  overflow:hidden;
-}
-.hero{
-  padding:28px;
-  min-height:720px;
-}
-.panel{
-  padding:22px;
-  min-height:720px;
-}
-.badge{
-  display:inline-flex;
-  align-items:center;
-  gap:8px;
-  padding:8px 12px;
-  border-radius:999px;
-  background:rgba(56,189,248,.10);
-  border:1px solid rgba(56,189,248,.20);
-  color:#bae6fd;
-  font-size:12px;
-  letter-spacing:.08em;
-  text-transform:uppercase;
-}
-.badge span{
-  width:8px;
-  height:8px;
-  border-radius:50%;
-  background:#22c55e;
-  box-shadow:0 0 0 6px rgba(34,197,94,.12);
-}
-h1{
-  margin:16px 0 10px;
-  font-size:44px;
-  line-height:1.02;
-  letter-spacing:-.05em;
-}
-.subtitle{
-  margin:0 0 22px;
-  max-width:620px;
-  color:var(--muted);
-  line-height:1.7;
-  font-size:15px;
-}
-.grid-hero{
-  display:grid;
-  grid-template-columns:repeat(3,1fr);
-  gap:12px;
-  margin:20px 0;
-}
-.card-mini{
-  padding:16px;
-  border-radius:18px;
-  border:1px solid var(--stroke);
-  background:linear-gradient(180deg, rgba(15,23,42,.78), rgba(2,6,23,.60));
-}
-.card-mini .label{
-  color:var(--muted);
-  font-size:12px;
-  text-transform:uppercase;
-  letter-spacing:.08em;
-  margin-bottom:10px;
-}
-.card-mini .value{
-  font-size:26px;
-  font-weight:800;
-  letter-spacing:-.04em;
-}
-.card-mini .hint{
-  margin-top:10px;
-  color:#86efac;
-  font-size:12px;
-}
-.info-grid{
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:12px;
-  margin-top:18px;
-}
-.info{
-  padding:18px;
-  border-radius:18px;
-  border:1px solid var(--stroke);
-  background:linear-gradient(180deg, rgba(15,23,42,.72), rgba(2,6,23,.58));
-}
-.info h3{
-  margin:0 0 8px;
-  font-size:15px;
-}
-.info p{
-  margin:0;
-  color:var(--muted);
-  font-size:13px;
-  line-height:1.65;
-}
-.bottom-note{
-  margin-top:14px;
-  color:var(--muted);
-  font-size:12px;
-  line-height:1.7;
-}
-.topline{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:12px;
-  margin-bottom:18px;
-}
-.topline h2{
-  margin:0;
-  font-size:22px;
-  letter-spacing:-.03em;
-}
-.status-pill{
-  display:inline-flex;
-  align-items:center;
-  gap:8px;
-  padding:9px 12px;
-  border-radius:999px;
-  border:1px solid rgba(34,197,94,.24);
-  background:rgba(34,197,94,.08);
-  color:#bbf7d0;
-  font-size:12px;
-  font-weight:700;
-}
-.status-pill span{
-  width:8px;
-  height:8px;
-  border-radius:50%;
-  background:#22c55e;
-  box-shadow:0 0 0 6px rgba(34,197,94,.12);
-}
-.token-box{
-  margin-bottom:14px;
-}
-input{
-  width:100%;
-  padding:15px 16px;
-  border-radius:14px;
-  border:1px solid rgba(148,163,184,.16);
-  outline:none;
-  color:var(--text);
-  background:rgba(2,6,23,.72);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
-}
-input::placeholder{color:#64748b}
-input:focus{
-  border-color:rgba(56,189,248,.55);
-  box-shadow:0 0 0 4px rgba(56,189,248,.10);
-}
-.mode{
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:10px;
-  margin-bottom:16px;
-}
-.mode button,
-.buttons button,
-.quick button{
-  border:none;
-  border-radius:14px;
-  cursor:pointer;
-  font-weight:800;
-  color:#fff;
-  transition:transform .16s ease, filter .16s ease, box-shadow .16s ease;
-}
-.mode button:hover,
-.buttons button:hover,
-.quick button:hover{
-  transform:translateY(-1px);
-  filter:brightness(1.05);
-}
-#demo{background:linear-gradient(180deg, #16a34a, #15803d)}
-#real{background:linear-gradient(180deg, #ef4444, #dc2626)}
-.active{
-  outline:3px solid rgba(56,189,248,.55);
-  box-shadow:0 0 0 5px rgba(56,189,248,.10);
-}
-.stats{
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:12px;
-  margin:16px 0 14px;
-}
-.stat{
-  padding:16px;
-  border-radius:18px;
-  border:1px solid var(--stroke);
-  background:linear-gradient(180deg, rgba(15,23,42,.76), rgba(2,6,23,.60));
-}
-.stat .title{
-  color:var(--muted);
-  font-size:12px;
-  text-transform:uppercase;
-  letter-spacing:.08em;
-  margin-bottom:8px;
-}
-.stat .value{
-  font-size:22px;
-  font-weight:800;
-  letter-spacing:-.03em;
-}
-.stat .value.good{color:#86efac}
-.stat .value.warn{color:#fde68a}
-.stat .value.bad{color:#fca5a5}
-.stat .value.blue{color:#7dd3fc}
-.buttons{
-  display:grid;
-  grid-template-columns:repeat(4,1fr);
-  gap:10px;
-  margin-top:10px;
-}
-.buttons button{
-  padding:13px 10px;
-  font-size:13px;
-}
-#start{background:linear-gradient(180deg, #60a5fa, #2563eb)}
-#pause{background:linear-gradient(180deg, #facc15, #eab308); color:#0f172a}
-#stop{background:linear-gradient(180deg, #ef4444, #dc2626)}
-#reset{background:linear-gradient(180deg, #22c55e, #16a34a)}
-.quick{
-  display:flex;
-  flex-wrap:wrap;
-  gap:10px;
-  margin:14px 0 12px;
-}
-.quick button{
-  padding:10px 12px;
-  background:rgba(56,189,248,.12);
-  border:1px solid rgba(56,189,248,.18);
-  color:#dbeafe;
-  font-size:12px;
-}
-#log{
-  height:334px;
-  overflow:auto;
-  padding:14px;
-  border-radius:18px;
-  border:1px solid rgba(148,163,184,.16);
-  background:linear-gradient(180deg, rgba(2,6,23,.94), rgba(15,23,42,.76));
-  color:#cbd5e1;
-  font-size:12px;
-  line-height:1.7;
-  white-space:pre-wrap;
-  word-break:break-word;
-}
-.footer{
-  margin-top:12px;
-  color:var(--muted);
-  font-size:12px;
-  line-height:1.6;
-}
-@media (max-width: 980px){
-  .container{grid-template-columns:1fr}
-  .hero,.panel{min-height:auto}
-}
-@media (max-width: 640px){
-  .shell{padding:12px}
-  .hero,.panel{padding:18px}
-  h1{font-size:34px}
-  .grid-hero,.info-grid,.stats,.buttons,.mode{grid-template-columns:1fr}
-}
-</style>
+<title>Deriv Bot FIXED WS</title>
 </head>
-<body>
-<div class="shell">
-  <div class="container">
-    <section class="hero">
-      <div class="badge"><span></span> Live trading dashboard</div>
-      <h1>Deriv Dual Balance Bot</h1>
-      <p class="subtitle">
-        A modern control dashboard for switching between demo and real accounts, loading the correct balance automatically, watching live ticks, and tracking trade activity in a clean interface.
-      </p>
 
-      <div class="grid-hero">
-        <div class="card-mini">
-          <div class="label">Active Mode</div>
-          <div class="value blue" id="modeDisplay">DEMO</div>
-          <div class="hint">Switch account instantly</div>
-        </div>
-        <div class="card-mini">
-          <div class="label">Balance</div>
-          <div class="value good" id="balanceDisplay">--</div>
-          <div class="hint">Selected account balance</div>
-        </div>
-        <div class="card-mini">
-          <div class="label">Live Price</div>
-          <div class="value warn" id="priceDisplay">--</div>
-          <div class="hint">Updated from tick stream</div>
-        </div>
-      </div>
+<body style="background:#020617;color:white;font-family:Arial">
 
-      <div class="info-grid">
-        <div class="info">
-          <h3>Account View</h3>
-          <p>Shows the selected account, balance, and connection status in a card-based layout that reads clearly on desktop and mobile.</p>
-        </div>
-        <div class="info">
-          <h3>Trade Activity</h3>
-          <p>Trade logs, errors, and contract results are displayed in a terminal-style panel for easy monitoring during live use.</p>
-        </div>
-      </div>
+<h2>DERIV FIXED WEBSOCKET BOT</h2>
 
-      <div class="footer">
-        App ID is built into the connection. If authorization still fails, the token permissions or account type is the next thing to verify.
-      </div>
-    </section>
+<button id="start">START</button>
+<button id="stop">STOP</button>
 
-    <section class="panel">
-      <div class="topline">
-        <h2>Control Panel</h2>
-        <div class="status-pill"><span></span> <span id="statusDisplay">READY</span></div>
-      </div>
-
-      <div class="token-box">
-        <input id="token" type="password" placeholder="Enter DEMO token">
-      </div>
-
-      <div class="mode">
-        <button id="demo" class="active">DEMO</button>
-        <button id="real">REAL</button>
-      </div>
-
-      <div class="stats">
-        <div class="stat">
-          <div class="title">Mode</div>
-          <div class="value blue" id="modeInline">DEMO</div>
-        </div>
-        <div class="stat">
-          <div class="title">Profit</div>
-          <div class="value good" id="profitInline">0.00</div>
-        </div>
-        <div class="stat">
-          <div class="title">Balance</div>
-          <div class="value good" id="balanceInline">--</div>
-        </div>
-        <div class="stat">
-          <div class="title">Status</div>
-          <div class="value warn" id="statusInline">READY</div>
-        </div>
-      </div>
-
-      <div class="buttons">
-        <button id="start">START</button>
-        <button id="pause">PAUSE</button>
-        <button id="stop">STOP</button>
-        <button id="reset">RESET</button>
-      </div>
-
-      <div class="quick">
-        <button type="button">Live Balance</button>
-        <button type="button">Demo Mode</button>
-        <button type="button">Real Mode</button>
-        <button type="button">Trade Log</button>
-      </div>
-
-      <div id="log">Interface ready.</div>
-    </section>
-  </div>
-</div>
+<div id="status">STOPPED</div>
+<div id="balance">--</div>
+<div id="price">--</div>
+<div id="log"></div>
 
 <script>
 document.addEventListener("DOMContentLoaded", () => {
-  const $ = (id) => document.getElementById(id);
-
-  const demoBtn = $("demo");
-  const realBtn = $("real");
-  const tokenEl = $("token");
-  const logEl = $("log");
-
-  const modeDisplay = $("modeDisplay");
-  const modeInline = $("modeInline");
-  const balanceDisplay = $("balanceDisplay");
-  const balanceInline = $("balanceInline");
-  const priceDisplay = $("priceDisplay");
-  const profitInline = $("profitInline");
-  const statusDisplay = $("statusDisplay");
-  const statusInline = $("statusInline");
-
-  const APP_ID = "33wHQaHO4yQY1z44Hl4oB";
-  const SYMBOL = "R_100";
-
-  let ws = null;
-  let running = false;
-  let paused = false;
-  let mode = "DEMO";
-
-  let digits = [];
-  let warmup = 0;
-  let active = false;
-
-  let tradeLock = false;
-  let ladder = 1;
-  let profit = 0;
-
-  let currentContractId = null;
-  let contractSettled = false;
-  let awaitingProposal = false;
-  let lastBarrier = null;
-
-  const tokens = {
-    DEMO: localStorage.getItem("deriv_demo_token") || "",
-    REAL: localStorage.getItem("deriv_real_token") || ""
-  };
-
-  function log(msg) {
-    logEl.innerHTML += (logEl.innerHTML ? "<br>" : "") + msg;
-    logEl.scrollTop = logEl.scrollHeight;
-  }
-
-  function send(data) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(data));
-    }
-  }
-
-  function lastDigit(price) {
-    const s = Number(price).toFixed(2);
-    return Number(s[s.length - 1]);
-  }
-
-  function stake() {
-    if (ladder === 1) return 0.35;
-    if (ladder === 2) return 4.05;
-    return 46.8;
-  }
-
-  function tokenKey(accountMode) {
-    return accountMode === "DEMO" ? "deriv_demo_token" : "deriv_real_token";
-  }
-
-  function saveToken(accountMode, value) {
-    tokens[accountMode] = value;
-    localStorage.setItem(tokenKey(accountMode), value);
-  }
-
-  function refreshTokenField() {
-    tokenEl.value = tokens[mode] || "";
-    tokenEl.placeholder = mode === "DEMO" ? "Enter DEMO token" : "Enter REAL token";
-  }
-
-  function syncMode(text) {
-    modeDisplay.textContent = text;
-    modeInline.textContent = text;
-  }
-
-  function syncBalance(value) {
-    balanceDisplay.textContent = value;
-    balanceInline.textContent = value;
-  }
-
-  function syncProfit(value) {
-    profitInline.textContent = value;
-  }
-
-  function syncPrice(value) {
-    priceDisplay.textContent = value;
-  }
-
-  function syncStatus(text) {
-    statusDisplay.textContent = text;
-    statusInline.textContent = text;
-  }
-
-  function resetSessionState() {
-    digits = [];
-    warmup = 0;
-    active = false;
-    tradeLock = false;
-    awaitingProposal = false;
-    currentContractId = null;
-    contractSettled = false;
-  }
-
-  function closeSocket() {
-    if (ws) {
-      try {
-        ws.close();
-      } catch (e) {}
-      ws = null;
-    }
-  }
-
-  function connect() {
-    const token = tokens[mode] || tokenEl.value.trim();
-
-    if (!token) {
-      syncStatus("ENTER TOKEN");
-      log("Missing " + mode + " token");
-      return;
-    }
-
-    saveToken(mode, token);
-    closeSocket();
-    resetSessionState();
-
-    log("CONNECTING → " + mode);
-    syncStatus("CONNECTING");
-
-    ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`);
-
-    ws.onopen = () => {
-      log("CONNECTED");
-      send({ authorize: token });
-    };
-
-    ws.onclose = () => {
-      log("DISCONNECTED");
-      if (running) syncStatus(paused ? "PAUSED" : "DISCONNECTED");
-      else syncStatus("STOPPED");
-    };
-
-    ws.onerror = () => {
-      log("WEBSOCKET ERROR");
-      syncStatus("ERROR");
-    };
-
-    ws.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-
-      if (msg.error) {
-        const err = msg.error.message || "Unknown error";
-        log("ERROR → " + err);
-        if (msg.msg_type === "authorize") syncStatus("AUTH FAILED");
-        if (awaitingProposal) {
-          awaitingProposal = false;
-          tradeLock = false;
-        }
-        return;
-      }
-
-      if (msg.msg_type === "authorize") {
-        log("AUTHORIZED → " + mode);
-        syncStatus(running ? (paused ? "PAUSED" : "RUNNING") : "READY");
-        send({ balance: 1, subscribe: 1 });
-        send({ ticks: SYMBOL, subscribe: 1 });
-        return;
-      }
-
-      if (msg.msg_type === "balance") {
-        if (msg.balance && typeof msg.balance.balance !== "undefined") {
-          const bal = Number(msg.balance.balance).toFixed(2);
-          syncBalance(bal);
-        }
-        return;
-      }
-
-      if (msg.msg_type === "tick") {
-        const price = msg.tick.quote;
-        const d = lastDigit(price);
-        syncPrice(Number(price).toFixed(2) + " → " + d);
-
-        if (!active) {
-          warmup++;
-          if (warmup >= 10) {
-            active = true;
-            if (running && !paused) syncStatus("RUNNING");
-            log("BOT ACTIVE");
-          }
-          return;
-        }
-
-        digits.push(d);
-        if (digits.length > 3) digits.shift();
-
-        if (
-          digits.length === 3 &&
-          digits[0] === digits[1] &&
-          digits[1] === digits[2] &&
-          !tradeLock &&
-          running &&
-          !paused
-        ) {
-          placeTrade(digits[2]);
-        }
-        return;
-      }
-
-      if (msg.msg_type === "proposal") {
-        if (!awaitingProposal || !msg.proposal || !msg.proposal.id) return;
-
-        const proposalId = msg.proposal.id;
-        log("PROPOSAL READY → " + mode + " / barrier " + lastBarrier);
-
-        send({
-          buy: proposalId,
-          price: stake()
-        });
-        return;
-      }
-
-      if (msg.msg_type === "buy") {
-        if (!msg.buy || !msg.buy.contract_id) {
-          log("BUY FAILED");
-          tradeLock = false;
-          awaitingProposal = false;
-          return;
-        }
-
-        currentContractId = msg.buy.contract_id;
-        contractSettled = false;
-        awaitingProposal = false;
-
-        log("BOUGHT → contract " + currentContractId);
-
-        send({
-          proposal_open_contract: 1,
-          contract_id: currentContractId,
-          subscribe: 1
-        });
-        return;
-      }
-
-      if (msg.msg_type === "proposal_open_contract") {
-        const c = msg.proposal_open_contract;
-        if (!c || !currentContractId) return;
-        if (String(c.contract_id) !== String(currentContractId)) return;
-
-        if (c.is_sold && !contractSettled) {
-          contractSettled = true;
-
-          const pnl = Number(c.profit || 0);
-          profit += pnl;
-          syncProfit(profit.toFixed(2));
-
-          log("RESULT → " + pnl.toFixed(2));
-
-          if (pnl > 0) ladder = 1;
-          else ladder = Math.min(ladder + 1, 3);
-
-          tradeLock = false;
-          currentContractId = null;
-        }
-      }
-    };
-  }
-
-  function placeTrade(barrier) {
-    if (!running || paused || tradeLock) return;
-
-    tradeLock = true;
-    awaitingProposal = true;
-    lastBarrier = barrier;
-
-    const amount = stake();
-    log("PROPOSAL → " + mode + " / barrier " + barrier + " / stake " + amount.toFixed(2));
-
-    send({
-      proposal: 1,
-      amount: amount,
-      basis: "stake",
-      contract_type: "DIGITDIFF",
-      currency: "USD",
-      duration: 1,
-      duration_unit: "t",
-      symbol: SYMBOL,
-      barrier: barrier
-    });
-  }
-
-  function setMode(newMode) {
-    mode = newMode;
-    syncMode(newMode);
-
-    demoBtn.classList.remove("active");
-    realBtn.classList.remove("active");
-
-    if (newMode === "DEMO") demoBtn.classList.add("active");
-    else realBtn.classList.add("active");
-
-    refreshTokenField();
-    log("MODE → " + newMode);
-
-    if (tokens[mode]) connect();
-    else {
-      closeSocket();
-      syncStatus("ENTER TOKEN");
-    }
-  }
-
-  demoBtn.onclick = () => setMode("DEMO");
-  realBtn.onclick = () => setMode("REAL");
-
-  tokenEl.addEventListener("input", () => {
-    saveToken(mode, tokenEl.value.trim());
-  });
-
-  $("start").onclick = () => {
-    running = true;
-    paused = false;
-
-    if (!tokens[mode] && !tokenEl.value.trim()) {
-      syncStatus("ENTER TOKEN");
-      log("Missing " + mode + " token");
-      return;
-    }
-
-    connect();
-  };
-
-  $("pause").onclick = () => {
-    if (!running) return;
-    paused = !paused;
-    syncStatus(paused ? "PAUSED" : "RUNNING");
-    log(paused ? "PAUSED" : "RESUMED");
-  };
-
-  $("stop").onclick = () => {
-    running = false;
-    paused = false;
-    tradeLock = false;
-    awaitingProposal = false;
-    currentContractId = null;
-    contractSettled = false;
-    closeSocket();
-    syncStatus("STOPPED");
-    log("STOPPED");
-  };
-
-  $("reset").onclick = () => {
-    location.reload();
-  };
-
-  refreshTokenField();
-  syncMode("DEMO");
-  syncBalance("--");
-  syncPrice("--");
-  syncProfit("0.00");
-  syncStatus(tokens[mode] ? "READY" : "ENTER TOKEN");
+
+const APP_ID = "1089";
+const SYMBOL = "R_100";
+
+let ws = null;
+let token = "";
+let running = false;
+
+let digits = [];
+let contractId = null;
+let tradeLock = false;
+let awaitingProposal = false;
+
+const logEl = document.getElementById("log");
+const statusEl = document.getElementById("status");
+const balanceEl = document.getElementById("balance");
+const priceEl = document.getElementById("price");
+
+function log(m){
+logEl.innerHTML += "<br>" + m;
+logEl.scrollTop = logEl.scrollHeight;
+}
+
+function send(d){
+if(ws && ws.readyState === 1){
+ws.send(JSON.stringify(d));
+}
+}
+
+/* SAFE DIGIT */
+function lastDigit(p){
+return Number(Number(p).toFixed(2).slice(-1));
+}
+
+/* CONNECT */
+function connect(){
+
+ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`);
+
+ws.onopen = () => {
+log("CONNECTED");
+send({ authorize: token });
+};
+
+ws.onerror = () => {
+log("WS ERROR");
+statusEl.textContent = "ERROR";
+};
+
+ws.onclose = () => {
+log("DISCONNECTED");
+statusEl.textContent = "STOPPED";
+};
+
+ws.onmessage = (e) => {
+
+let msg;
+try {
+msg = JSON.parse(e.data);
+} catch(err){
+log("BAD JSON");
+return;
+}
+
+if(msg.error){
+log("ERROR: " + msg.error.message);
+return;
+}
+
+/* AUTH */
+if(msg.msg_type === "authorize"){
+log("AUTHORIZED");
+statusEl.textContent = "RUNNING";
+
+send({ balance: 1, subscribe: 1 });
+send({ ticks: SYMBOL, subscribe: 1 });
+}
+
+/* BALANCE */
+if(msg.msg_type === "balance"){
+balanceEl.textContent = Number(msg.balance.balance).toFixed(2);
+}
+
+/* TICK */
+if(msg.msg_type === "tick"){
+
+const price = msg.tick.quote;
+priceEl.textContent = price.toFixed(2);
+
+const d = lastDigit(price);
+
+digits.push(d);
+if(digits.length > 3) digits.shift();
+
+/* SIMPLE PATTERN */
+if(
+digits.length === 3 &&
+digits[0] === digits[1] &&
+digits[1] === digits[2] &&
+!tradeLock &&
+running
+){
+placeTrade(d);
+}
+
+}
+
+/* PROPOSAL RESPONSE (FIXED FLOW) */
+if(msg.msg_type === "proposal"){
+
+if(!awaitingProposal) return;
+
+const id = msg.proposal.id;
+
+log("PROPOSAL READY");
+
+send({
+buy: id,
+price: 0.35
+});
+
+awaitingProposal = false;
+}
+
+/* BUY */
+if(msg.msg_type === "buy"){
+
+if(!msg.buy || !msg.buy.contract_id){
+log("BUY FAILED");
+tradeLock = false;
+return;
+}
+
+contractId = msg.buy.contract_id;
+tradeLock = true;
+
+log("BUY OK: " + contractId);
+
+send({
+proposal_open_contract: 1,
+contract_id: contractId,
+subscribe: 1
+});
+}
+
+/* RESULT */
+if(msg.msg_type === "proposal_open_contract"){
+
+const c = msg.proposal_open_contract;
+
+if(!c || c.contract_id !== contractId) return;
+
+if(c.is_sold){
+
+log("RESULT: " + c.profit);
+
+tradeLock = false;
+contractId = null;
+}
+
+}
+
+};
+
+}
+
+/* PLACE TRADE (FIXED PROPER FLOW) */
+function placeTrade(barrier){
+
+if(!ws || tradeLock || awaitingProposal) return;
+
+awaitingProposal = true;
+
+log("REQUEST PROPOSAL");
+
+send({
+proposal: 1,
+amount: 0.35,
+basis: "stake",
+contract_type: "DIGITDIFF",
+currency: "USD",
+duration: 1,
+duration_unit: "t",
+symbol: SYMBOL,
+barrier: barrier
+});
+
+}
+
+document.getElementById("start").onclick = () => {
+
+token = prompt("Enter Deriv Token");
+
+if(!token){
+alert("No token");
+return;
+}
+
+running = true;
+connect();
+
+};
+
+document.getElementById("stop").onclick = () => {
+running = false;
+ws?.close();
+log("STOPPED");
+};
+
 });
 </script>
+
 </body>
   </html>
