@@ -2,7 +2,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const $ = id => document.getElementById(id);
 
   // =========================
-  // UI ELEMENTS
+  // UI
   // =========================
   const loginBtn = $("login");
   const startBtn = $("start");
@@ -15,15 +15,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   const levelEl = $("level");
   const logEl = $("log");
 
-  const tokenInput = $("token");
-
   // =========================
   // CONFIG
   // =========================
-  const WS_APP_ID = 1089;
   const CLIENT_ID = "33wZZKTFZrmsZgFaAH53Z";
   const REDIRECT_URI = "https://jesanjedan27-max.github.io/tradingbot/";
   const VERCEL_URL = "https://oauthexchange23.vercel.app/api/token";
+  const WS_APP_ID = 1089;
   const SYMBOL = "R_100";
 
   // =========================
@@ -44,10 +42,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   let m1 = null;
   let m2 = null;
 
+  let totalProfit = 0;
+
   // =========================
-  // LOG SYSTEM
+  // LOGGING
   // =========================
-  function log(msg, color = "#ffffff") {
+  function log(msg, color = "#fff") {
     logEl.innerHTML += `<div style="color:${color}">${msg}</div>`;
     logEl.scrollTop = logEl.scrollHeight;
   }
@@ -59,7 +59,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // =========================
-  // PKCE HELPERS
+  // PKCE
   // =========================
   function generateVerifier() {
     return [...crypto.getRandomValues(new Uint8Array(32))]
@@ -71,8 +71,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     return crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
   }
 
-  function base64url(buffer) {
-    return btoa(String.fromCharCode(...new Uint8Array(buffer)))
+  function base64url(buf) {
+    return btoa(String.fromCharCode(...new Uint8Array(buf)))
       .replace(/\+/g, "-")
       .replace(/\//g, "_")
       .replace(/=+$/, "");
@@ -83,7 +83,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // =========================
-  // LOGIN (DERIV OAUTH)
+  // LOGIN FLOW (DERIV)
   // =========================
   loginBtn.onclick = async () => {
     const verifier = generateVerifier();
@@ -100,12 +100,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   };
 
   // =========================
-  // EXCHANGE CODE VIA VERCEL
+  // HANDLE OAUTH CALLBACK
   // =========================
   async function handleOAuthCallback() {
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get("code");
-
+    const code = new URLSearchParams(location.search).get("code");
     if (!code) return;
 
     const verifier = localStorage.getItem("pkce_verifier");
@@ -125,17 +123,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       const data = await res.json();
 
       if (!data.access_token) {
-        log("OAuth Failed", "red");
+        log("OAuth failed", "red");
         return;
       }
 
       token = data.access_token;
       localStorage.setItem("access_token", token);
 
-      window.history.replaceState({}, document.title, "/");
+      history.replaceState({}, document.title, "/");
 
-      log("✅ OAuth Connected", "lime");
-
+      log("OAuth Connected", "lime");
     } catch (err) {
       log("OAuth Error: " + err.message, "red");
     }
@@ -144,22 +141,23 @@ document.addEventListener("DOMContentLoaded", async () => {
   await handleOAuthCallback();
 
   // =========================
-  // STAKE ENGINE
+  // STAKE (MARTINGALE PRESERVED)
   // =========================
-  const BASE_STAKE = 0.35;
+  const BASE = 0.35;
 
   function stake(level) {
-    if (level === 1) return BASE_STAKE;
-    if (level === 2) return BASE_STAKE * 11.57;
-    if (level === 3) return BASE_STAKE * 11.57 * 11.57;
-    return BASE_STAKE;
+    if (level === 1) return BASE;
+    if (level === 2) return BASE * 11.57;
+    if (level === 3) return BASE * 11.57 * 11.57;
+    return BASE;
   }
 
   // =========================
-  // STRATEGY (2,3 ACTIVATOR SYSTEM)
+  // TICK ENGINE (2,3 ACTIVATOR STRATEGY)
   // =========================
   function onTick(price) {
     if (!running || paused || tradeLock) return;
+    if (!price) return;
 
     const digit = Math.floor(price % 10);
 
@@ -168,7 +166,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     buffer.push(digit);
     if (buffer.length > 5) buffer.shift();
 
-    // WAIT FOR ACTIVATOR 2,3
+    // ACTIVATOR: 2,3
     if (!armed) {
       if (buffer.slice(-2).join("") === "23") {
         armed = true;
@@ -178,39 +176,38 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    // MOMENTUM COLLECTION
-    if (m1 === null) return m1 = digit;
-    if (m2 === null) return m2 = digit;
+    // MOMENTUM
+    if (m1 === null) return (m1 = digit);
+    if (m2 === null) return (m2 = digit);
 
     const trigger = digit;
 
-    // INVALID DIGIT RULE
+    // INVALID RULE
     if (trigger === 9) {
-      log("Ignored trigger 9", "red");
+      log("Ignored 9", "red");
       armed = false;
       buffer = [];
-      m1 = null;
-      m2 = null;
+      m1 = m2 = null;
       return;
     }
 
     const barrier = trigger + 1;
 
+    // RESET STATE
     armed = false;
     buffer = [];
-    m1 = null;
-    m2 = null;
+    m1 = m2 = null;
 
     if (ladderLevel === 0) {
       ladderLevel = 1;
-      trade(1, barrier);
+      placeTrade(1, barrier);
     }
   }
 
   // =========================
   // TRADE EXECUTION
   // =========================
-  function trade(level, digit) {
+  function placeTrade(level, digit) {
     if (!authorized || tradeLock) return;
 
     tradeLock = true;
@@ -232,8 +229,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     });
 
-    log(`TRADE L${level} → DIGITDIFF ${digit} | $${amount.toFixed(2)}`, "#38bdf8");
     levelEl.textContent = level;
+    log(`TRADE L${level} → ${digit}`, "#38bdf8");
   }
 
   // =========================
@@ -242,38 +239,59 @@ document.addEventListener("DOMContentLoaded", async () => {
   function connect() {
     ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${WS_APP_ID}`);
 
-    ws.onopen = () => {
-      send({ authorize: token });
-    };
+    ws.onopen = () => send({ authorize: token });
 
-    ws.onmessage = (msg) => {
-      const data = JSON.parse(msg.data);
+    ws.onmessage = (e) => {
+      const d = JSON.parse(e.data);
 
-      if (data.msg_type === "authorize") {
+      // AUTH
+      if (d.msg_type === "authorize") {
         authorized = true;
-        log("Authorized", "lime");
         send({ ticks: SYMBOL, subscribe: 1 });
+        send({ balance: 1 });
       }
 
-      if (data.msg_type === "tick") {
-        onTick(data.tick.quote);
+      // TICKS
+      if (d.msg_type === "tick") {
+        onTick(d.tick.quote);
       }
 
-      if (data.msg_type === "buy") {
-        const id = data.buy.contract_id;
+      // BALANCE
+      if (d.msg_type === "balance") {
+        balanceEl.textContent = Number(d.balance.balance).toFixed(2);
+      }
 
+      // CONTRACT OPEN
+      if (d.msg_type === "buy") {
         send({
           proposal_open_contract: 1,
-          contract_id: id,
+          contract_id: d.buy.contract_id,
           subscribe: 1
         });
       }
 
+      // RESULT
       if (
-        data.msg_type === "proposal_open_contract" &&
-        data.proposal_open_contract.is_sold
+        d.msg_type === "proposal_open_contract" &&
+        d.proposal_open_contract.is_sold
       ) {
+        const pnl = Number(d.proposal_open_contract.profit || 0);
+        totalProfit += pnl;
+
+        log(
+          pnl >= 0
+            ? `WIN +${pnl.toFixed(2)}`
+            : `LOSS ${pnl.toFixed(2)}`,
+          pnl >= 0 ? "lime" : "red"
+        );
+
         tradeLock = false;
+
+        if (pnl > 0) {
+          ladderLevel = 0;
+        } else if (ladderLevel < 3) {
+          ladderLevel++;
+        }
       }
     };
   }
@@ -307,6 +325,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     armed = false;
     ladderLevel = 0;
     tradeLock = false;
+    totalProfit = 0;
     log("Reset Done", "orange");
   };
 });
