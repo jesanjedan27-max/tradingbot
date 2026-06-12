@@ -1,130 +1,108 @@
 body {
+  background: #020617;
+  color: #ffffff;
+  font-family: Arial, sans-serif;
   margin: 0;
   padding: 0;
-  background: #020617;
-  color: #fff;
-  font-family: Arial, sans-serif;
 }
 
-/* MAIN CONTAINER */
 .container {
   max-width: 520px;
   margin: 30px auto;
   padding: 20px;
   background: #0f172a;
-  border-radius: 14px;
+  border-radius: 12px;
   box-shadow: 0 0 20px rgba(0,0,0,0.4);
 }
 
-/* TITLE */
 h1 {
   text-align: center;
   color: #38bdf8;
-  margin-bottom: 20px;
-  letter-spacing: 1px;
+  margin-bottom: 15px;
 }
 
-/* MODE ROW */
+/* ================= BUTTON ROW ================= */
 .row {
   display: flex;
   gap: 8px;
   margin-bottom: 10px;
 }
 
-.row button {
+button {
   flex: 1;
   padding: 10px;
   border: none;
-  border-radius: 8px;
+  border-radius: 6px;
   font-weight: bold;
   cursor: pointer;
   color: white;
+  transition: 0.2s;
 }
 
-#demoBtn {
-  background: #38bdf8;
+button:hover {
+  opacity: 0.85;
 }
 
-#liveBtn {
-  background: #a855f7;
-}
-
-/* LOGIN BUTTON */
-.login-btn {
+/* Login button special */
+#login {
   width: 100%;
   margin-bottom: 10px;
-  padding: 12px;
-  background: #0ea5e9;
-  border: none;
-  border-radius: 8px;
-  font-weight: bold;
-  cursor: pointer;
-  color: white;
-}
-
-/* CONTROL BUTTONS */
-.buttons {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.buttons button {
-  padding: 12px;
-  border: none;
-  border-radius: 8px;
-  font-weight: bold;
-  cursor: pointer;
-  color: white;
-}
-
-#start {
   background: #22c55e;
 }
 
-#pause {
-  background: #facc15;
-  color: black;
-}
+/* Control buttons */
+#start { background: #22c55e; }
+#pause { background: #facc15; color: black; }
+#stop  { background: #ef4444; }
+#reset { background: #60a5fa; }
 
-#stop {
-  background: #ef4444;
-}
-
-#reset {
-  background: #60a5fa;
-}
-
-/* STATS PANEL */
+/* ================= STATS ================= */
 .stats {
   margin-top: 10px;
   background: #111827;
   padding: 12px;
-  border-radius: 10px;
-  display: flex;
-  flex-direction: column;
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: 1fr;
   gap: 6px;
   font-size: 14px;
 }
 
-/* LOG BOX */
+.stats div {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid #1f2937;
+}
+
+.stats div:last-child {
+  border-bottom: none;
+}
+
+/* ================= LOG ================= */
 .log {
-  margin-top: 12px;
+  margin-top: 10px;
   background: #1f2937;
   padding: 10px;
   font-size: 12px;
   height: 220px;
   overflow-y: auto;
-  border-radius: 10px;
+  border-radius: 8px;
   border: 1px solid #374151;
 }
 
-/* SMALL EFFECTS */
-button:hover {
-  opacity: 0.9;
+/* ================= LIVE INDICATORS ================= */
+#price {
+  color: #38bdf8;
+  font-weight: bold;
 }
 
-button:active {
-  transform: scale(0.98);
+#balance {
+  color: #22c55e;
+  font-weight: bold;
+}
+
+#level {
+  color: #facc15;
+  font-weight: bold;
 }
