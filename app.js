@@ -54,7 +54,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   function generateVerifier() {
     const arr = new Uint8Array(32);
     crypto.getRandomValues(arr);
-    return Array.from(arr).map(x => x.toString(16).padStart(2, "0")).join("");
+    return Array.from(arr)
+      .map(x => x.toString(16).padStart(2, "0"))
+      .join("");
   }
 
   async function sha256(str) {
@@ -72,20 +74,21 @@ document.addEventListener("DOMContentLoaded", async () => {
     return base64url(await sha256(verifier));
   }
 
-  // ================= LOGIN (FIXED SCOPES) =================
+  // ================= LOGIN =================
   loginBtn.onclick = async () => {
     const verifier = generateVerifier();
     const challenge = await createChallenge(verifier);
 
-    sessionStorage.setItem("pkce_verifier", verifier);
-    sessionStorage.removeItem("oauth_done");
+    // ✅ FIX: use localStorage (GitHub Pages safe)
+    localStorage.setItem("pkce_verifier", verifier);
+    localStorage.removeItem("oauth_done");
 
     const authUrl =
       `https://auth.deriv.com/oauth2/authorize` +
       `?response_type=code` +
       `&client_id=${CLIENT_ID}` +
       `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-      `&scope=trade` +   // ✅ FIXED (REMOVED account_info)
+      `&scope=trade` +
       `&state=xyz123` +
       `&code_challenge=${challenge}` +
       `&code_challenge_method=S256`;
@@ -93,24 +96,29 @@ document.addEventListener("DOMContentLoaded", async () => {
     window.location.href = authUrl;
   };
 
-  // ================= CALLBACK HANDLER =================
+  // ================= CALLBACK =================
   async function handleOAuthCallback() {
     const url = new URL(window.location.href);
     const code = url.searchParams.get("code");
     const error = url.searchParams.get("error");
 
+    console.log("OAuth URL:", window.location.href);
+    console.log("Code:", code);
+
     if (error) {
-      log("OAuth Error: " + error, "red");
+      log("OAuth error: " + error, "red");
       return;
     }
 
     if (!code) return;
 
-    if (sessionStorage.getItem("oauth_done") === "true") return;
+    if (localStorage.getItem("oauth_done") === "true") return;
 
-    const verifier = sessionStorage.getItem("pkce_verifier");
+    // ✅ FIX: localStorage instead of sessionStorage
+    const verifier = localStorage.getItem("pkce_verifier");
+
     if (!verifier) {
-      log("Missing PKCE verifier", "red");
+      log("Missing PKCE verifier (login again)", "red");
       return;
     }
 
@@ -129,18 +137,18 @@ document.addEventListener("DOMContentLoaded", async () => {
       });
 
       const data = await res.json();
+      console.log("Vercel response:", data);
 
       if (!data.access_token) {
-        log("OAuth failed (no token)", "red");
+        log("OAuth failed (no token received)", "red");
         return;
       }
 
       token = data.access_token;
       localStorage.setItem("access_token", token);
+      localStorage.setItem("oauth_done", "true");
 
-      sessionStorage.setItem("oauth_done", "true");
-
-      // clean URL correctly
+      // clean URL
       window.history.replaceState({}, document.title, REDIRECT_URI);
 
       log("OAuth SUCCESS", "lime");
@@ -152,7 +160,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   await handleOAuthCallback();
 
-  // ================= STAKE =================
+  // ================= STRATEGY =================
   const BASE = 0.35;
 
   function stake(level) {
@@ -162,7 +170,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     return BASE;
   }
 
-  // ================= STRATEGY =================
   function onTick(price) {
     if (!running || paused || tradeLock) return;
 
@@ -207,7 +214,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  // ================= TRADE =================
   function placeTrade(level, digit) {
     if (!authorized || tradeLock) return;
 
