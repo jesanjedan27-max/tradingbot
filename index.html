@@ -1,248 +1,51 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Deriv Dual Balance Bot</title>
-
-<style>
-:root{
-  --bg:#020617;
-  --panel:rgba(15,23,42,.88);
-  --panel2:rgba(2,6,23,.78);
-  --stroke:rgba(148,163,184,.18);
-  --text:#e2e8f0;
-  --muted:#94a3b8;
-  --blue:#38bdf8;
-  --green:#22c55e;
-  --red:#ef4444;
-  --yellow:#facc15;
-  --shadow:0 30px 90px rgba(0,0,0,.45);
-  --radius:24px;
-}
-*{box-sizing:border-box}
-html,body{height:100%}
-body{
-  margin:0;
-  color:var(--text);
-  font-family:"Segoe UI",system-ui;
-  background: radial-gradient(circle at top left, rgba(56,189,248,.16), transparent 26%),
-              linear-gradient(180deg,#020617,#07111f);
-}
-
-.shell{
-  min-height:100%;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  padding:24px;
-}
-
-.container{
-  width:min(1180px,100%);
-  display:grid;
-  grid-template-columns:1.08fr .92fr;
-  gap:18px;
-}
-
-.hero,.panel{
-  border-radius:24px;
-  padding:20px;
-  background:rgba(15,23,42,.85);
-  border:1px solid var(--stroke);
-}
-
-#log{
-  height:330px;
-  overflow:auto;
-  background:#000;
-  padding:10px;
-  font-size:12px;
-  color:#cbd5e1;
-}
-
-button{
-  padding:10px;
-  cursor:pointer;
-}
-.active{outline:2px solid cyan}
-</style>
-
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>PRO Deriv Bot</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
-<div class="shell">
+
 <div class="container">
 
-<!-- LEFT -->
-<section class="hero">
-  <h1>Deriv Bot</h1>
+  <h1>PRO DERIV BOT</h1>
 
-  <div>Mode: <span id="modeDisplay">DEMO</span></div>
-  <div>Balance: <span id="balanceDisplay">--</span></div>
-  <div>Price: <span id="priceDisplay">--</span></div>
-  <div>Status: <span id="statusDisplay">READY</span></div>
-</section>
+  <!-- MODE (optional UI only) -->
+  <div class="row">
+    <button id="demoBtn">Demo</button>
+    <button id="liveBtn">Live</button>
+  </div>
 
-<!-- RIGHT -->
-<section class="panel">
+  <!-- OAUTH LOGIN -->
+  <button id="login" class="login-btn">Login with Deriv</button>
 
-<input id="token" placeholder="Enter token">
+  <!-- CONTROL BUTTONS -->
+  <div class="buttons">
+    <button id="start">Start</button>
+    <button id="pause">Pause</button>
+    <button id="stop">Stop</button>
+    <button id="reset">Reset</button>
+  </div>
 
-<button id="demo" class="active">DEMO</button>
-<button id="real">REAL</button>
+  <!-- STATS -->
+  <div class="stats">
+    <div>Price: <span id="price">-</span></div>
+    <div>Balance: <span id="balance">-</span></div>
+    <div>Level: <span id="level">0</span></div>
+  </div>
 
-<br><br>
+  <!-- hidden token storage -->
+  <input type="hidden" id="token" />
 
-<button id="start">START</button>
-<button id="stop">STOP</button>
-
-<div id="log"></div>
-
-</section>
+  <!-- LOGS -->
+  <div id="log" class="log"></div>
 
 </div>
-</div>
 
-<script>
-document.addEventListener("DOMContentLoaded", () => {
-
-const APP_ID = "33wHQaHO4yQY1z44Hl4oB";
-const SYMBOL = "R_100";
-
-let ws;
-let mode = "DEMO";
-let running = false;
-
-const $ = id => document.getElementById(id);
-
-const logEl = $("log");
-
-const tokens = {
-  DEMO: localStorage.getItem("demo_token") || "",
-  REAL: localStorage.getItem("real_token") || ""
-};
-
-function log(m){
-  logEl.innerHTML += m + "<br>";
-  logEl.scrollTop = logEl.scrollHeight;
-}
-
-function send(data){
-  if(ws && ws.readyState === 1){
-    ws.send(JSON.stringify(data));
-  }
-}
-
-/* SAFE PARSE FIX */
-function safeParse(data){
-  try { return JSON.parse(data); }
-  catch(e){ return null; }
-}
-
-/* CONNECT */
-function connect(){
-
-  const token = tokens[mode] || $("token").value.trim();
-
-  if(!token){
-    log("❌ No token");
-    return;
-  }
-
-  tokens[mode] = token;
-  localStorage.setItem(mode.toLowerCase()+"_token", token);
-
-  if(ws) ws.close();
-
-  log("🔌 Connecting...");
-  $("statusDisplay").innerText = "CONNECTING";
-
-  ws = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id="+APP_ID);
-
-  ws.onopen = () => {
-    log("CONNECTED");
-    send({ authorize: token });
-  };
-
-  ws.onerror = () => log("WS ERROR");
-
-  ws.onclose = () => log("DISCONNECTED");
-
-  ws.onmessage = (e) => {
-
-    const msg = safeParse(e.data);
-    if(!msg) return;
-
-    if(msg.error){
-      log("ERROR: "+msg.error.message);
-      return;
-    }
-
-    /* AUTH */
-    if(msg.msg_type === "authorize"){
-      log("AUTHORIZED ✔");
-
-      $("statusDisplay").innerText = "RUNNING";
-
-      /* FIXED BALANCE STREAM */
-      send({ balance: 1, subscribe: 1 });
-
-      /* FIXED TICK STREAM */
-      send({ ticks: SYMBOL, subscribe: 1 });
-
-      return;
-    }
-
-    /* BALANCE FIX */
-    if(msg.msg_type === "balance"){
-      if(msg.balance){
-        $("balanceDisplay").innerText =
-          Number(msg.balance.balance).toFixed(2);
-      }
-      return;
-    }
-
-    /* TICK FIX */
-    if(msg.msg_type === "tick"){
-      $("priceDisplay").innerText = msg.tick.quote;
-      return;
-    }
-  };
-}
-
-/* MODE SWITCH */
-$("demo").onclick = () => {
-  mode = "DEMO";
-  $("modeDisplay").innerText = "DEMO";
-  $("demo").classList.add("active");
-  $("real").classList.remove("active");
-  log("Switched DEMO");
-};
-
-$("real").onclick = () => {
-  mode = "REAL";
-  $("modeDisplay").innerText = "REAL";
-  $("real").classList.add("active");
-  $("demo").classList.remove("active");
-  log("Switched REAL");
-};
-
-/* START */
-$("start").onclick = () => {
-  running = true;
-  connect();
-};
-
-/* STOP */
-$("stop").onclick = () => {
-  running = false;
-  if(ws) ws.close();
-  log("STOPPED");
-};
-
-});
-</script>
+<script src="app.js"></script>
 
 </body>
-  </html>
+</html>
