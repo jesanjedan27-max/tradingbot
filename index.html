@@ -5,117 +5,421 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Deriv Dual Balance Bot</title>
 <style>
+:root{
+  --bg:#020617;
+  --panel:rgba(15,23,42,.88);
+  --panel2:rgba(2,6,23,.78);
+  --stroke:rgba(148,163,184,.18);
+  --text:#e2e8f0;
+  --muted:#94a3b8;
+  --blue:#38bdf8;
+  --green:#22c55e;
+  --red:#ef4444;
+  --yellow:#facc15;
+  --shadow:0 30px 90px rgba(0,0,0,.45);
+  --radius:24px;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
 body{
-  background:#020617;
-  color:#fff;
-  font-family:Arial, sans-serif;
   margin:0;
-  padding:0;
+  color:var(--text);
+  font-family:"Segoe UI",system-ui,-apple-system,sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(56,189,248,.16), transparent 26%),
+    radial-gradient(circle at right center, rgba(34,197,94,.12), transparent 22%),
+    radial-gradient(circle at bottom, rgba(239,68,68,.10), transparent 24%),
+    linear-gradient(180deg, #020617 0%, #07111f 54%, #020617 100%);
+}
+body::before{
+  content:"";
+  position:fixed;
+  inset:0;
+  pointer-events:none;
+  background:
+    linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+  background-size:36px 36px;
+  opacity:.35;
+  mask-image:linear-gradient(180deg, rgba(0,0,0,.45), transparent 95%);
+}
+.shell{
+  min-height:100%;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
 }
 .container{
-  max-width:520px;
-  margin:20px auto;
-  padding:20px;
-  background:#0f172a;
-  border-radius:12px;
-  box-shadow:0 12px 30px rgba(0,0,0,.35);
+  width:min(1180px,100%);
+  display:grid;
+  grid-template-columns:1.08fr .92fr;
+  gap:18px;
 }
-h2{
-  text-align:center;
-  color:#38bdf8;
-  margin-top:0;
+.hero,.panel{
+  border:1px solid var(--stroke);
+  border-radius:var(--radius);
+  background:linear-gradient(180deg, rgba(15,23,42,.92), rgba(2,6,23,.88));
+  backdrop-filter:blur(18px);
+  box-shadow:var(--shadow);
+  overflow:hidden;
+}
+.hero{
+  padding:28px;
+  min-height:720px;
+}
+.panel{
+  padding:22px;
+  min-height:720px;
+}
+.badge{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:8px 12px;
+  border-radius:999px;
+  background:rgba(56,189,248,.10);
+  border:1px solid rgba(56,189,248,.20);
+  color:#bae6fd;
+  font-size:12px;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+}
+.badge span{
+  width:8px;
+  height:8px;
+  border-radius:50%;
+  background:#22c55e;
+  box-shadow:0 0 0 6px rgba(34,197,94,.12);
+}
+h1{
+  margin:16px 0 10px;
+  font-size:44px;
+  line-height:1.02;
+  letter-spacing:-.05em;
+}
+.subtitle{
+  margin:0 0 22px;
+  max-width:620px;
+  color:var(--muted);
+  line-height:1.7;
+  font-size:15px;
+}
+.grid-hero{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:12px;
+  margin:20px 0;
+}
+.card-mini{
+  padding:16px;
+  border-radius:18px;
+  border:1px solid var(--stroke);
+  background:linear-gradient(180deg, rgba(15,23,42,.78), rgba(2,6,23,.60));
+}
+.card-mini .label{
+  color:var(--muted);
+  font-size:12px;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  margin-bottom:10px;
+}
+.card-mini .value{
+  font-size:26px;
+  font-weight:800;
+  letter-spacing:-.04em;
+}
+.card-mini .hint{
+  margin-top:10px;
+  color:#86efac;
+  font-size:12px;
+}
+.info-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+  margin-top:18px;
+}
+.info{
+  padding:18px;
+  border-radius:18px;
+  border:1px solid var(--stroke);
+  background:linear-gradient(180deg, rgba(15,23,42,.72), rgba(2,6,23,.58));
+}
+.info h3{
+  margin:0 0 8px;
+  font-size:15px;
+}
+.info p{
+  margin:0;
+  color:var(--muted);
+  font-size:13px;
+  line-height:1.65;
+}
+.bottom-note{
+  margin-top:14px;
+  color:var(--muted);
+  font-size:12px;
+  line-height:1.7;
+}
+.topline{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:18px;
+}
+.topline h2{
+  margin:0;
+  font-size:22px;
+  letter-spacing:-.03em;
+}
+.status-pill{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:9px 12px;
+  border-radius:999px;
+  border:1px solid rgba(34,197,94,.24);
+  background:rgba(34,197,94,.08);
+  color:#bbf7d0;
+  font-size:12px;
+  font-weight:700;
+}
+.status-pill span{
+  width:8px;
+  height:8px;
+  border-radius:50%;
+  background:#22c55e;
+  box-shadow:0 0 0 6px rgba(34,197,94,.12);
+}
+.token-box{
+  margin-bottom:14px;
 }
 input{
   width:100%;
-  padding:10px;
-  margin:6px 0;
-  border:none;
-  border-radius:6px;
-  box-sizing:border-box;
+  padding:15px 16px;
+  border-radius:14px;
+  border:1px solid rgba(148,163,184,.16);
   outline:none;
+  color:var(--text);
+  background:rgba(2,6,23,.72);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
+}
+input::placeholder{color:#64748b}
+input:focus{
+  border-color:rgba(56,189,248,.55);
+  box-shadow:0 0 0 4px rgba(56,189,248,.10);
 }
 .mode{
-  display:flex;
-  gap:6px;
-  margin-bottom:10px;
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:10px;
+  margin-bottom:16px;
 }
-.mode button{
-  flex:1;
-  padding:10px;
+.mode button,
+.buttons button,
+.quick button{
   border:none;
-  border-radius:6px;
-  font-weight:bold;
+  border-radius:14px;
   cursor:pointer;
+  font-weight:800;
   color:#fff;
+  transition:transform .16s ease, filter .16s ease, box-shadow .16s ease;
 }
-#demo{background:#22c55e;}
-#real{background:#ef4444;}
-.active{outline:3px solid #38bdf8;}
+.mode button:hover,
+.buttons button:hover,
+.quick button:hover{
+  transform:translateY(-1px);
+  filter:brightness(1.05);
+}
+#demo{background:linear-gradient(180deg, #16a34a, #15803d)}
+#real{background:linear-gradient(180deg, #ef4444, #dc2626)}
+.active{
+  outline:3px solid rgba(56,189,248,.55);
+  box-shadow:0 0 0 5px rgba(56,189,248,.10);
+}
 .stats{
-  font-size:14px;
-  margin-top:10px;
-  line-height:1.8;
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+  margin:16px 0 14px;
 }
-.stats span{
-  color:#22c55e;
-  font-weight:bold;
+.stat{
+  padding:16px;
+  border-radius:18px;
+  border:1px solid var(--stroke);
+  background:linear-gradient(180deg, rgba(15,23,42,.76), rgba(2,6,23,.60));
 }
-.buttons{
-  display:flex;
-  gap:6px;
-  margin-top:10px;
-}
-button{
-  flex:1;
-  padding:10px;
-  border:none;
-  border-radius:6px;
-  font-weight:bold;
-}
-#start{background:#60a5fa;}
-#pause{background:#facc15;}
-#stop{background:#ef4444;}
-#reset{background:#22c55e;}
-#log{
-  height:240px;
-  overflow:auto;
-  background:#111827;
-  padding:8px;
-  border-radius:6px;
+.stat .title{
+  color:var(--muted);
   font-size:12px;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  margin-bottom:8px;
+}
+.stat .value{
+  font-size:22px;
+  font-weight:800;
+  letter-spacing:-.03em;
+}
+.stat .value.good{color:#86efac}
+.stat .value.warn{color:#fde68a}
+.stat .value.bad{color:#fca5a5}
+.stat .value.blue{color:#7dd3fc}
+.buttons{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:10px;
   margin-top:10px;
+}
+.buttons button{
+  padding:13px 10px;
+  font-size:13px;
+}
+#start{background:linear-gradient(180deg, #60a5fa, #2563eb)}
+#pause{background:linear-gradient(180deg, #facc15, #eab308); color:#0f172a}
+#stop{background:linear-gradient(180deg, #ef4444, #dc2626)}
+#reset{background:linear-gradient(180deg, #22c55e, #16a34a)}
+.quick{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  margin:14px 0 12px;
+}
+.quick button{
+  padding:10px 12px;
+  background:rgba(56,189,248,.12);
+  border:1px solid rgba(56,189,248,.18);
+  color:#dbeafe;
+  font-size:12px;
+}
+#log{
+  height:334px;
+  overflow:auto;
+  padding:14px;
+  border-radius:18px;
+  border:1px solid rgba(148,163,184,.16);
+  background:linear-gradient(180deg, rgba(2,6,23,.94), rgba(15,23,42,.76));
+  color:#cbd5e1;
+  font-size:12px;
+  line-height:1.7;
   white-space:pre-wrap;
   word-break:break-word;
+}
+.footer{
+  margin-top:12px;
+  color:var(--muted);
+  font-size:12px;
+  line-height:1.6;
+}
+@media (max-width: 980px){
+  .container{grid-template-columns:1fr}
+  .hero,.panel{min-height:auto}
+}
+@media (max-width: 640px){
+  .shell{padding:12px}
+  .hero,.panel{padding:18px}
+  h1{font-size:34px}
+  .grid-hero,.info-grid,.stats,.buttons,.mode{grid-template-columns:1fr}
 }
 </style>
 </head>
 <body>
-<div class="container">
-  <h2>DERIV DUAL ACCOUNT SYSTEM</h2>
+<div class="shell">
+  <div class="container">
+    <section class="hero">
+      <div class="badge"><span></span> Live trading dashboard</div>
+      <h1>Deriv Dual Balance Bot</h1>
+      <p class="subtitle">
+        A modern control dashboard for switching between demo and real accounts, loading the correct balance automatically, watching live ticks, and tracking trade activity in a clean interface.
+      </p>
 
-  <input id="token" type="password" placeholder="Enter DEMO token">
+      <div class="grid-hero">
+        <div class="card-mini">
+          <div class="label">Active Mode</div>
+          <div class="value blue" id="modeDisplay">DEMO</div>
+          <div class="hint">Switch account instantly</div>
+        </div>
+        <div class="card-mini">
+          <div class="label">Balance</div>
+          <div class="value good" id="balanceDisplay">--</div>
+          <div class="hint">Selected account balance</div>
+        </div>
+        <div class="card-mini">
+          <div class="label">Live Price</div>
+          <div class="value warn" id="priceDisplay">--</div>
+          <div class="hint">Updated from tick stream</div>
+        </div>
+      </div>
 
-  <div class="mode">
-    <button id="demo" class="active">DEMO</button>
-    <button id="real">REAL</button>
+      <div class="info-grid">
+        <div class="info">
+          <h3>Account View</h3>
+          <p>Shows the selected account, balance, and connection status in a card-based layout that reads clearly on desktop and mobile.</p>
+        </div>
+        <div class="info">
+          <h3>Trade Activity</h3>
+          <p>Trade logs, errors, and contract results are displayed in a terminal-style panel for easy monitoring during live use.</p>
+        </div>
+      </div>
+
+      <div class="footer">
+        App ID is built into the connection. If authorization still fails, the token permissions or account type is the next thing to verify.
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="topline">
+        <h2>Control Panel</h2>
+        <div class="status-pill"><span></span> <span id="statusDisplay">READY</span></div>
+      </div>
+
+      <div class="token-box">
+        <input id="token" type="password" placeholder="Enter DEMO token">
+      </div>
+
+      <div class="mode">
+        <button id="demo" class="active">DEMO</button>
+        <button id="real">REAL</button>
+      </div>
+
+      <div class="stats">
+        <div class="stat">
+          <div class="title">Mode</div>
+          <div class="value blue" id="modeInline">DEMO</div>
+        </div>
+        <div class="stat">
+          <div class="title">Profit</div>
+          <div class="value good" id="profitInline">0.00</div>
+        </div>
+        <div class="stat">
+          <div class="title">Balance</div>
+          <div class="value good" id="balanceInline">--</div>
+        </div>
+        <div class="stat">
+          <div class="title">Status</div>
+          <div class="value warn" id="statusInline">READY</div>
+        </div>
+      </div>
+
+      <div class="buttons">
+        <button id="start">START</button>
+        <button id="pause">PAUSE</button>
+        <button id="stop">STOP</button>
+        <button id="reset">RESET</button>
+      </div>
+
+      <div class="quick">
+        <button type="button">Live Balance</button>
+        <button type="button">Demo Mode</button>
+        <button type="button">Real Mode</button>
+        <button type="button">Trade Log</button>
+      </div>
+
+      <div id="log">Interface ready.</div>
+    </section>
   </div>
-
-  <div class="stats">
-    Mode: <span id="mode">DEMO</span><br>
-    Balance: <span id="balance">--</span><br>
-    Price: <span id="price">--</span><br>
-    Profit: <span id="profit">0.00</span><br>
-    Status: <span id="status">READY</span>
-  </div>
-
-  <div class="buttons">
-    <button id="start">START</button>
-    <button id="pause">PAUSE</button>
-    <button id="stop">STOP</button>
-    <button id="reset">RESET</button>
-  </div>
-
-  <div id="log"></div>
 </div>
 
 <script>
@@ -126,13 +430,17 @@ document.addEventListener("DOMContentLoaded", () => {
   const realBtn = $("real");
   const tokenEl = $("token");
   const logEl = $("log");
-  const priceEl = $("price");
-  const balanceEl = $("balance");
-  const modeEl = $("mode");
-  const statusEl = $("status");
-  const profitEl = $("profit");
 
-  const APP_ID = "1089";
+  const modeDisplay = $("modeDisplay");
+  const modeInline = $("modeInline");
+  const balanceDisplay = $("balanceDisplay");
+  const balanceInline = $("balanceInline");
+  const priceDisplay = $("priceDisplay");
+  const profitInline = $("profitInline");
+  const statusDisplay = $("statusDisplay");
+  const statusInline = $("statusInline");
+
+  const APP_ID = "33wHQaHO4yQY1z44Hl4oB";
   const SYMBOL = "R_100";
 
   let ws = null;
@@ -194,6 +502,29 @@ document.addEventListener("DOMContentLoaded", () => {
     tokenEl.placeholder = mode === "DEMO" ? "Enter DEMO token" : "Enter REAL token";
   }
 
+  function syncMode(text) {
+    modeDisplay.textContent = text;
+    modeInline.textContent = text;
+  }
+
+  function syncBalance(value) {
+    balanceDisplay.textContent = value;
+    balanceInline.textContent = value;
+  }
+
+  function syncProfit(value) {
+    profitInline.textContent = value;
+  }
+
+  function syncPrice(value) {
+    priceDisplay.textContent = value;
+  }
+
+  function syncStatus(text) {
+    statusDisplay.textContent = text;
+    statusInline.textContent = text;
+  }
+
   function resetSessionState() {
     digits = [];
     warmup = 0;
@@ -202,10 +533,6 @@ document.addEventListener("DOMContentLoaded", () => {
     awaitingProposal = false;
     currentContractId = null;
     contractSettled = false;
-  }
-
-  function setStatus(text) {
-    statusEl.textContent = text;
   }
 
   function closeSocket() {
@@ -221,7 +548,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const token = tokens[mode] || tokenEl.value.trim();
 
     if (!token) {
-      setStatus("ENTER TOKEN");
+      syncStatus("ENTER TOKEN");
       log("Missing " + mode + " token");
       return;
     }
@@ -231,7 +558,7 @@ document.addEventListener("DOMContentLoaded", () => {
     resetSessionState();
 
     log("CONNECTING → " + mode);
-    setStatus("CONNECTING");
+    syncStatus("CONNECTING");
 
     ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`);
 
@@ -242,13 +569,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
     ws.onclose = () => {
       log("DISCONNECTED");
-      if (running) setStatus(paused ? "PAUSED" : "DISCONNECTED");
-      else setStatus("STOPPED");
+      if (running) syncStatus(paused ? "PAUSED" : "DISCONNECTED");
+      else syncStatus("STOPPED");
     };
 
     ws.onerror = () => {
       log("WEBSOCKET ERROR");
-      setStatus("ERROR");
+      syncStatus("ERROR");
     };
 
     ws.onmessage = (e) => {
@@ -257,9 +584,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (msg.error) {
         const err = msg.error.message || "Unknown error";
         log("ERROR → " + err);
-        if (msg.msg_type === "authorize") {
-          setStatus("AUTH FAILED");
-        }
+        if (msg.msg_type === "authorize") syncStatus("AUTH FAILED");
         if (awaitingProposal) {
           awaitingProposal = false;
           tradeLock = false;
@@ -269,7 +594,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       if (msg.msg_type === "authorize") {
         log("AUTHORIZED → " + mode);
-        setStatus(running ? (paused ? "PAUSED" : "RUNNING") : "READY");
+        syncStatus(running ? (paused ? "PAUSED" : "RUNNING") : "READY");
         send({ balance: 1, subscribe: 1 });
         send({ ticks: SYMBOL, subscribe: 1 });
         return;
@@ -277,7 +602,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
       if (msg.msg_type === "balance") {
         if (msg.balance && typeof msg.balance.balance !== "undefined") {
-          balanceEl.textContent = Number(msg.balance.balance).toFixed(2);
+          const bal = Number(msg.balance.balance).toFixed(2);
+          syncBalance(bal);
         }
         return;
       }
@@ -285,13 +611,13 @@ document.addEventListener("DOMContentLoaded", () => {
       if (msg.msg_type === "tick") {
         const price = msg.tick.quote;
         const d = lastDigit(price);
-        priceEl.textContent = Number(price).toFixed(2) + " → " + d;
+        syncPrice(Number(price).toFixed(2) + " → " + d);
 
         if (!active) {
           warmup++;
           if (warmup >= 10) {
             active = true;
-            if (running && !paused) setStatus("RUNNING");
+            if (running && !paused) syncStatus("RUNNING");
             log("BOT ACTIVE");
           }
           return;
@@ -358,20 +684,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
           const pnl = Number(c.profit || 0);
           profit += pnl;
-          profitEl.textContent = profit.toFixed(2);
+          syncProfit(profit.toFixed(2));
 
           log("RESULT → " + pnl.toFixed(2));
 
-          if (pnl > 0) {
-            ladder = 1;
-          } else {
-            ladder = Math.min(ladder + 1, 3);
-          }
+          if (pnl > 0) ladder = 1;
+          else ladder = Math.min(ladder + 1, 3);
 
           tradeLock = false;
           currentContractId = null;
         }
-        return;
       }
     };
   }
@@ -384,7 +706,6 @@ document.addEventListener("DOMContentLoaded", () => {
     lastBarrier = barrier;
 
     const amount = stake();
-
     log("PROPOSAL → " + mode + " / barrier " + barrier + " / stake " + amount.toFixed(2));
 
     send({
@@ -402,7 +723,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function setMode(newMode) {
     mode = newMode;
-    modeEl.textContent = newMode;
+    syncMode(newMode);
 
     demoBtn.classList.remove("active");
     realBtn.classList.remove("active");
@@ -413,11 +734,10 @@ document.addEventListener("DOMContentLoaded", () => {
     refreshTokenField();
     log("MODE → " + newMode);
 
-    if (tokens[mode]) {
-      connect();
-    } else {
+    if (tokens[mode]) connect();
+    else {
       closeSocket();
-      setStatus("ENTER TOKEN");
+      syncStatus("ENTER TOKEN");
     }
   }
 
@@ -431,18 +751,20 @@ document.addEventListener("DOMContentLoaded", () => {
   $("start").onclick = () => {
     running = true;
     paused = false;
+
     if (!tokens[mode] && !tokenEl.value.trim()) {
-      setStatus("ENTER TOKEN");
+      syncStatus("ENTER TOKEN");
       log("Missing " + mode + " token");
       return;
     }
+
     connect();
   };
 
   $("pause").onclick = () => {
     if (!running) return;
     paused = !paused;
-    setStatus(paused ? "PAUSED" : "RUNNING");
+    syncStatus(paused ? "PAUSED" : "RUNNING");
     log(paused ? "PAUSED" : "RESUMED");
   };
 
@@ -454,7 +776,7 @@ document.addEventListener("DOMContentLoaded", () => {
     currentContractId = null;
     contractSettled = false;
     closeSocket();
-    setStatus("STOPPED");
+    syncStatus("STOPPED");
     log("STOPPED");
   };
 
@@ -463,9 +785,12 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   refreshTokenField();
-  setStatus(tokens[mode] ? "READY" : "ENTER TOKEN");
-  balanceEl.textContent = "--";
-})();
+  syncMode("DEMO");
+  syncBalance("--");
+  syncPrice("--");
+  syncProfit("0.00");
+  syncStatus(tokens[mode] ? "READY" : "ENTER TOKEN");
+});
 </script>
 </body>
   </html>
