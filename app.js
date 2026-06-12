@@ -72,40 +72,43 @@ document.addEventListener("DOMContentLoaded", async () => {
     return base64url(await sha256(verifier));
   }
 
-  // ================= LOGIN (FIXED PRODUCTION) =================
+  // ================= LOGIN =================
   loginBtn.onclick = async () => {
     const verifier = generateVerifier();
     const challenge = await createChallenge(verifier);
 
     sessionStorage.setItem("pkce_verifier", verifier);
-    sessionStorage.setItem("oauth_state", "active");
+    sessionStorage.removeItem("oauth_done");
 
     const authUrl =
-      `https://auth.deriv.com/oauth2/auth` +
+      `https://auth.deriv.com/oauth2/authorize` +
       `?response_type=code` +
-      `&client_id=${CLIENT_ID}` +
+      `&app_id=${CLIENT_ID}` +
       `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
       `&scope=trade account_info` +
-      `&state=xyz123` +
       `&code_challenge=${challenge}` +
       `&code_challenge_method=S256`;
 
     window.location.href = authUrl;
   };
 
-  // ================= CALLBACK HANDLER =================
+  // ================= FIXED CALLBACK GUARANTEE =================
   async function handleOAuthCallback() {
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get("code");
+    const url = new URL(window.location.href);
+    const code = url.searchParams.get("code");
 
     if (!code) return;
+
+    if (sessionStorage.getItem("oauth_done") === "true") return;
 
     const verifier = sessionStorage.getItem("pkce_verifier");
 
     if (!verifier) {
-      log("Missing PKCE verifier", "red");
+      log("❌ Missing PKCE verifier", "red");
       return;
     }
+
+    log("🔄 Exchanging OAuth code...", "#38bdf8");
 
     try {
       const res = await fetch(VERCEL_URL, {
@@ -121,27 +124,30 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       const data = await res.json();
 
+      console.log("OAuth response:", data);
+
       if (!data.access_token) {
-        log("OAuth exchange failed", "red");
+        log("❌ OAuth failed - no token", "red");
         return;
       }
 
       token = data.access_token;
       localStorage.setItem("access_token", token);
 
-      // clean URL
+      sessionStorage.setItem("oauth_done", "true");
+
       window.history.replaceState({}, document.title, "/");
 
-      log("OAuth SUCCESS", "lime");
+      log("✅ OAuth SUCCESS", "lime");
 
     } catch (err) {
-      log("OAuth error: " + err.message, "red");
+      log("❌ OAuth error: " + err.message, "red");
     }
   }
 
   await handleOAuthCallback();
 
-  // ================= STRATEGY =================
+  // ================= STAKE =================
   const BASE = 0.35;
 
   function stake(level) {
@@ -151,6 +157,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     return BASE;
   }
 
+  // ================= STRATEGY =================
   function onTick(price) {
     if (!running || paused || tradeLock) return;
 
@@ -195,6 +202,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
+  // ================= TRADE =================
   function placeTrade(level, digit) {
     if (!authorized || tradeLock) return;
 
@@ -262,7 +270,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         totalProfit += pnl;
 
         log(
-          pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`,
+          pnl >= 0 ? `WIN +${pnl.toFixed(2)}` : `LOSS ${pnl.toFixed(2)}`,
           pnl >= 0 ? "lime" : "red"
         );
 
