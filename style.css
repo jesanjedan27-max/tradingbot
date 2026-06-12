@@ -1,0 +1,130 @@
+body {
+  margin: 0;
+  padding: 0;
+  background: #020617;
+  color: #fff;
+  font-family: Arial, sans-serif;
+}
+
+/* MAIN CONTAINER */
+.container {
+  max-width: 520px;
+  margin: 30px auto;
+  padding: 20px;
+  background: #0f172a;
+  border-radius: 14px;
+  box-shadow: 0 0 20px rgba(0,0,0,0.4);
+}
+
+/* TITLE */
+h1 {
+  text-align: center;
+  color: #38bdf8;
+  margin-bottom: 20px;
+  letter-spacing: 1px;
+}
+
+/* MODE ROW */
+.row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.row button {
+  flex: 1;
+  padding: 10px;
+  border: none;
+  border-radius: 8px;
+  font-weight: bold;
+  cursor: pointer;
+  color: white;
+}
+
+#demoBtn {
+  background: #38bdf8;
+}
+
+#liveBtn {
+  background: #a855f7;
+}
+
+/* LOGIN BUTTON */
+.login-btn {
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 12px;
+  background: #0ea5e9;
+  border: none;
+  border-radius: 8px;
+  font-weight: bold;
+  cursor: pointer;
+  color: white;
+}
+
+/* CONTROL BUTTONS */
+.buttons {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.buttons button {
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  font-weight: bold;
+  cursor: pointer;
+  color: white;
+}
+
+#start {
+  background: #22c55e;
+}
+
+#pause {
+  background: #facc15;
+  color: black;
+}
+
+#stop {
+  background: #ef4444;
+}
+
+#reset {
+  background: #60a5fa;
+}
+
+/* STATS PANEL */
+.stats {
+  margin-top: 10px;
+  background: #111827;
+  padding: 12px;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+}
+
+/* LOG BOX */
+.log {
+  margin-top: 12px;
+  background: #1f2937;
+  padding: 10px;
+  font-size: 12px;
+  height: 220px;
+  overflow-y: auto;
+  border-radius: 10px;
+  border: 1px solid #374151;
+}
+
+/* SMALL EFFECTS */
+button:hover {
+  opacity: 0.9;
+}
+
+button:active {
+  transform: scale(0.98);
+}
