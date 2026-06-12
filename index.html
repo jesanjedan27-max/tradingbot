@@ -2,230 +2,243 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Deriv Bot FIXED WS</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deriv Dual Balance Bot</title>
+
+<style>
+:root{
+  --bg:#020617;
+  --panel:rgba(15,23,42,.88);
+  --panel2:rgba(2,6,23,.78);
+  --stroke:rgba(148,163,184,.18);
+  --text:#e2e8f0;
+  --muted:#94a3b8;
+  --blue:#38bdf8;
+  --green:#22c55e;
+  --red:#ef4444;
+  --yellow:#facc15;
+  --shadow:0 30px 90px rgba(0,0,0,.45);
+  --radius:24px;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  color:var(--text);
+  font-family:"Segoe UI",system-ui;
+  background: radial-gradient(circle at top left, rgba(56,189,248,.16), transparent 26%),
+              linear-gradient(180deg,#020617,#07111f);
+}
+
+.shell{
+  min-height:100%;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
+}
+
+.container{
+  width:min(1180px,100%);
+  display:grid;
+  grid-template-columns:1.08fr .92fr;
+  gap:18px;
+}
+
+.hero,.panel{
+  border-radius:24px;
+  padding:20px;
+  background:rgba(15,23,42,.85);
+  border:1px solid var(--stroke);
+}
+
+#log{
+  height:330px;
+  overflow:auto;
+  background:#000;
+  padding:10px;
+  font-size:12px;
+  color:#cbd5e1;
+}
+
+button{
+  padding:10px;
+  cursor:pointer;
+}
+.active{outline:2px solid cyan}
+</style>
+
 </head>
 
-<body style="background:#020617;color:white;font-family:Arial">
+<body>
+<div class="shell">
+<div class="container">
 
-<h2>DERIV FIXED WEBSOCKET BOT</h2>
+<!-- LEFT -->
+<section class="hero">
+  <h1>Deriv Bot</h1>
+
+  <div>Mode: <span id="modeDisplay">DEMO</span></div>
+  <div>Balance: <span id="balanceDisplay">--</span></div>
+  <div>Price: <span id="priceDisplay">--</span></div>
+  <div>Status: <span id="statusDisplay">READY</span></div>
+</section>
+
+<!-- RIGHT -->
+<section class="panel">
+
+<input id="token" placeholder="Enter token">
+
+<button id="demo" class="active">DEMO</button>
+<button id="real">REAL</button>
+
+<br><br>
 
 <button id="start">START</button>
 <button id="stop">STOP</button>
 
-<div id="status">STOPPED</div>
-<div id="balance">--</div>
-<div id="price">--</div>
 <div id="log"></div>
+
+</section>
+
+</div>
+</div>
 
 <script>
 document.addEventListener("DOMContentLoaded", () => {
 
-const APP_ID = "1089";
+const APP_ID = "33wHQaHO4yQY1z44Hl4oB";
 const SYMBOL = "R_100";
 
-let ws = null;
-let token = "";
+let ws;
+let mode = "DEMO";
 let running = false;
 
-let digits = [];
-let contractId = null;
-let tradeLock = false;
-let awaitingProposal = false;
+const $ = id => document.getElementById(id);
 
-const logEl = document.getElementById("log");
-const statusEl = document.getElementById("status");
-const balanceEl = document.getElementById("balance");
-const priceEl = document.getElementById("price");
+const logEl = $("log");
+
+const tokens = {
+  DEMO: localStorage.getItem("demo_token") || "",
+  REAL: localStorage.getItem("real_token") || ""
+};
 
 function log(m){
-logEl.innerHTML += "<br>" + m;
-logEl.scrollTop = logEl.scrollHeight;
+  logEl.innerHTML += m + "<br>";
+  logEl.scrollTop = logEl.scrollHeight;
 }
 
-function send(d){
-if(ws && ws.readyState === 1){
-ws.send(JSON.stringify(d));
-}
+function send(data){
+  if(ws && ws.readyState === 1){
+    ws.send(JSON.stringify(data));
+  }
 }
 
-/* SAFE DIGIT */
-function lastDigit(p){
-return Number(Number(p).toFixed(2).slice(-1));
+/* SAFE PARSE FIX */
+function safeParse(data){
+  try { return JSON.parse(data); }
+  catch(e){ return null; }
 }
 
 /* CONNECT */
 function connect(){
 
-ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`);
+  const token = tokens[mode] || $("token").value.trim();
 
-ws.onopen = () => {
-log("CONNECTED");
-send({ authorize: token });
+  if(!token){
+    log("❌ No token");
+    return;
+  }
+
+  tokens[mode] = token;
+  localStorage.setItem(mode.toLowerCase()+"_token", token);
+
+  if(ws) ws.close();
+
+  log("🔌 Connecting...");
+  $("statusDisplay").innerText = "CONNECTING";
+
+  ws = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id="+APP_ID);
+
+  ws.onopen = () => {
+    log("CONNECTED");
+    send({ authorize: token });
+  };
+
+  ws.onerror = () => log("WS ERROR");
+
+  ws.onclose = () => log("DISCONNECTED");
+
+  ws.onmessage = (e) => {
+
+    const msg = safeParse(e.data);
+    if(!msg) return;
+
+    if(msg.error){
+      log("ERROR: "+msg.error.message);
+      return;
+    }
+
+    /* AUTH */
+    if(msg.msg_type === "authorize"){
+      log("AUTHORIZED ✔");
+
+      $("statusDisplay").innerText = "RUNNING";
+
+      /* FIXED BALANCE STREAM */
+      send({ balance: 1, subscribe: 1 });
+
+      /* FIXED TICK STREAM */
+      send({ ticks: SYMBOL, subscribe: 1 });
+
+      return;
+    }
+
+    /* BALANCE FIX */
+    if(msg.msg_type === "balance"){
+      if(msg.balance){
+        $("balanceDisplay").innerText =
+          Number(msg.balance.balance).toFixed(2);
+      }
+      return;
+    }
+
+    /* TICK FIX */
+    if(msg.msg_type === "tick"){
+      $("priceDisplay").innerText = msg.tick.quote;
+      return;
+    }
+  };
+}
+
+/* MODE SWITCH */
+$("demo").onclick = () => {
+  mode = "DEMO";
+  $("modeDisplay").innerText = "DEMO";
+  $("demo").classList.add("active");
+  $("real").classList.remove("active");
+  log("Switched DEMO");
 };
 
-ws.onerror = () => {
-log("WS ERROR");
-statusEl.textContent = "ERROR";
+$("real").onclick = () => {
+  mode = "REAL";
+  $("modeDisplay").innerText = "REAL";
+  $("real").classList.add("active");
+  $("demo").classList.remove("active");
+  log("Switched REAL");
 };
 
-ws.onclose = () => {
-log("DISCONNECTED");
-statusEl.textContent = "STOPPED";
+/* START */
+$("start").onclick = () => {
+  running = true;
+  connect();
 };
 
-ws.onmessage = (e) => {
-
-let msg;
-try {
-msg = JSON.parse(e.data);
-} catch(err){
-log("BAD JSON");
-return;
-}
-
-if(msg.error){
-log("ERROR: " + msg.error.message);
-return;
-}
-
-/* AUTH */
-if(msg.msg_type === "authorize"){
-log("AUTHORIZED");
-statusEl.textContent = "RUNNING";
-
-send({ balance: 1, subscribe: 1 });
-send({ ticks: SYMBOL, subscribe: 1 });
-}
-
-/* BALANCE */
-if(msg.msg_type === "balance"){
-balanceEl.textContent = Number(msg.balance.balance).toFixed(2);
-}
-
-/* TICK */
-if(msg.msg_type === "tick"){
-
-const price = msg.tick.quote;
-priceEl.textContent = price.toFixed(2);
-
-const d = lastDigit(price);
-
-digits.push(d);
-if(digits.length > 3) digits.shift();
-
-/* SIMPLE PATTERN */
-if(
-digits.length === 3 &&
-digits[0] === digits[1] &&
-digits[1] === digits[2] &&
-!tradeLock &&
-running
-){
-placeTrade(d);
-}
-
-}
-
-/* PROPOSAL RESPONSE (FIXED FLOW) */
-if(msg.msg_type === "proposal"){
-
-if(!awaitingProposal) return;
-
-const id = msg.proposal.id;
-
-log("PROPOSAL READY");
-
-send({
-buy: id,
-price: 0.35
-});
-
-awaitingProposal = false;
-}
-
-/* BUY */
-if(msg.msg_type === "buy"){
-
-if(!msg.buy || !msg.buy.contract_id){
-log("BUY FAILED");
-tradeLock = false;
-return;
-}
-
-contractId = msg.buy.contract_id;
-tradeLock = true;
-
-log("BUY OK: " + contractId);
-
-send({
-proposal_open_contract: 1,
-contract_id: contractId,
-subscribe: 1
-});
-}
-
-/* RESULT */
-if(msg.msg_type === "proposal_open_contract"){
-
-const c = msg.proposal_open_contract;
-
-if(!c || c.contract_id !== contractId) return;
-
-if(c.is_sold){
-
-log("RESULT: " + c.profit);
-
-tradeLock = false;
-contractId = null;
-}
-
-}
-
-};
-
-}
-
-/* PLACE TRADE (FIXED PROPER FLOW) */
-function placeTrade(barrier){
-
-if(!ws || tradeLock || awaitingProposal) return;
-
-awaitingProposal = true;
-
-log("REQUEST PROPOSAL");
-
-send({
-proposal: 1,
-amount: 0.35,
-basis: "stake",
-contract_type: "DIGITDIFF",
-currency: "USD",
-duration: 1,
-duration_unit: "t",
-symbol: SYMBOL,
-barrier: barrier
-});
-
-}
-
-document.getElementById("start").onclick = () => {
-
-token = prompt("Enter Deriv Token");
-
-if(!token){
-alert("No token");
-return;
-}
-
-running = true;
-connect();
-
-};
-
-document.getElementById("stop").onclick = () => {
-running = false;
-ws?.close();
-log("STOPPED");
+/* STOP */
+$("stop").onclick = () => {
+  running = false;
+  if(ws) ws.close();
+  log("STOPPED");
 };
 
 });
