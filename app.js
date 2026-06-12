@@ -72,43 +72,51 @@ document.addEventListener("DOMContentLoaded", async () => {
     return base64url(await sha256(verifier));
   }
 
-  // ================= LOGIN =================
+  // ================= LOGIN (FIXED) =================
   loginBtn.onclick = async () => {
     const verifier = generateVerifier();
     const challenge = await createChallenge(verifier);
 
     sessionStorage.setItem("pkce_verifier", verifier);
-    sessionStorage.removeItem("oauth_done");
+    sessionStorage.setItem("oauth_state", "active");
 
     const authUrl =
       `https://auth.deriv.com/oauth2/authorize` +
       `?response_type=code` +
-      `&app_id=${CLIENT_ID}` +
+      `&client_id=${CLIENT_ID}` +
       `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-      `&scope=trade account_info` +
+      `&scope=trade` +
+      `&state=xyz123` +
       `&code_challenge=${challenge}` +
       `&code_challenge_method=S256`;
 
     window.location.href = authUrl;
   };
 
-  // ================= FIXED CALLBACK GUARANTEE =================
+  // ================= CALLBACK HANDLER (FIXED & SAFE) =================
   async function handleOAuthCallback() {
     const url = new URL(window.location.href);
+
     const code = url.searchParams.get("code");
+    const error = url.searchParams.get("error");
+    const error_desc = url.searchParams.get("error_description");
+
+    if (error) {
+      log(`OAuth Error: ${error_desc || error}`, "red");
+      return;
+    }
 
     if (!code) return;
 
     if (sessionStorage.getItem("oauth_done") === "true") return;
 
     const verifier = sessionStorage.getItem("pkce_verifier");
-
     if (!verifier) {
-      log("❌ Missing PKCE verifier", "red");
+      log("Missing PKCE verifier", "red");
       return;
     }
 
-    log("🔄 Exchanging OAuth code...", "#38bdf8");
+    log("Exchanging OAuth code...", "#38bdf8");
 
     try {
       const res = await fetch(VERCEL_URL, {
@@ -124,10 +132,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       const data = await res.json();
 
-      console.log("OAuth response:", data);
-
       if (!data.access_token) {
-        log("❌ OAuth failed - no token", "red");
+        log("OAuth failed - no token", "red");
         return;
       }
 
@@ -136,12 +142,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       sessionStorage.setItem("oauth_done", "true");
 
-      window.history.replaceState({}, document.title, "/");
+      // FIX: keep correct page route (NOT "/")
+      window.history.replaceState({}, document.title, REDIRECT_URI);
 
-      log("✅ OAuth SUCCESS", "lime");
+      log("OAuth SUCCESS", "lime");
 
     } catch (err) {
-      log("❌ OAuth error: " + err.message, "red");
+      log("OAuth error: " + err.message, "red");
     }
   }
 
