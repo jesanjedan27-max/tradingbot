@@ -1,6 +1,7 @@
 document.addEventListener("DOMContentLoaded", async () => {
   const $ = id => document.getElementById(id);
 
+  // ================= UI =================
   const loginBtn = $("login");
   const startBtn = $("start");
   const pauseBtn = $("pause");
@@ -12,12 +13,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   const levelEl = $("level");
   const logEl = $("log");
 
+  // ================= CONFIG =================
   const CLIENT_ID = "33wZZKTFZrmsZgFaAH53Z";
   const REDIRECT_URI = "https://jesanjedan27-max.github.io/tradingbot/";
   const VERCEL_URL = "https://oauthexchange23.vercel.app/api/token";
   const WS_APP_ID = 1089;
   const SYMBOL = "R_100";
 
+  // ================= STATE =================
   let ws;
   let token = localStorage.getItem("access_token");
 
@@ -35,6 +38,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   let totalProfit = 0;
 
+  // ================= LOG =================
   function log(msg, color = "#fff") {
     logEl.innerHTML += `<div style="color:${color}">${msg}</div>`;
     logEl.scrollTop = logEl.scrollHeight;
@@ -46,13 +50,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  // =========================
-  // PKCE (HARDENED)
-  // =========================
+  // ================= PKCE =================
   function generateVerifier() {
-    const array = new Uint8Array(32);
-    crypto.getRandomValues(array);
-    return Array.from(array).map(x => x.toString(16).padStart(2, "0")).join("");
+    const arr = new Uint8Array(32);
+    crypto.getRandomValues(arr);
+    return Array.from(arr).map(x => x.toString(16).padStart(2, "0")).join("");
   }
 
   async function sha256(str) {
@@ -70,9 +72,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     return base64url(await sha256(verifier));
   }
 
-  // =========================
-  // LOGIN FIXED
-  // =========================
+  // ================= LOGIN (FIXED PRODUCTION) =================
   loginBtn.onclick = async () => {
     const verifier = generateVerifier();
     const challenge = await createChallenge(verifier);
@@ -80,20 +80,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     sessionStorage.setItem("pkce_verifier", verifier);
     sessionStorage.setItem("oauth_state", "active");
 
-    const url =
-      `https://oauth.deriv.com/oauth2/authorize` +
+    const authUrl =
+      `https://auth.deriv.com/oauth2/auth` +
       `?response_type=code` +
-      `&app_id=${CLIENT_ID}` +
+      `&client_id=${CLIENT_ID}` +
       `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
+      `&scope=trade account_info` +
+      `&state=xyz123` +
       `&code_challenge=${challenge}` +
       `&code_challenge_method=S256`;
 
-    window.location.href = url;
+    window.location.href = authUrl;
   };
 
-  // =========================
-  // CALLBACK HANDLER (FIXED RELIABILITY)
-  // =========================
+  // ================= CALLBACK HANDLER =================
   async function handleOAuthCallback() {
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
@@ -101,6 +101,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!code) return;
 
     const verifier = sessionStorage.getItem("pkce_verifier");
+
+    if (!verifier) {
+      log("Missing PKCE verifier", "red");
+      return;
+    }
 
     try {
       const res = await fetch(VERCEL_URL, {
@@ -117,28 +122,26 @@ document.addEventListener("DOMContentLoaded", async () => {
       const data = await res.json();
 
       if (!data.access_token) {
-        log("OAuth Failed", "red");
+        log("OAuth exchange failed", "red");
         return;
       }
 
       token = data.access_token;
       localStorage.setItem("access_token", token);
 
-      // clean URL safely
+      // clean URL
       window.history.replaceState({}, document.title, "/");
 
-      log("OAuth Connected", "lime");
+      log("OAuth SUCCESS", "lime");
 
-    } catch (e) {
-      log("OAuth Error: " + e.message, "red");
+    } catch (err) {
+      log("OAuth error: " + err.message, "red");
     }
   }
 
   await handleOAuthCallback();
 
-  // =========================
-  // STRATEGY (UNCHANGED)
-  // =========================
+  // ================= STRATEGY =================
   const BASE = 0.35;
 
   function stake(level) {
@@ -218,9 +221,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     log(`TRADE L${level} → ${digit}`, "#38bdf8");
   }
 
-  // =========================
-  // CONNECTION
-  // =========================
+  // ================= CONNECTION =================
   function connect() {
     ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${WS_APP_ID}`);
 
@@ -260,7 +261,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         const pnl = Number(d.proposal_open_contract.profit || 0);
         totalProfit += pnl;
 
-        log(pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`, pnl >= 0 ? "lime" : "red");
+        log(
+          pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`,
+          pnl >= 0 ? "lime" : "red"
+        );
 
         if (pnl > 0) ladderLevel = 0;
         else if (ladderLevel < 3) ladderLevel++;
@@ -268,9 +272,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     };
   }
 
-  // =========================
-  // BUTTONS
-  // =========================
+  // ================= BUTTONS =================
   startBtn.onclick = () => {
     if (!token) return alert("Login first");
 
@@ -278,7 +280,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     paused = false;
 
     connect();
-    log("Bot Started", "lime");
+    log("BOT STARTED", "lime");
   };
 
   pauseBtn.onclick = () => {
@@ -289,7 +291,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   stopBtn.onclick = () => {
     running = false;
     ws?.close();
-    log("Stopped", "red");
+    log("STOPPED", "red");
   };
 
   resetBtn.onclick = () => {
@@ -298,6 +300,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     ladderLevel = 0;
     tradeLock = false;
     totalProfit = 0;
-    log("Reset Done", "orange");
+    log("RESET DONE", "orange");
   };
 });
