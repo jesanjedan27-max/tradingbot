@@ -82,7 +82,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     localStorage.setItem("pkce_verifier", verifier);
     localStorage.removeItem("oauth_done");
 
-    // ✅ REPLACED PART (your request)
     const state = "tradingbot123456789";
 
     const authUrl =
@@ -104,9 +103,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     const code = url.searchParams.get("code");
     const error = url.searchParams.get("error");
 
-    console.log("OAuth URL:", window.location.href);
-    console.log("Code:", code);
-
     if (error) {
       log("OAuth error: " + error, "red");
       return;
@@ -123,12 +119,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    log("Exchanging OAuth code...", "#38bdf8");
-
     try {
+
+      log("Calling token endpoint...", "yellow");
+      log(VERCEL_URL, "yellow");
+
       const res = await fetch(VERCEL_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json"
+        },
         body: JSON.stringify({
           code,
           code_verifier: verifier,
@@ -137,23 +137,19 @@ document.addEventListener("DOMContentLoaded", async () => {
         })
       });
 
-      const data = await res.json();
+      log("Fetch completed", "lime");
+      log("Status: " + res.status, "lime");
 
-      if (!data.access_token) {
-        log("OAuth failed (no token received)", "red");
-        return;
-      }
+      const text = await res.text();
 
-      token = data.access_token;
-      localStorage.setItem("access_token", token);
-      localStorage.setItem("oauth_done", "true");
-
-      window.history.replaceState({}, document.title, REDIRECT_URI);
-
-      log("OAuth SUCCESS", "lime");
+      log("Response:", "#38bdf8");
+      log(text, "#38bdf8");
 
     } catch (err) {
+
       log("OAuth error: " + err.message, "red");
+      console.error("OAuth FULL ERROR:", err);
+
     }
   }
 
