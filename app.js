@@ -79,9 +79,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     const verifier = generateVerifier();
     const challenge = await createChallenge(verifier);
 
-    // ✅ FIX: use localStorage (GitHub Pages safe)
     localStorage.setItem("pkce_verifier", verifier);
     localStorage.removeItem("oauth_done");
+
+    // ✅ REPLACED PART (your request)
+    const state = "tradingbot123456789";
 
     const authUrl =
       `https://auth.deriv.com/oauth2/auth` +
@@ -89,7 +91,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       `&client_id=${CLIENT_ID}` +
       `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
       `&scope=trade` +
-      `&state=xyz123` +
+      `&state=${state}` +
       `&code_challenge=${challenge}` +
       `&code_challenge_method=S256`;
 
@@ -114,7 +116,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     if (localStorage.getItem("oauth_done") === "true") return;
 
-    // ✅ FIX: localStorage instead of sessionStorage
     const verifier = localStorage.getItem("pkce_verifier");
 
     if (!verifier) {
@@ -137,7 +138,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       });
 
       const data = await res.json();
-      console.log("Vercel response:", data);
 
       if (!data.access_token) {
         log("OAuth failed (no token received)", "red");
@@ -148,7 +148,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       localStorage.setItem("access_token", token);
       localStorage.setItem("oauth_done", "true");
 
-      // clean URL
       window.history.replaceState({}, document.title, REDIRECT_URI);
 
       log("OAuth SUCCESS", "lime");
