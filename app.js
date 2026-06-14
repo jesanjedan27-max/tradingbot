@@ -140,10 +140,30 @@ document.addEventListener("DOMContentLoaded", async () => {
       log("Fetch completed", "lime");
       log("Status: " + res.status, "lime");
 
-      const text = await res.text();
+      // ======= REPLACED BLOCK START =======
+      const data = await res.json();
 
       log("Response:", "#38bdf8");
-      log(text, "#38bdf8");
+      log(JSON.stringify(data), "#38bdf8");
+
+      if (!data.access_token) {
+        log("OAuth failed - no access token", "red");
+        return;
+      }
+
+      token = data.access_token;
+
+      localStorage.setItem("access_token", token);
+      localStorage.setItem("oauth_done", "true");
+
+      log("OAuth SUCCESS", "lime");
+
+      window.history.replaceState(
+        {},
+        document.title,
+        REDIRECT_URI
+      );
+      // ======= REPLACED BLOCK END =======
 
     } catch (err) {
 
