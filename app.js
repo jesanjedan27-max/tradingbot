@@ -25,7 +25,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const VERCEL_URL = "https://oauthexchange23.vercel.app/api/token";
   const SYMBOL = "R_100";
 
-  // Demo / Live accounts
+  // Accounts
   const ACCOUNTS = {
     demo: "DOT92927394",
     live: "ROT91650098"
@@ -44,10 +44,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   let ladderLevel = 0;
   let tradeLock = false;
 
-  // strategy state machine
   let buffer = [];
-  let armed = false;
-  let stage = 0; // 0=search, 1=arm, 2=ready
+  let stage = 0;
 
   let m1 = null;
   let m2 = null;
@@ -55,7 +53,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   let BASE = 0.35;
   let totalProfit = 0;
 
-  let pendingProposalId = null;
+  let pendingProposal = null;
 
   // ================= LOG =================
   function log(msg, color = "#fff") {
@@ -73,13 +71,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // ================= MODE UI =================
-  function updateModeUI() {
+  function setModeUI() {
     if (accountType === "demo") {
       modeIndicator.textContent = "DEMO MODE";
       modeIndicator.className = "mode-indicator demo";
+
+      demoBtn.classList.add("active-btn");
+      liveBtn.classList.remove("active-btn");
     } else {
       modeIndicator.textContent = "LIVE MODE";
       modeIndicator.className = "mode-indicator live";
+
+      liveBtn.classList.add("active-btn");
+      demoBtn.classList.remove("active-btn");
     }
   }
 
@@ -88,19 +92,21 @@ document.addEventListener("DOMContentLoaded", async () => {
     authorized = false;
     tradeLock = false;
     buffer = [];
-    armed = false;
     stage = 0;
     m1 = null;
     m2 = null;
     ladderLevel = 0;
     totalProfit = 0;
-    pendingProposalId = null;
+    pendingProposal = null;
   }
 
-  // ================= LOGIN (PKCE unchanged) =================
+  // ================= LOGIN =================
   loginBtn.onclick = async () => {
     const verifier = crypto.randomUUID().replace(/-/g, "");
-    const challenge = btoa(verifier).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const challenge = btoa(verifier)
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
 
     localStorage.setItem("pkce_verifier", verifier);
 
@@ -155,11 +161,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     return +(BASE * mult).toFixed(2);
   }
 
-  // ================= STRATEGY (SAFE STATE MACHINE) =================
+  // ================= DIGIT FIX (IMPORTANT) =================
+  function getDigit(price) {
+    return Math.floor(Number(price.toFixed(2)) * 100) % 10;
+  }
+
+  // ================= STRATEGY =================
   function onTick(price) {
     if (!running || paused || tradeLock) return;
 
-    const digit = Math.floor(price % 10);
+    const digit = getDigit(price);
 
     priceEl.textContent = price.toFixed(2);
 
@@ -168,36 +179,34 @@ document.addEventListener("DOMContentLoaded", async () => {
     buffer.push(digit);
     if (buffer.length > 10) buffer.shift();
 
-    // STEP 1: LOOK FOR 2,3
+    // ACTIVATOR 2,3
     if (stage === 0) {
       if (buffer.slice(-2).join("") === "23") {
         stage = 1;
-        log("ACTIVATOR 2,3 FOUND", "lime");
+        log("ACTIVATOR 2,3 DETECTED", "lime");
       }
       return;
     }
 
-    // STEP 2: MOMENTUM 1
+    // MOMENTUM 1
     if (stage === 1) {
       m1 = digit;
       stage = 2;
       return;
     }
 
-    // STEP 3: MOMENTUM 2
+    // MOMENTUM 2 + EXECUTE
     if (stage === 2) {
       m2 = digit;
 
-      const trigger = digit;
-
-      if (trigger === 9) {
+      if (digit === 9) {
         log("INVALID TRIGGER 9 → RESET", "red");
         stage = 0;
         buffer = [];
         return;
       }
 
-      const barrier = trigger + 1;
+      const barrier = digit + 1;
 
       executeTrade(barrier);
 
@@ -206,7 +215,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  // ================= PROPER TRADE FLOW =================
+  // ================= TRADE FLOW (SAFE) =================
   function executeTrade(barrier) {
     if (!authorized || tradeLock) return;
 
@@ -215,9 +224,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     BASE = Number(stakeInput.value || 0.35);
     const amount = stake(ladderLevel || 1);
 
-    pendingProposalId = null;
+    pendingProposal = null;
 
-    // STEP 1: REQUEST PROPOSAL
     send({
       proposal: 1,
       amount,
@@ -230,9 +238,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       barrier
     });
 
-    log(`PROPOSAL REQUESTED → barrier ${barrier}`, "#38bdf8");
-
-    // buy will happen AFTER proposal response
+    log(`PROPOSAL → DIGITDIFF(${barrier})`, "#38bdf8");
   }
 
   // ================= CONNECTION =================
@@ -251,9 +257,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       if (d.msg_type === "authorize") {
         authorized = true;
+
         send({ ticks: SYMBOL, subscribe: 1 });
-        send({ balance: 1 });
-        log("AUTHORIZED", "lime");
+
+        // IMPORTANT FIX: delayed balance request (prevents missing UI)
+        setTimeout(() => send({ balance: 1 }), 500);
+
+        log("AUTHORIZED (" + accountType + ")", "lime");
       }
 
       if (d.msg_type === "tick") {
@@ -264,19 +274,19 @@ document.addEventListener("DOMContentLoaded", async () => {
         balanceEl.textContent = Number(d.balance.balance).toFixed(2);
       }
 
-      // STEP 1 RESPONSE → BUY
+      // PROPOSAL → BUY
       if (d.msg_type === "proposal") {
-        pendingProposalId = d.proposal.id;
+        pendingProposal = d.proposal.id;
 
         send({
-          buy: pendingProposalId,
+          buy: pendingProposal,
           price: d.proposal.ask_price
         });
 
-        log("BUY SENT", "lime");
+        log("BUY EXECUTED", "lime");
       }
 
-      // STEP 2 RESULT
+      // BUY → TRACK CONTRACT
       if (d.msg_type === "buy") {
         send({
           proposal_open_contract: 1,
@@ -297,7 +307,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         profitEl.textContent = totalProfit.toFixed(2);
 
-        log(pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`, pnl >= 0 ? "lime" : "red");
+        log(
+          pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`,
+          pnl >= 0 ? "lime" : "red"
+        );
 
         if (pnl > 0) ladderLevel = 0;
         else if (ladderLevel < 3) ladderLevel++;
@@ -338,17 +351,17 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   demoBtn.onclick = () => {
     accountType = "demo";
-    updateModeUI();
+    setModeUI();
     ws?.close();
     setTimeout(connect, 500);
   };
 
   liveBtn.onclick = () => {
     accountType = "live";
-    updateModeUI();
+    setModeUI();
     ws?.close();
     setTimeout(connect, 500);
   };
 
-  updateModeUI();
+  setModeUI();
 });
