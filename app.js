@@ -14,15 +14,16 @@ document.addEventListener("DOMContentLoaded", () => {
   const priceEl = $("price");
   const balanceEl = $("balance");
   const levelEl = $("level");
-  const logEl = $("log");
   const profitEl = $("profit");
+  const logEl = $("log");
+  const modeIndicator = $("modeIndicator");
+  const stakeInput = $("stakeInput");
 
   // ================= CONFIG =================
   const CLIENT_ID = "33wZZKTFZrmsZgFaAH53Z";
   const REDIRECT_URI = "https://jesanjedan27-max.github.io/tradingbot/";
-  const VERCEL_URL = "https://oauthexchange23.vercel.app/api/token";
+  const OTP_URL = "https://api.derivws.com/trading/v1/options/accounts";
   const SYMBOL = "R_100";
-  const APP_ID = 1089;
 
   const ACCOUNTS = {
     demo: "DOT92927394",
@@ -36,17 +37,11 @@ document.addEventListener("DOMContentLoaded", () => {
   let ACCOUNT = "demo";
   let running = false;
   let paused = false;
-
   let authorized = false;
 
-  let buffer = [];
-  let stage = 0;
-
-  let ladderLevel = 0;
+  let ladder = 0;
   let tradeLock = false;
-
-  let profitTotal = 0;
-  let lastDigit = null;
+  let profit = 0;
 
   // ================= LOG =================
   function log(msg, color = "#fff") {
@@ -57,34 +52,40 @@ document.addEventListener("DOMContentLoaded", () => {
     logEl.scrollTop = logEl.scrollHeight;
   }
 
-  function setModeUI() {
-    demoBtn.style.background = ACCOUNT === "demo" ? "#2563eb" : "";
-    liveBtn.style.background = ACCOUNT === "live" ? "#ef4444" : "";
-  }
-
-  function digit(price) {
-    return Math.floor(price) % 10;
-  }
-
-  function stake(level) {
-    const base = 0.35;
-    return +(base * Math.pow(11.57, level)).toFixed(2);
-  }
-
-  function resetState() {
-    authorized = false;
-    tradeLock = false;
-    buffer = [];
-    stage = 0;
-    ladderLevel = 0;
-    lastDigit = null;
+  // ================= MODE UI =================
+  function updateModeUI() {
+    if (ACCOUNT === "demo") {
+      modeIndicator.textContent = "JESAN 💲 MODE - DEMO";
+      modeIndicator.style.color = "#38bdf8";
+    } else {
+      modeIndicator.textContent = "JESAN 💲 MODE - LIVE";
+      modeIndicator.style.color = "#ef4444";
+    }
   }
 
   // ================= SAFE SEND =================
   function send(data) {
     if (!ws || ws.readyState !== 1) return;
-    if (!authorized) return;
     ws.send(JSON.stringify(data));
+  }
+
+  // ================= DIGIT =================
+  const lastDigit = price =>
+    Math.floor(Math.abs(price * 100)) % 10;
+
+  // ================= STAKE =================
+  function stake() {
+    return Number(stakeInput.value || 0.35);
+  }
+
+  // ================= RESET =================
+  function resetState() {
+    authorized = false;
+    tradeLock = false;
+    ladder = 0;
+    profit = 0;
+    profitEl.textContent = "0.00";
+    levelEl.textContent = "0";
   }
 
   // ================= LOGIN =================
@@ -108,6 +109,7 @@ document.addEventListener("DOMContentLoaded", () => {
     window.location.href = url;
   };
 
+  // ================= OAUTH =================
   async function handleOAuth() {
     const url = new URL(window.location.href);
     const code = url.searchParams.get("code");
@@ -115,7 +117,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const verifier = localStorage.getItem("pkce_verifier");
 
-    const res = await fetch(VERCEL_URL, {
+    const res = await fetch("https://oauthexchange23.vercel.app/api/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -127,13 +129,9 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     const data = await res.json();
+    token = data.access_token;
 
-    token = data.access_token || data.data?.access_token;
-
-    if (!token) {
-      log("OAuth FAILED", "red");
-      return;
-    }
+    if (!token) return log("LOGIN FAILED", "red");
 
     localStorage.setItem("access_token", token);
     log("LOGIN SUCCESS", "lime");
@@ -143,65 +141,126 @@ document.addEventListener("DOMContentLoaded", () => {
 
   handleOAuth();
 
-  // ================= STRATEGY =================
-  function onTick(price) {
-    if (!running || paused || tradeLock) return;
+  // ================= CONNECT (FIXED OTP FLOW) =================
+  async function connect() {
+    resetState();
 
-    const d = digit(price);
-    lastDigit = d;
+    if (ws) ws.close();
 
-    priceEl.textContent = price.toFixed(2);
-    log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
+    token = localStorage.getItem("access_token");
+    if (!token) return log("NO TOKEN", "red");
 
-    buffer.push(d);
-    if (buffer.length > 10) buffer.shift();
+    const accountId = ACCOUNTS[ACCOUNT];
 
-    // ACTIVATOR 2,3
-    if (stage === 0) {
-      if (buffer.slice(-2).join("") === "23") {
-        stage = 1;
-        log("ACTIVATOR 2,3", "lime");
+    const res = await fetch(`${OTP_URL}/${accountId}/otp`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + token,
+        "Deriv-App-ID": "33wZZKTFZrmsZgFaAH53Z"
       }
+    });
+
+    const json = await res.json();
+    const wsUrl = json?.data?.url;
+
+    if (!wsUrl) {
+      log("OTP FAILED", "red");
       return;
     }
 
-    // M1
-    if (stage === 1) {
-      stage = 2;
-      return;
-    }
+    ws = new WebSocket(wsUrl);
 
-    // M2 + TRIGGER
-    if (stage === 2) {
-      const trigger = d;
+    ws.onopen = () => {
+      log("WS CONNECTED", "yellow");
+      send({ authorize: token });
+    };
 
-      if (trigger === 9) {
-        log("IGNORED 9", "red");
-        stage = 0;
-        buffer = [];
+    ws.onmessage = (e) => {
+      const d = JSON.parse(e.data);
+
+      if (d.error) {
+        log("ERROR: " + d.error.message, "red");
         return;
       }
 
-      const barrier = trigger + 1;
+      // AUTH
+      if (d.msg_type === "authorize") {
+        authorized = true;
+        log(`AUTHORIZED (${ACCOUNT})`, "lime");
 
-      placeTrade(barrier, trigger);
+        send({ ticks: SYMBOL, subscribe: 1 });
+        send({ balance: 1 });
+      }
 
-      stage = 0;
-      buffer = [];
-    }
+      // BALANCE
+      if (d.msg_type === "balance") {
+        balanceEl.textContent = Number(d.balance.balance).toFixed(2);
+      }
+
+      // TICKS
+      if (d.msg_type === "tick") {
+        const price = d.tick.quote;
+        const digit = lastDigit(price);
+
+        priceEl.textContent = price.toFixed(2);
+
+        log(`Tick ${price.toFixed(2)} → ${digit}`, "#38bdf8");
+
+        if (!running || paused || tradeLock) return;
+
+        if (digit === 3) {
+          placeTrade(5);
+        }
+      }
+
+      // PROPOSAL → BUY
+      if (d.msg_type === "proposal") {
+        send({
+          buy: d.proposal.id,
+          price: d.proposal.ask_price
+        });
+      }
+
+      // BUY → TRACK CONTRACT
+      if (d.msg_type === "buy") {
+        send({
+          proposal_open_contract: 1,
+          contract_id: d.buy.contract_id,
+          subscribe: 1
+        });
+      }
+
+      // RESULT
+      if (d.msg_type === "proposal_open_contract" && d.proposal_open_contract.is_sold) {
+        tradeLock = false;
+
+        const pnl = Number(d.proposal_open_contract.profit || 0);
+        profit += pnl;
+
+        profitEl.textContent = profit.toFixed(2);
+
+        log(
+          pnl >= 0 ? `WIN +${pnl.toFixed(2)}` : `LOSS ${pnl.toFixed(2)}`,
+          pnl >= 0 ? "lime" : "red"
+        );
+
+        ladder = pnl > 0 ? 0 : ladder + 1;
+        levelEl.textContent = ladder;
+      }
+    };
+
+    ws.onclose = () => log("WS CLOSED", "red");
   }
 
   // ================= TRADE =================
-  function placeTrade(barrier, triggerDigit) {
+  function placeTrade(barrier) {
     if (!authorized || tradeLock) return;
 
     tradeLock = true;
 
-    const amount = stake(ladderLevel);
-
     send({
       proposal: 1,
-      amount,
+      amount: stake(),
       basis: "stake",
       contract_type: "DIGITDIFF",
       currency: "USD",
@@ -211,99 +270,7 @@ document.addEventListener("DOMContentLoaded", () => {
       barrier
     });
 
-    log(`TRADE → barrier ${barrier}`, "#38bdf8");
-  }
-
-  // ================= CONNECT =================
-  function connect() {
-    resetState();
-
-    if (ws) {
-      try { ws.close(); } catch {}
-    }
-
-    token = localStorage.getItem("access_token");
-
-    if (!token) {
-      log("NO TOKEN", "red");
-      return;
-    }
-
-    ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`);
-
-    ws.onopen = () => {
-      log("WS CONNECTED", "yellow");
-      ws.send(JSON.stringify({ authorize: token }));
-    };
-
-    ws.onmessage = (e) => {
-      const d = JSON.parse(e.data);
-
-      if (d.error) {
-        log("ERROR: " + d.error.message, "red");
-        tradeLock = false;
-        return;
-      }
-
-      if (d.msg_type === "authorize") {
-        authorized = true;
-        log(`AUTHORIZED (${ACCOUNT})`, "lime");
-
-        ws.send({ ticks: SYMBOL, subscribe: 1 });
-        ws.send({ balance: 1 });
-      }
-
-      if (d.msg_type === "tick") {
-        onTick(d.tick.quote);
-      }
-
-      if (d.msg_type === "balance") {
-        balanceEl.textContent = Number(d.balance.balance).toFixed(2);
-      }
-
-      // PROPOSAL → BUY
-      if (d.msg_type === "proposal") {
-        ws.send({
-          buy: d.proposal.id,
-          price: d.proposal.ask_price
-        });
-      }
-
-      // BUY → TRACK CONTRACT
-      if (d.msg_type === "buy") {
-        ws.send({
-          proposal_open_contract: 1,
-          contract_id: d.buy.contract_id,
-          subscribe: 1
-        });
-      }
-
-      // RESULT
-      if (
-        d.msg_type === "proposal_open_contract" &&
-        d.proposal_open_contract.is_sold
-      ) {
-        tradeLock = false;
-
-        const pnl = Number(d.proposal_open_contract.profit || 0);
-        const winDigit = lastDigit;
-
-        profitTotal += pnl;
-        profitEl.textContent = profitTotal.toFixed(2);
-
-        log(
-          pnl >= 0
-            ? `WIN +${pnl.toFixed(2)} (digit=${winDigit})`
-            : `LOSS ${pnl.toFixed(2)} (digit=${winDigit})`,
-          pnl >= 0 ? "lime" : "red"
-        );
-
-        ladderLevel = pnl > 0 ? 0 : ladderLevel + 1;
-        levelEl.textContent = ladderLevel;
-      }
-    };
-
-    ws.onclose = () => log("WS CLOSED", "red");
+    log(`TRADE → ${barrier}`, "#38bdf8");
   }
 
   // ================= BUTTONS =================
@@ -313,35 +280,33 @@ document.addEventListener("DOMContentLoaded", () => {
     log("BOT STARTED", "lime");
   };
 
+  pauseBtn.onclick = () => {
+    paused = !paused;
+    log(paused ? "PAUSED" : "RUNNING", "yellow");
+  };
+
   stopBtn.onclick = () => {
     running = false;
     ws?.close();
     log("STOPPED", "red");
   };
 
-  pauseBtn.onclick = () => {
-    paused = !paused;
-    log(paused ? "PAUSED" : "RUNNING", "yellow");
-  };
-
   resetBtn.onclick = () => {
-    profitTotal = 0;
-    profitEl.textContent = "0.00";
     resetState();
     log("RESET DONE", "orange");
   };
 
   demoBtn.onclick = () => {
     ACCOUNT = "demo";
-    setModeUI();
+    updateModeUI();
     connect();
   };
 
   liveBtn.onclick = () => {
     ACCOUNT = "live";
-    setModeUI();
+    updateModeUI();
     connect();
   };
 
-  setModeUI();
+  updateModeUI();
 });
