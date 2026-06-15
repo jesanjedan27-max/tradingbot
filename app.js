@@ -1,6 +1,7 @@
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
+  // ================= UI =================
   const loginBtn = $("login");
   const startBtn = $("start");
   const pauseBtn = $("pause");
@@ -16,7 +17,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const profitEl = $("profit");
   const logEl = $("log");
   const stakeInput = $("stakeInput");
+  const modeIndicator = $("modeIndicator");
 
+  // ================= CONFIG =================
   const CLIENT_ID = "33wZZKTFZrmsZgFaAH53Z";
   const SYMBOL = "R_100";
 
@@ -32,61 +35,66 @@ document.addEventListener("DOMContentLoaded", () => {
   let running = false;
   let paused = false;
 
-  // ================= STRICT STATE MACHINE =================
   let armActive = false;
   let momentum = [];
-  let triggerDigit = null;
+  let lastDigits = [];
 
-  let ladderLevel = 0;
   let tradeLock = false;
+  let ladderLevel = 0;
   let totalProfit = 0;
 
-  let buffer = [];
-
-  function log(msg, c = "#fff") {
-    const d = document.createElement("div");
-    d.textContent = msg;
-    d.style.color = c;
-    logEl.appendChild(d);
+  // ================= LOG =================
+  function log(msg, color = "#fff") {
+    const div = document.createElement("div");
+    div.style.color = color;
+    div.textContent = msg;
+    logEl.appendChild(div);
     logEl.scrollTop = logEl.scrollHeight;
   }
 
+  // ================= SEND =================
   function send(data) {
-    if (ws && ws.readyState === 1) ws.send(JSON.stringify(data));
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify(data));
+    }
   }
 
+  // ================= DIGIT =================
   function digit(price) {
     return Math.floor(Math.abs(price * 100)) % 10;
   }
 
+  // ================= STAKE =================
   function stake(level) {
     const base = Number(stakeInput.value || 0.35);
     return +(base * Math.pow(11.57, level)).toFixed(2);
   }
 
-  function resetState() {
+  // ================= RESET =================
+  function resetStrategy() {
     armActive = false;
     momentum = [];
-    triggerDigit = null;
-    buffer = [];
+    lastDigits = [];
     tradeLock = false;
   }
 
-  // ================= FIXED STRATEGY =================
+  // ================= STRATEGY =================
   function onTick(price) {
     if (!running || paused) return;
 
     const d = digit(price);
 
-    // ALWAYS log first
+    // ================= ALWAYS LOG FIRST (FIX) =================
     log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
 
-    buffer.push(d);
-    if (buffer.length > 10) buffer.shift();
+    priceEl.textContent = price.toFixed(2);
+
+    lastDigits.push(d);
+    if (lastDigits.length > 10) lastDigits.shift();
 
     // ================= ARM =================
     if (!armActive) {
-      if (buffer.slice(-2).join("") === "23") {
+      if (lastDigits.slice(-2).join("") === "23") {
         armActive = true;
         momentum = [];
         log("ARMED → 2,3 detected", "lime");
@@ -94,27 +102,30 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // ================= MOMENTUM (STRICT 2 DIGITS ONLY) =================
-    if (armActive && momentum.length < 2) {
+    // ================= MOMENTUM =================
+    if (armActive && momentum.length < 3) {
       momentum.push(d);
       log(`MOMENTUM → ${momentum.join(",")}`, "#facc15");
       return;
     }
 
-    // ================= TRIGGER (ONLY 1 DIGIT) =================
-    if (armActive && momentum.length === 2 && triggerDigit === null) {
-      triggerDigit = d;
+    // ================= TRIGGER =================
+    if (armActive && momentum.length >= 3) {
+      if (d === 9) {
+        log("IGNORED 9", "red");
+        resetStrategy();
+        return;
+      }
 
-      const winDigit = (triggerDigit + 1) % 10;
+      const barrier = (d + 1) % 10;
 
       log(
-        `TRIGGER → momentum [${momentum.join(",")}] | trigger ${triggerDigit} | win ${winDigit}`,
+        `TRADE SIGNAL → momentum [${momentum.join(",")}] | win digit ${barrier}`,
         "#38bdf8"
       );
 
-      placeTrade(winDigit);
-
-      resetState();
+      placeTrade(barrier);
+      resetStrategy();
     }
   }
 
@@ -143,7 +154,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ================= CONNECT =================
   function connect() {
-    resetState();
+    resetStrategy();
 
     if (ws) ws.close();
 
@@ -163,6 +174,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         ws.onopen = () => {
           log("WS CONNECTED", "lime");
+
           send({ ticks: SYMBOL, subscribe: 1 });
           send({ balance: 1 });
         };
@@ -170,21 +182,17 @@ document.addEventListener("DOMContentLoaded", () => {
         ws.onmessage = (e) => {
           const d = JSON.parse(e.data);
 
-          if (d.msg_type === "tick") {
-            onTick(d.tick.quote);
-          }
-
+          // ================= BALANCE =================
           if (d.msg_type === "balance") {
             balanceEl.textContent = Number(d.balance.balance).toFixed(2);
           }
 
-          if (d.msg_type === "proposal") {
-            send({
-              buy: d.proposal.id,
-              price: d.proposal.ask_price
-            });
+          // ================= TICK =================
+          if (d.msg_type === "tick") {
+            onTick(d.tick.quote);
           }
 
+          // ================= BUY =================
           if (d.msg_type === "buy") {
             send({
               proposal_open_contract: 1,
@@ -193,6 +201,7 @@ document.addEventListener("DOMContentLoaded", () => {
             });
           }
 
+          // ================= RESULT =================
           if (d.msg_type === "proposal_open_contract") {
             const c = d.proposal_open_contract;
 
@@ -212,6 +221,10 @@ document.addEventListener("DOMContentLoaded", () => {
               ladderLevel = pnl > 0 ? 0 : ladderLevel + 1;
               levelEl.textContent = ladderLevel;
             }
+          }
+
+          if (d.error) {
+            log("ERROR: " + d.error.message, "red");
           }
         };
       });
@@ -236,7 +249,7 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   resetBtn.onclick = () => {
-    resetState();
+    resetStrategy();
     totalProfit = 0;
     profitEl.textContent = "0.00";
     log("RESET DONE", "orange");
