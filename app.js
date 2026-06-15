@@ -21,29 +21,26 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ================= CONFIG =================
   const CLIENT_ID = "33wZZKTFZrmsZgFaAH53Z";
-  const REDIRECT_URI = "https://jesanjedan27-max.github.io/tradingbot/";
+  const SYMBOL = "R_100";
 
   const ACCOUNTS = {
     demo: "DOT92927394",
     live: "ROT91650098"
   };
 
-  const SYMBOL = "R_100";
-
-  // ================= STATE =================
-  let ws = null;
+  let ws;
   let token = localStorage.getItem("access_token");
 
   let ACCOUNT = "demo";
   let running = false;
   let paused = false;
 
-  let buffer = [];
-  let stage = 0;
+  let armActive = false;
+  let momentum = [];
+  let lastDigits = [];
 
-  let ladderLevel = 0;
   let tradeLock = false;
-
+  let ladderLevel = 0;
   let totalProfit = 0;
 
   // ================= LOG =================
@@ -57,8 +54,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ================= SEND =================
   function send(data) {
-    if (!ws || ws.readyState !== 1) return;
-    ws.send(JSON.stringify(data));
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify(data));
+    }
   }
 
   // ================= DIGIT =================
@@ -66,101 +64,99 @@ document.addEventListener("DOMContentLoaded", () => {
     return Math.floor(Math.abs(price * 100)) % 10;
   }
 
-  // ================= STAKE (MARTINGALE) =================
+  // ================= STAKE =================
   function stake(level) {
     const base = Number(stakeInput.value || 0.35);
     return +(base * Math.pow(11.57, level)).toFixed(2);
   }
 
   // ================= RESET =================
-  function resetState() {
-    buffer = [];
-    stage = 0;
+  function resetStrategy() {
+    armActive = false;
+    momentum = [];
+    lastDigits = [];
     tradeLock = false;
   }
 
-  // ================= MODE UI =================
-  function updateModeUI() {
-    modeIndicator.textContent =
-      ACCOUNT === "demo"
-        ? "JESAN 💲 MODE - DEMO"
-        : "JESAN 💲 MODE - LIVE";
+  // ================= STRATEGY =================
+  function onTick(price) {
+    if (!running || paused) return;
 
-    modeIndicator.style.color =
-      ACCOUNT === "demo" ? "#38bdf8" : "#ef4444";
+    const d = digit(price);
+
+    // ================= ALWAYS LOG FIRST (FIX) =================
+    log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
+
+    priceEl.textContent = price.toFixed(2);
+
+    lastDigits.push(d);
+    if (lastDigits.length > 10) lastDigits.shift();
+
+    // ================= ARM =================
+    if (!armActive) {
+      if (lastDigits.slice(-2).join("") === "23") {
+        armActive = true;
+        momentum = [];
+        log("ARMED → 2,3 detected", "lime");
+      }
+      return;
+    }
+
+    // ================= MOMENTUM =================
+    if (armActive && momentum.length < 3) {
+      momentum.push(d);
+      log(`MOMENTUM → ${momentum.join(",")}`, "#facc15");
+      return;
+    }
+
+    // ================= TRIGGER =================
+    if (armActive && momentum.length >= 3) {
+      if (d === 9) {
+        log("IGNORED 9", "red");
+        resetStrategy();
+        return;
+      }
+
+      const barrier = (d + 1) % 10;
+
+      log(
+        `TRADE SIGNAL → momentum [${momentum.join(",")}] | win digit ${barrier}`,
+        "#38bdf8"
+      );
+
+      placeTrade(barrier);
+      resetStrategy();
+    }
   }
 
-  // ================= LOGIN =================
-  loginBtn.onclick = () => {
-    const verifier = crypto.randomUUID().replace(/-/g, "");
-    localStorage.setItem("pkce_verifier", verifier);
+  // ================= TRADE =================
+  function placeTrade(barrier) {
+    if (tradeLock) return;
 
-    const challenge = btoa(verifier)
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/, "");
+    tradeLock = true;
 
-    const url =
-      `https://auth.deriv.com/oauth2/auth` +
-      `?response_type=code&client_id=${CLIENT_ID}` +
-      `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-      `&scope=trade` +
-      `&code_challenge=${challenge}` +
-      `&code_challenge_method=S256`;
+    const amount = stake(ladderLevel);
 
-    window.location.href = url;
-  };
-
-  // ================= OAUTH CALLBACK =================
-  async function handleOAuth() {
-    const url = new URL(window.location.href);
-    const code = url.searchParams.get("code");
-    if (!code) return;
-
-    const verifier = localStorage.getItem("pkce_verifier");
-
-    const res = await fetch("https://oauthexchange23.vercel.app/api/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        code,
-        code_verifier: verifier,
-        client_id: CLIENT_ID,
-        redirect_uri: REDIRECT_URI
-      })
+    send({
+      proposal: 1,
+      amount,
+      basis: "stake",
+      contract_type: "DIGITDIFF",
+      currency: "USD",
+      duration: 1,
+      duration_unit: "t",
+      underlying_symbol: SYMBOL,
+      barrier
     });
 
-    const data = await res.json();
-
-    token = data.access_token || data.data?.access_token;
-
-    if (!token) {
-      log("LOGIN FAILED", "red");
-      return;
-    }
-
-    localStorage.setItem("access_token", token);
-    log("LOGIN SUCCESS", "lime");
-
-    window.history.replaceState({}, document.title, REDIRECT_URI);
+    log(`TRADE SENT → ${barrier} | stake ${amount}`, "#38bdf8");
   }
 
-  handleOAuth();
-
-  // ================= CONNECT (OTP FIXED) =================
+  // ================= CONNECT =================
   function connect() {
-    resetState();
+    resetStrategy();
 
-    if (ws) {
-      try { ws.close(); } catch {}
-      ws = null;
-    }
-
-    token = localStorage.getItem("access_token");
-    if (!token) {
-      log("LOGIN REQUIRED", "red");
-      return;
-    }
+    if (ws) ws.close();
 
     const accountId = ACCOUNTS[ACCOUNT];
 
@@ -186,11 +182,6 @@ document.addEventListener("DOMContentLoaded", () => {
         ws.onmessage = (e) => {
           const d = JSON.parse(e.data);
 
-          if (d.error) {
-            log("ERROR: " + d.error.message, "red");
-            return;
-          }
-
           // ================= BALANCE =================
           if (d.msg_type === "balance") {
             balanceEl.textContent = Number(d.balance.balance).toFixed(2);
@@ -198,9 +189,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
           // ================= TICK =================
           if (d.msg_type === "tick") {
-            const price = d.tick.quote;
-            priceEl.textContent = price.toFixed(2);
-            onTick(price);
+            onTick(d.tick.quote);
           }
 
           // ================= BUY =================
@@ -225,9 +214,7 @@ document.addEventListener("DOMContentLoaded", () => {
               profitEl.textContent = totalProfit.toFixed(2);
 
               log(
-                pnl >= 0
-                  ? `WIN (+${pnl})`
-                  : `LOSS (${pnl})`,
+                pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`,
                 pnl >= 0 ? "lime" : "red"
               );
 
@@ -235,81 +222,12 @@ document.addEventListener("DOMContentLoaded", () => {
               levelEl.textContent = ladderLevel;
             }
           }
+
+          if (d.error) {
+            log("ERROR: " + d.error.message, "red");
+          }
         };
-
-        ws.onclose = () => log("WS CLOSED", "red");
-
       });
-  }
-
-  // ================= FIXED STRATEGY =================
-  function onTick(price) {
-    if (!running || paused || tradeLock) return;
-
-    const d = digit(price);
-
-    buffer.push(d);
-    if (buffer.length > 20) buffer.shift();
-
-    // ARM (2,3)
-    if (stage === 0) {
-      if (buffer.slice(-2).join("") === "23") {
-        stage = 1;
-        log("ARMED → 2,3 detected", "lime");
-      }
-      return;
-    }
-
-    // MOMENTUM
-    if (stage === 1) {
-      if (buffer.length < 5) return;
-
-      stage = 2;
-      log("MOMENTUM ACTIVE", "#38bdf8");
-      return;
-    }
-
-    // TRIGGER
-    if (stage === 2) {
-      if (d === 9) {
-        log("IGNORED 9", "red");
-        stage = 0;
-        buffer = [];
-        return;
-      }
-
-      const barrier = (d + 1) % 10;
-
-      log(`TRIGGER → win digit: ${barrier}`, "#38bdf8");
-
-      placeTrade(barrier);
-
-      stage = 0;
-      buffer = [];
-    }
-  }
-
-  // ================= TRADE =================
-  function placeTrade(barrier) {
-    if (tradeLock) return;
-
-    tradeLock = true;
-
-    const amount = stake(ladderLevel);
-
-    send({
-      proposal: 1,
-      amount,
-      basis: "stake",
-      contract_type: "DIGITDIFF",
-      currency: "USD",
-      duration: 1,
-      duration_unit: "t",
-      underlying_symbol: SYMBOL,
-      barrier
-    });
-
-    log(`TRADE → ${barrier} | stake ${amount}`, "#38bdf8");
   }
 
   // ================= BUTTONS =================
@@ -331,23 +249,12 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   resetBtn.onclick = () => {
-    resetState();
+    resetStrategy();
     totalProfit = 0;
     profitEl.textContent = "0.00";
     log("RESET DONE", "orange");
   };
 
-  demoBtn.onclick = () => {
-    ACCOUNT = "demo";
-    updateModeUI();
-    connect();
-  };
-
-  liveBtn.onclick = () => {
-    ACCOUNT = "live";
-    updateModeUI();
-    connect();
-  };
-
-  updateModeUI();
+  demoBtn.onclick = () => (ACCOUNT = "demo");
+  liveBtn.onclick = () => (ACCOUNT = "live");
 });
