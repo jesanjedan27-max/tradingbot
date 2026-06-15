@@ -15,6 +15,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const balanceEl = $("balance");
   const levelEl = $("level");
   const logEl = $("log");
+
   const stakeInput = $("stakeInput");
 
   // ================= CONFIG =================
@@ -38,14 +39,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   let accountType = "demo";
 
-  let ladderLevel = 0;
-  let tradeLock = false;
-
   let buffer = [];
   let stage = 0;
 
-  let m1 = null;
-  let m2 = null;
+  let ladderLevel = 0;
+  let tradeLock = false;
 
   let BASE = 0.35;
 
@@ -68,16 +66,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   function setModeUI() {
     if (accountType === "demo") {
       demoBtn.style.background = "blue";
-      liveBtn.style.background = "transparent";
+      liveBtn.style.background = "";
     } else {
       liveBtn.style.background = "red";
-      demoBtn.style.background = "transparent";
+      demoBtn.style.background = "";
     }
   }
 
-  // ================= DIGIT EXTRACTION (FIXED) =================
+  // ================= DIGIT =================
   function getDigit(price) {
-    // stable + Deriv-like digit extraction
     return Math.floor(Math.abs(price * 100)) % 10;
   }
 
@@ -178,14 +175,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     if (stage === 1) {
-      m1 = digit;
       stage = 2;
       return;
     }
 
     if (stage === 2) {
-      m2 = digit;
-
       if (digit === 9) {
         log("IGNORE 9", "red");
         stage = 0;
@@ -231,10 +225,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     if (ws) ws.close();
 
+    token = localStorage.getItem("access_token");
+
+    if (!token || token.length < 10) {
+      log("INVALID TOKEN - LOGIN REQUIRED", "red");
+      return;
+    }
+
     ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=1089`);
 
     ws.onopen = () => {
       log("WS CONNECTED", "yellow");
+
+      log("TOKEN OK → AUTH SENDING", "#38bdf8");
 
       send({ authorize: token });
     };
@@ -245,11 +248,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (d.msg_type === "authorize") {
         authorized = true;
 
+        log(`AUTHORIZED (${accountType})`, "lime");
+
         send({ ticks: SYMBOL, subscribe: 1 });
 
-        setTimeout(() => send({ balance: 1 }), 800);
-
-        log(`AUTHORIZED (${accountType})`, "lime");
+        // FIX: safe balance delay
+        setTimeout(() => {
+          send({ balance: 1 });
+        }, 800);
       }
 
       if (d.msg_type === "tick") {
@@ -300,8 +306,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // ================= BUTTONS =================
   startBtn.onclick = () => {
-    if (!token) return alert("Login first");
-
     running = true;
     connect();
     log("BOT STARTED", "lime");
