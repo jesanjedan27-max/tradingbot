@@ -22,6 +22,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const VERCEL_URL = "https://oauthexchange23.vercel.app/api/token";
   const SYMBOL = "R_100";
 
+  let ACCOUNT = "demo";
   const ACCOUNTS = {
     demo: "DOT92927394",
     live: "ROT91650098"
@@ -34,8 +35,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let running = false;
   let paused = false;
   let authorized = false;
-
-  let accountType = "demo";
 
   let buffer = [];
   let stage = 0;
@@ -52,25 +51,22 @@ document.addEventListener("DOMContentLoaded", () => {
     logEl.scrollTop = logEl.scrollHeight;
   }
 
-  // ================= SAFE SEND (FIX CORE BUG) =================
+  // ================= SAFE SEND (TRADING ONLY) =================
   function send(data) {
     if (!ws || ws.readyState !== 1) return;
-
-    // 🔴 BLOCK EVERYTHING UNTIL AUTH IS COMPLETE
-    if (!authorized && !data.authorize) return;
-
+    if (!authorized) return;
     ws.send(JSON.stringify(data));
   }
 
   // ================= DIGIT =================
-  function digitFromPrice(price) {
+  function digit(price) {
     return Math.floor(Math.abs(price * 100)) % 10;
   }
 
   // ================= STAKE =================
   function stake(level) {
     const base = 0.35;
-    const mult = Math.pow(11.57, Math.max(0, level - 1));
+    const mult = Math.pow(11.57, Math.max(0, level));
     return +(base * mult).toFixed(2);
   }
 
@@ -85,8 +81,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ================= MODE UI =================
   function setModeUI() {
-    demoBtn.style.background = accountType === "demo" ? "blue" : "";
-    liveBtn.style.background = accountType === "live" ? "red" : "";
+    demoBtn.style.background = ACCOUNT === "demo" ? "blue" : "";
+    liveBtn.style.background = ACCOUNT === "live" ? "red" : "";
   }
 
   // ================= LOGIN =================
@@ -110,7 +106,7 @@ document.addEventListener("DOMContentLoaded", () => {
     window.location.href = url;
   };
 
-  // ================= OAUTH CALLBACK =================
+  // ================= OAUTH =================
   async function handleOAuth() {
     const url = new URL(window.location.href);
     const code = url.searchParams.get("code");
@@ -139,7 +135,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     localStorage.setItem("access_token", token);
-
     log("LOGIN SUCCESS", "lime");
 
     window.history.replaceState({}, document.title, REDIRECT_URI);
@@ -151,13 +146,12 @@ document.addEventListener("DOMContentLoaded", () => {
   function onTick(price) {
     if (!running || paused || tradeLock) return;
 
-    const digit = digitFromPrice(price);
-
+    const d = digit(price);
     priceEl.textContent = price.toFixed(2);
 
-    log(`Tick ${price.toFixed(2)} → ${digit}`, "#38bdf8");
+    log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
 
-    buffer.push(digit);
+    buffer.push(d);
     if (buffer.length > 10) buffer.shift();
 
     if (stage === 0) {
@@ -174,15 +168,14 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (stage === 2) {
-      if (digit === 9) {
-        log("IGNORE 9", "red");
+      if (d === 9) {
+        log("IGNORED 9", "red");
         stage = 0;
         buffer = [];
         return;
       }
 
-      const barrier = digit + 1;
-
+      const barrier = d + 1;
       placeTrade(barrier);
 
       stage = 0;
@@ -213,29 +206,30 @@ document.addEventListener("DOMContentLoaded", () => {
     log(`TRADE → ${barrier}`, "#38bdf8");
   }
 
-  // ================= CONNECTION =================
+  // ================= CONNECT =================
   function connect() {
     resetState();
 
     if (ws) {
-      ws.onopen = null;
       ws.onmessage = null;
+      ws.onopen = null;
       ws.close();
     }
 
     token = localStorage.getItem("access_token");
 
     if (!token) {
-      log("NO TOKEN", "red");
+      log("NO TOKEN - LOGIN REQUIRED", "red");
       return;
     }
 
-    ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=1089`);
+    ws = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
 
     ws.onopen = () => {
       log("WS CONNECTED", "yellow");
 
-      send({ authorize: token });
+      // IMPORTANT: direct authorize ONLY
+      ws.send(JSON.stringify({ authorize: token }));
     };
 
     ws.onmessage = (e) => {
@@ -250,11 +244,12 @@ document.addEventListener("DOMContentLoaded", () => {
       if (d.msg_type === "authorize") {
         authorized = true;
 
-        log(`AUTHORIZED (${accountType})`, "lime");
+        log(`AUTHORIZED (${ACCOUNT})`, "lime");
 
+        // ONLY AFTER AUTH
         setTimeout(() => {
-          send({ ticks: SYMBOL, subscribe: 1 });
-          send({ balance: 1 });
+          ws.send(JSON.stringify({ ticks: SYMBOL, subscribe: 1 }));
+          ws.send(JSON.stringify({ balance: 1 }));
         }, 300);
       }
 
@@ -267,18 +262,18 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       if (d.msg_type === "proposal") {
-        send({
+        ws.send(JSON.stringify({
           buy: d.proposal.id,
           price: d.proposal.ask_price
-        });
+        }));
       }
 
       if (d.msg_type === "buy") {
-        send({
+        ws.send(JSON.stringify({
           proposal_open_contract: 1,
           contract_id: d.buy.contract_id,
           subscribe: 1
-        });
+        }));
       }
 
       if (
@@ -291,8 +286,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         log(pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`, pnl >= 0 ? "lime" : "red");
 
-        if (pnl > 0) ladderLevel = 0;
-        else ladderLevel++;
+        ladderLevel = pnl > 0 ? 0 : ladderLevel + 1;
       }
     };
 
@@ -323,13 +317,13 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   demoBtn.onclick = () => {
-    accountType = "demo";
+    ACCOUNT = "demo";
     setModeUI();
     connect();
   };
 
   liveBtn.onclick = () => {
-    accountType = "live";
+    ACCOUNT = "live";
     setModeUI();
     connect();
   };
