@@ -26,10 +26,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const SYMBOL = "R_100";
 
   let ACCOUNT = "demo";
-  const ACCOUNTS = {
-    demo: "DOT92927394",
-    live: "ROT91650098"
-  };
 
   // ================= STATE =================
   let ws = null;
@@ -40,15 +36,13 @@ document.addEventListener("DOMContentLoaded", () => {
   let authorized = false;
 
   let ladderLevel = 0;
-  let tradeLock = false;
 
-  // ================= STRATEGY STATE =================
-  let armActive = false;
-  let momentum = [];
-  let triggerDigit = null;
-  let waitingNextTick = false;
-  let forbiddenDigit = null;
-  let lastTickDigit = null;
+  // ================= ENGINE STATE =================
+  let state = "WAIT_2";
+  let m1 = null;
+  let m2 = null;
+  let y = null;
+  let forbidden = null;
 
   // ================= LOG =================
   function log(msg, color = "#fff") {
@@ -67,18 +61,16 @@ document.addEventListener("DOMContentLoaded", () => {
   // ================= STAKE =================
   function stake(level) {
     const base = Number(stakeInput.value || 0.35);
-    const mult = Math.pow(2, level);
-    return +(base * mult).toFixed(2);
+    return +(base * Math.pow(2, level)).toFixed(2);
   }
 
-  // ================= RESET =================
-  function resetState() {
-    armActive = false;
-    momentum = [];
-    triggerDigit = null;
-    waitingNextTick = false;
-    forbiddenDigit = null;
-    tradeLock = false;
+  // ================= RESET ENGINE =================
+  function resetEngine() {
+    state = "WAIT_2";
+    m1 = null;
+    m2 = null;
+    y = null;
+    forbidden = null;
   }
 
   // ================= SEND =================
@@ -93,82 +85,98 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!running || paused) return;
 
     const d = digit(price);
-    lastTickDigit = d;
 
     priceEl.textContent = price.toFixed(2);
 
     log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
 
-    // ================= ARM (2,3) =================
-    if (!armActive) {
-      if (d === 2 || d === 3) {
-        armActive = true;
-        momentum = [];
-        log("ARM → 2,3 detected", "lime");
+    // ================= STEP 1: WAIT 2 =================
+    if (state === "WAIT_2") {
+      if (d === 2) {
+        state = "WAIT_3";
+        log("ARM → 2 detected", "lime");
       }
       return;
     }
 
-    // ================= MOMENTUM (2 digits) =================
-    if (momentum.length < 2) {
-      momentum.push(d);
-      log(`MOMENTUM → ${momentum.join(",")}`, "#facc15");
+    // ================= STEP 2: WAIT 3 (STRICT ORDER) =================
+    if (state === "WAIT_3") {
+      if (d === 3) {
+        state = "M1";
+        log("ARM CONFIRMED → 2,3", "lime");
+      } else if (d !== 2) {
+        state = "WAIT_2";
+      }
       return;
     }
 
-    // ================= TRIGGER =================
-    if (!waitingNextTick) {
-      if (d === 9) {
+    // ================= STEP 3: MOMENTUM 1 =================
+    if (state === "M1") {
+      m1 = d;
+      state = "M2";
+      log(`MOMENTUM 1 → ${m1}`, "#facc15");
+      return;
+    }
+
+    // ================= STEP 4: MOMENTUM 2 =================
+    if (state === "M2") {
+      m2 = d;
+      state = "TRIGGER";
+      log(`MOMENTUM 2 → ${m2}`, "#facc15");
+      return;
+    }
+
+    // ================= STEP 5: TRIGGER =================
+    if (state === "TRIGGER") {
+      y = d;
+
+      if (y === 9) {
         log("INVALID → trigger 9 ignored", "red");
-        resetState();
+        resetEngine();
         return;
       }
 
-      triggerDigit = d;
-      forbiddenDigit = (triggerDigit + 1) % 10;
+      forbidden = (y + 1) % 10;
 
-      waitingNextTick = true;
+      state = "WAIT_EXEC";
 
       log(
-        `DDF → trigger ${triggerDigit} | forbidden ${forbiddenDigit}`,
+        `DDF → trigger ${y} | forbidden ${forbidden}`,
         "#22c55e"
       );
       return;
     }
 
-    // ================= EXECUTION (NEXT TICK ONLY) =================
-    if (waitingNextTick) {
-      waitingNextTick = false;
+    // ================= STEP 6: EXECUTION (NEXT TICK ONLY) =================
+    if (state === "WAIT_EXEC") {
+      const result = d;
 
-      log(`EXECUTION CHECK → digit ${d}`, "#60a5fa");
+      log(`EXECUTION → ${result}`, "#60a5fa");
 
-      if (d === forbiddenDigit) {
-        log(`LOSS → ${d}`, "red");
+      if (result === forbidden) {
+        log(`LOSS → ${result}`, "red");
         ladderLevel += 1;
       } else {
-        log(`WIN +0.02 → ${d}`, "lime");
+        log(`WIN → ${result}`, "lime");
         ladderLevel = 0;
       }
 
-      tradeLock = false;
-      resetState();
+      resetEngine();
     }
   }
 
   // ================= CONNECT =================
   function connect() {
-    resetState();
+    resetEngine();
 
     if (ws) {
-      ws.onmessage = null;
-      ws.onopen = null;
       ws.close();
     }
 
     token = localStorage.getItem("access_token");
 
     if (!token) {
-      log("NO TOKEN", "red");
+      log("NO TOKEN - LOGIN REQUIRED", "red");
       return;
     }
 
@@ -223,11 +231,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (poc.is_sold) {
           const pnl = Number(poc.profit || 0);
-
           profitEl.textContent = pnl.toFixed(2);
 
           log(
-            pnl >= 0 ? `WIN REAL +${pnl}` : `LOSS ${pnl}`,
+            pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`,
             pnl >= 0 ? "lime" : "red"
           );
         }
@@ -256,19 +263,19 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   resetBtn.onclick = () => {
-    resetState();
+    resetEngine();
     log("RESET DONE", "orange");
   };
 
   demoBtn.onclick = () => {
     ACCOUNT = "demo";
-    log("SWITCHED DEMO", "blue");
+    log("DEMO MODE", "blue");
     connect();
   };
 
   liveBtn.onclick = () => {
     ACCOUNT = "live";
-    log("SWITCHED LIVE", "red");
+    log("LIVE MODE", "red");
     connect();
   };
 });
