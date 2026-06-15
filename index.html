@@ -11,15 +11,19 @@
 
 <div class="container">
 
+  <!-- MODE INDICATOR -->
   <h1 id="modeIndicator" class="mode-indicator demo">DEMO MODE</h1>
 
+  <!-- DEMO / LIVE SWITCH -->
   <div class="row">
-    <button id="demoBtn">Demo</button>
-    <button id="liveBtn">Live</button>
+    <button id="demoBtn" class="mode-btn">Demo</button>
+    <button id="liveBtn" class="mode-btn">Live</button>
   </div>
 
-  <button id="login">Login with Deriv</button>
+  <!-- LOGIN -->
+  <button id="login" class="login-btn">Login with Deriv</button>
 
+  <!-- CONTROL BUTTONS -->
   <div class="buttons">
     <button id="start">Start</button>
     <button id="pause">Pause</button>
@@ -27,11 +31,13 @@
     <button id="reset">Reset</button>
   </div>
 
+  <!-- STAKE INPUT -->
   <div class="inputs">
-    <label>Stake</label>
+    <label for="stakeInput">Stake</label>
     <input id="stakeInput" type="number" value="0.35" step="0.01"/>
   </div>
 
+  <!-- STATS -->
   <div class="stats">
     <div>Price: <span id="price">-</span></div>
     <div>Balance: <span id="balance">-</span></div>
@@ -39,7 +45,8 @@
     <div>Profit: <span id="profit">0.00</span></div>
   </div>
 
-  <div id="log"></div>
+  <!-- LOG -->
+  <div id="log" class="log"></div>
 
 </div>
 
