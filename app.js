@@ -7,18 +7,25 @@ document.addEventListener("DOMContentLoaded", async () => {
   const pauseBtn = $("pause");
   const stopBtn  = $("stop");
   const resetBtn = $("reset");
+  const modeBtn  = $("mode");
 
   const priceEl = $("price");
   const balanceEl = $("balance");
   const levelEl = $("level");
   const logEl = $("log");
+  const stakeInput = $("stakeInput");
 
   // ================= CONFIG =================
   const CLIENT_ID = "33wZZKTFZrmsZgFaAH53Z";
   const REDIRECT_URI = "https://jesanjedan27-max.github.io/tradingbot/";
   const VERCEL_URL = "https://oauthexchange23.vercel.app/api/token";
-  const WS_APP_ID = 1089;
   const SYMBOL = "R_100";
+
+  // ✅ YOUR ACCOUNTS (FIXED)
+  const ACCOUNTS = {
+    demo: "DOT92927394",
+    live: "ROT91650098"
+  };
 
   // ================= STATE =================
   let ws;
@@ -28,6 +35,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   let paused = false;
   let authorized = false;
 
+  let accountType = "demo";
+
   let ladderLevel = 0;
   let tradeLock = false;
 
@@ -36,7 +45,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   let m1 = null;
   let m2 = null;
 
-  let totalProfit = 0;
+  let BASE = 0.35;
 
   // ================= LOG =================
   function log(msg, color = "#fff") {
@@ -50,39 +59,24 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  // ================= PKCE =================
-  function generateVerifier() {
-    const arr = new Uint8Array(32);
-    crypto.getRandomValues(arr);
-    return Array.from(arr)
-      .map(x => x.toString(16).padStart(2, "0"))
-      .join("");
-  }
-
-  async function sha256(str) {
-    return crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
-  }
-
-  function base64url(buf) {
-    return btoa(String.fromCharCode(...new Uint8Array(buf)))
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/, "");
-  }
-
-  async function createChallenge(verifier) {
-    return base64url(await sha256(verifier));
+  // ================= RESET STATE =================
+  function resetState() {
+    authorized = false;
+    tradeLock = false;
+    buffer = [];
+    armed = false;
+    m1 = null;
+    m2 = null;
+    ladderLevel = 0;
+    BASE = Number(stakeInput.value || 0.35);
   }
 
   // ================= LOGIN =================
   loginBtn.onclick = async () => {
-    const verifier = generateVerifier();
-    const challenge = await createChallenge(verifier);
+    const verifier = crypto.randomUUID().replace(/-/g, "");
+    const challenge = btoa(verifier).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
     localStorage.setItem("pkce_verifier", verifier);
-    localStorage.removeItem("oauth_done");
-
-    const state = "tradingbot123456789";
 
     const authUrl =
       `https://auth.deriv.com/oauth2/auth` +
@@ -90,116 +84,72 @@ document.addEventListener("DOMContentLoaded", async () => {
       `&client_id=${CLIENT_ID}` +
       `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
       `&scope=trade` +
-      `&state=${state}` +
       `&code_challenge=${challenge}` +
       `&code_challenge_method=S256`;
 
     window.location.href = authUrl;
   };
 
-  // ================= CALLBACK =================
-  async function handleOAuthCallback() {
+  async function handleOAuth() {
     const url = new URL(window.location.href);
     const code = url.searchParams.get("code");
-    const error = url.searchParams.get("error");
-
-    if (error) {
-      log("OAuth error: " + error, "red");
-      return;
-    }
-
     if (!code) return;
-
-    if (localStorage.getItem("oauth_done") === "true") return;
 
     const verifier = localStorage.getItem("pkce_verifier");
 
-    if (!verifier) {
-      log("Missing PKCE verifier (login again)", "red");
+    const res = await fetch(VERCEL_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        code,
+        code_verifier: verifier,
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI
+      })
+    });
+
+    const data = await res.json();
+
+    if (!data.access_token) {
+      log("OAuth failed", "red");
       return;
     }
 
-    try {
+    token = data.access_token;
+    localStorage.setItem("access_token", token);
 
-      log("Calling token endpoint...", "yellow");
-      log(VERCEL_URL, "yellow");
+    log("LOGIN SUCCESS", "lime");
 
-      const res = await fetch(VERCEL_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          code,
-          code_verifier: verifier,
-          client_id: CLIENT_ID,
-          redirect_uri: REDIRECT_URI
-        })
-      });
-
-      log("Fetch completed", "lime");
-      log("Status: " + res.status, "lime");
-
-      // ======= REPLACED BLOCK START =======
-      const data = await res.json();
-
-      log("Response:", "#38bdf8");
-      log(JSON.stringify(data), "#38bdf8");
-
-      if (!data.access_token) {
-        log("OAuth failed - no access token", "red");
-        return;
-      }
-
-      token = data.access_token;
-
-      localStorage.setItem("access_token", token);
-      localStorage.setItem("oauth_done", "true");
-
-      log("OAuth SUCCESS", "lime");
-
-      window.history.replaceState(
-        {},
-        document.title,
-        REDIRECT_URI
-      );
-      // ======= REPLACED BLOCK END =======
-
-    } catch (err) {
-
-      log("OAuth error: " + err.message, "red");
-      console.error("OAuth FULL ERROR:", err);
-
-    }
+    window.history.replaceState({}, document.title, REDIRECT_URI);
   }
 
-  await handleOAuthCallback();
+  await handleOAuth();
+
+  // ================= STAKE =================
+  function stake(level) {
+    const mult = Math.pow(11.57, level - 1);
+    return +(BASE * mult).toFixed(2);
+  }
 
   // ================= STRATEGY =================
-  const BASE = 0.35;
-
-  function stake(level) {
-    if (level === 1) return BASE;
-    if (level === 2) return BASE * 11.57;
-    if (level === 3) return BASE * 11.57 * 11.57;
-    return BASE;
-  }
-
   function onTick(price) {
     if (!running || paused || tradeLock) return;
 
     const digit = Math.floor(price % 10);
 
     priceEl.textContent = price.toFixed(2);
+    log(`Tick ${price.toFixed(2)} → ${digit}`, "#38bdf8");
 
     buffer.push(digit);
-    if (buffer.length > 5) buffer.shift();
+    if (buffer.length > 10) buffer.shift();
 
+    // 🔥 2,3 ACTIVATOR
     if (!armed) {
       if (buffer.slice(-2).join("") === "23") {
         armed = true;
         m1 = null;
         m2 = null;
+        log("ACTIVATOR 2,3 DETECTED", "lime");
       }
       return;
     }
@@ -210,7 +160,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const trigger = digit;
 
     if (trigger === 9) {
-      log("Ignored 9", "red");
+      log("Ignored trigger 9", "red");
       armed = false;
       buffer = [];
       m1 = m2 = null;
@@ -223,51 +173,58 @@ document.addEventListener("DOMContentLoaded", async () => {
     buffer = [];
     m1 = m2 = null;
 
-    if (ladderLevel === 0) {
-      ladderLevel = 1;
-      placeTrade(1, barrier);
-    }
+    if (ladderLevel === 0) ladderLevel = 1;
+
+    placeTrade(ladderLevel, barrier);
   }
 
-  function placeTrade(level, digit) {
+  // ================= TRADE ENGINE =================
+  function placeTrade(level, barrier) {
     if (!authorized || tradeLock) return;
 
     tradeLock = true;
 
+    BASE = Number(stakeInput.value || 0.35);
+
     const amount = stake(level);
 
     send({
-      buy: 1,
-      price: amount,
-      parameters: {
-        amount,
-        basis: "stake",
-        contract_type: "DIGITDIFF",
-        currency: "USD",
-        duration: 1,
-        duration_unit: "t",
-        symbol: SYMBOL,
-        barrier: digit
-      }
+      proposal: 1,
+      amount,
+      basis: "stake",
+      contract_type: "DIGITDIFF",
+      currency: "USD",
+      duration: 1,
+      duration_unit: "t",
+      underlying_symbol: SYMBOL,
+      barrier
     });
 
     levelEl.textContent = level;
-    log(`TRADE L${level} → ${digit}`, "#38bdf8");
+    log(`TRADE L${level} → DIGITDIFF(${barrier})`, "#38bdf8");
   }
 
   // ================= CONNECTION =================
   function connect() {
-    ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${WS_APP_ID}`);
+    resetState();
 
-    ws.onopen = () => send({ authorize: token });
+    ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=1089`);
+
+    ws.onopen = () => {
+      log("WS CONNECTED", "yellow");
+      send({ authorize: token });
+    };
 
     ws.onmessage = (e) => {
       const d = JSON.parse(e.data);
 
       if (d.msg_type === "authorize") {
         authorized = true;
+
         send({ ticks: SYMBOL, subscribe: 1 });
         send({ balance: 1 });
+
+        log("AUTHORIZED (" + accountType + ")", "lime");
       }
 
       if (d.msg_type === "tick") {
@@ -293,7 +250,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         tradeLock = false;
 
         const pnl = Number(d.proposal_open_contract.profit || 0);
-        totalProfit += pnl;
 
         log(
           pnl >= 0 ? `WIN +${pnl.toFixed(2)}` : `LOSS ${pnl.toFixed(2)}`,
@@ -304,6 +260,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         else if (ladderLevel < 3) ladderLevel++;
       }
     };
+
+    ws.onclose = () => log("WS CLOSED", "red");
   }
 
   // ================= BUTTONS =================
@@ -314,12 +272,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     paused = false;
 
     connect();
+
     log("BOT STARTED", "lime");
   };
 
   pauseBtn.onclick = () => {
     paused = !paused;
-    log(paused ? "Paused" : "Running", "yellow");
+    log(paused ? "PAUSED" : "RUNNING", "yellow");
   };
 
   stopBtn.onclick = () => {
@@ -329,11 +288,20 @@ document.addEventListener("DOMContentLoaded", async () => {
   };
 
   resetBtn.onclick = () => {
-    buffer = [];
-    armed = false;
-    ladderLevel = 0;
-    tradeLock = false;
-    totalProfit = 0;
+    resetState();
     log("RESET DONE", "orange");
+  };
+
+  // ================= DEMO / LIVE SWITCH FIXED =================
+  modeBtn.onclick = () => {
+    accountType = accountType === "demo" ? "live" : "demo";
+
+    log("Switching to " + accountType + "...", "yellow");
+
+    if (ws) ws.close();
+
+    setTimeout(() => {
+      connect();
+    }, 500);
   };
 });
