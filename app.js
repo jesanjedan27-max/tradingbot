@@ -45,7 +45,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let tradeLock = false;
 
   let totalProfit = 0;
-  let lastContractId = null;
 
   // ================= LOG =================
   function log(msg, color = "#fff") {
@@ -87,9 +86,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     modeIndicator.style.color =
       ACCOUNT === "demo" ? "#38bdf8" : "#ef4444";
-
-    demoBtn.style.background = ACCOUNT === "demo" ? "#2563eb" : "";
-    liveBtn.style.background = ACCOUNT === "live" ? "#ef4444" : "";
   }
 
   // ================= LOGIN =================
@@ -149,11 +145,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
   handleOAuth();
 
-  // ================= CONNECT (FIXED - NO AUTHORIZE EVER) =================
+  // ================= CONNECT (100% FIXED - NO AUTHORIZE EVER) =================
   function connect() {
     resetState();
 
-    if (ws) ws.close();
+    if (ws) {
+      try { ws.close(); } catch (e) {}
+    }
 
     token = localStorage.getItem("access_token");
     if (!token) {
@@ -172,12 +170,13 @@ document.addEventListener("DOMContentLoaded", () => {
     })
       .then(r => r.json())
       .then(data => {
+
         ws = new WebSocket(data.data.url);
 
         ws.onopen = () => {
           log("WS CONNECTED", "yellow");
 
-          // ONLY THESE (NO AUTHORIZE)
+          // ONLY THESE TWO (NO AUTH EVER)
           send({ ticks: SYMBOL, subscribe: 1 });
           send({ balance: 1 });
         };
@@ -192,13 +191,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
           // ================= BALANCE =================
           if (d.msg_type === "balance") {
-            balanceEl.textContent =
-              Number(d.balance.balance).toFixed(2);
-
-            log(
-              `Balance (${ACCOUNT}): ${d.balance.balance}`,
-              "lime"
-            );
+            balanceEl.textContent = Number(d.balance.balance).toFixed(2);
+            log(`Balance (${ACCOUNT}): ${d.balance.balance}`, "lime");
           }
 
           // ================= TICKS =================
@@ -207,7 +201,6 @@ document.addEventListener("DOMContentLoaded", () => {
             const dig = digit(price);
 
             priceEl.textContent = price.toFixed(2);
-
             log(`Tick ${price.toFixed(2)} → ${dig}`, "#38bdf8");
 
             onTick(price);
@@ -215,11 +208,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
           // ================= BUY =================
           if (d.msg_type === "buy") {
-            lastContractId = d.buy.contract_id;
-
             send({
               proposal_open_contract: 1,
-              contract_id: lastContractId,
+              contract_id: d.buy.contract_id,
               subscribe: 1
             });
           }
@@ -242,8 +233,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
               log(
                 pnl >= 0
-                  ? `WIN +${pnl.toFixed(2)} | Digit ${winDigit}`
-                  : `LOSS ${pnl.toFixed(2)} | Digit ${winDigit}`,
+                  ? `WIN +${pnl} | Digit ${winDigit}`
+                  : `LOSS ${pnl} | Digit ${winDigit}`,
                 pnl >= 0 ? "lime" : "red"
               );
 
@@ -253,6 +244,7 @@ document.addEventListener("DOMContentLoaded", () => {
         };
 
         ws.onclose = () => log("WS CLOSED", "red");
+
       });
   }
 
