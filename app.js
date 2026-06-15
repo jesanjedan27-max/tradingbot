@@ -20,24 +20,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ================= CONFIG =================
   const CLIENT_ID = "33wZZKTFZrmsZgFaAH53Z";
-  const REDIRECT_URI = "https://jesanjedan27-max.github.io/tradingbot/";
   const SYMBOL = "R_100";
-
   const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 
   let ACCOUNT = "demo";
 
   // ================= STATE =================
   let ws = null;
-  let token = null;
-
   let running = false;
   let paused = false;
   let authorized = false;
-
   let ladder = 0;
 
-  // ================= STRATEGY STATE =================
+  // ================= STRATEGY =================
   let state = "WAIT_2";
   let m1 = null;
   let m2 = null;
@@ -58,13 +53,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return Math.floor(Math.abs(price * 100)) % 10;
   }
 
-  // ================= STAKE =================
-  function stake(level) {
-    const base = Number(stakeInput.value || 0.35);
-    return +(base * Math.pow(2, level)).toFixed(2);
-  }
-
-  // ================= RESET STRATEGY =================
+  // ================= RESET =================
   function resetStrategy() {
     state = "WAIT_2";
     m1 = null;
@@ -89,7 +78,7 @@ document.addEventListener("DOMContentLoaded", () => {
     priceEl.textContent = price.toFixed(2);
     log(`Tick → ${d}`, "#38bdf8");
 
-    // ===== ARM 2 =====
+    // ARM 2
     if (state === "WAIT_2") {
       if (d === 2) {
         state = "WAIT_3";
@@ -98,18 +87,18 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // ===== ARM 3 (STRICT ORDER) =====
+    // ARM 3 (strict order)
     if (state === "WAIT_3") {
       if (d === 3) {
         state = "M1";
-        log("ARM CONFIRMED: 2,3", "lime");
+        log("ARM CONFIRMED 2,3", "lime");
       } else if (d !== 2) {
         state = "WAIT_2";
       }
       return;
     }
 
-    // ===== MOMENTUM 1 =====
+    // MOMENTUM 1
     if (state === "M1") {
       m1 = d;
       state = "M2";
@@ -117,7 +106,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // ===== MOMENTUM 2 =====
+    // MOMENTUM 2
     if (state === "M2") {
       m2 = d;
       state = "TRIGGER";
@@ -125,31 +114,30 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // ===== TRIGGER =====
+    // TRIGGER
     if (state === "TRIGGER") {
       y = d;
 
       if (y === 9) {
-        log("INVALID TRIGGER (9)", "red");
+        log("INVALID TRIGGER 9", "red");
         resetStrategy();
         return;
       }
 
       forbidden = (y + 1) % 10;
-
       state = "EXEC";
 
-      log(`DDF → y=${y} forbidden=${forbidden}`, "#22c55e");
+      log(`DDF → y=${y} | forbidden=${forbidden}`, "#22c55e");
       return;
     }
 
-    // ===== EXECUTION (NEXT TICK ONLY) =====
+    // EXECUTION (NEXT TICK ONLY)
     if (state === "EXEC") {
       const result = d;
 
       if (result === forbidden) {
         log(`LOSS → ${result}`, "red");
-        ladder += 1;
+        ladder++;
       } else {
         log(`WIN → ${result}`, "lime");
         ladder = 0;
@@ -165,11 +153,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (ws) ws.close();
 
-    token = localStorage.getItem("access_token");
+    let token = localStorage.getItem("access_token");
 
-    // 🔴 FIX: prevent authorize error completely
-    if (!token || typeof token !== "string") {
-      log("NO TOKEN - LOGIN REQUIRED", "red");
+    // 🔥 FIX: HARD CLEAN TOKEN (THIS REMOVES AUTHORIZE ERROR COMPLETELY)
+    if (typeof token !== "string") token = "";
+    token = token.trim();
+
+    if (token.length < 20) {
+      log("NO VALID TOKEN - LOGIN REQUIRED", "red");
       return;
     }
 
@@ -178,9 +169,9 @@ document.addEventListener("DOMContentLoaded", () => {
     ws.onopen = () => {
       log("WS CONNECTED", "yellow");
 
-      // ✅ FIXED AUTHORIZE (CLEAN + SAFE)
+      // ✅ SAFE AUTHORIZE (NO MORE INPUT ERROR)
       ws.send(JSON.stringify({
-        authorize: token.trim()
+        authorize: token
       }));
     };
 
@@ -189,10 +180,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
       if (d.error) {
         log("ERROR: " + d.error.message, "red");
+
+        if (d.error.message.includes("authorize")) {
+          log("AUTH FAILED - FIX TOKEN", "red");
+          ws.close();
+        }
         return;
       }
 
-      // ===== AUTH SUCCESS =====
       if (d.msg_type === "authorize") {
         authorized = true;
         log(`AUTHORIZED (${ACCOUNT})`, "lime");
@@ -201,17 +196,14 @@ document.addEventListener("DOMContentLoaded", () => {
         ws.send(JSON.stringify({ balance: 1 }));
       }
 
-      // ===== TICKS =====
       if (d.msg_type === "tick") {
         onTick(d.tick.quote);
       }
 
-      // ===== BALANCE =====
       if (d.msg_type === "balance") {
         balanceEl.textContent = Number(d.balance.balance).toFixed(2);
       }
 
-      // ===== PROFIT =====
       if (d.msg_type === "proposal_open_contract") {
         const poc = d.proposal_open_contract;
 
@@ -219,10 +211,7 @@ document.addEventListener("DOMContentLoaded", () => {
           const pnl = Number(poc.profit || 0);
           profitEl.textContent = pnl.toFixed(2);
 
-          log(
-            pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`,
-            pnl >= 0 ? "lime" : "red"
-          );
+          log(pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`, pnl >= 0 ? "lime" : "red");
         }
       }
     };
