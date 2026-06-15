@@ -13,7 +13,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const priceEl = $("price");
   const balanceEl = $("balance");
-  const levelEl = $("level");
   const profitEl = $("profit");
   const logEl = $("log");
 
@@ -22,22 +21,23 @@ document.addEventListener("DOMContentLoaded", () => {
   // ================= CONFIG =================
   const CLIENT_ID = "33wZZKTFZrmsZgFaAH53Z";
   const REDIRECT_URI = "https://jesanjedan27-max.github.io/tradingbot/";
-  const VERCEL_URL = "https://oauthexchange23.vercel.app/api/token";
   const SYMBOL = "R_100";
+
+  const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 
   let ACCOUNT = "demo";
 
   // ================= STATE =================
   let ws = null;
-  let token = localStorage.getItem("access_token");
+  let token = null;
 
   let running = false;
   let paused = false;
   let authorized = false;
 
-  let ladderLevel = 0;
+  let ladder = 0;
 
-  // ================= ENGINE STATE =================
+  // ================= STRATEGY STATE =================
   let state = "WAIT_2";
   let m1 = null;
   let m2 = null;
@@ -64,8 +64,8 @@ document.addEventListener("DOMContentLoaded", () => {
     return +(base * Math.pow(2, level)).toFixed(2);
   }
 
-  // ================= RESET ENGINE =================
-  function resetEngine() {
+  // ================= RESET STRATEGY =================
+  function resetStrategy() {
     state = "WAIT_2";
     m1 = null;
     m2 = null;
@@ -73,7 +73,7 @@ document.addEventListener("DOMContentLoaded", () => {
     forbidden = null;
   }
 
-  // ================= SEND =================
+  // ================= SAFE SEND =================
   function send(data) {
     if (!ws || ws.readyState !== 1) return;
     if (!authorized) return;
@@ -87,104 +87,101 @@ document.addEventListener("DOMContentLoaded", () => {
     const d = digit(price);
 
     priceEl.textContent = price.toFixed(2);
+    log(`Tick → ${d}`, "#38bdf8");
 
-    log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
-
-    // ================= STEP 1: WAIT 2 =================
+    // ===== ARM 2 =====
     if (state === "WAIT_2") {
       if (d === 2) {
         state = "WAIT_3";
-        log("ARM → 2 detected", "lime");
+        log("ARM: 2 detected", "lime");
       }
       return;
     }
 
-    // ================= STEP 2: WAIT 3 (STRICT ORDER) =================
+    // ===== ARM 3 (STRICT ORDER) =====
     if (state === "WAIT_3") {
       if (d === 3) {
         state = "M1";
-        log("ARM CONFIRMED → 2,3", "lime");
+        log("ARM CONFIRMED: 2,3", "lime");
       } else if (d !== 2) {
         state = "WAIT_2";
       }
       return;
     }
 
-    // ================= STEP 3: MOMENTUM 1 =================
+    // ===== MOMENTUM 1 =====
     if (state === "M1") {
       m1 = d;
       state = "M2";
-      log(`MOMENTUM 1 → ${m1}`, "#facc15");
+      log("M1 → " + m1, "#facc15");
       return;
     }
 
-    // ================= STEP 4: MOMENTUM 2 =================
+    // ===== MOMENTUM 2 =====
     if (state === "M2") {
       m2 = d;
       state = "TRIGGER";
-      log(`MOMENTUM 2 → ${m2}`, "#facc15");
+      log("M2 → " + m2, "#facc15");
       return;
     }
 
-    // ================= STEP 5: TRIGGER =================
+    // ===== TRIGGER =====
     if (state === "TRIGGER") {
       y = d;
 
       if (y === 9) {
-        log("INVALID → trigger 9 ignored", "red");
-        resetEngine();
+        log("INVALID TRIGGER (9)", "red");
+        resetStrategy();
         return;
       }
 
       forbidden = (y + 1) % 10;
 
-      state = "WAIT_EXEC";
+      state = "EXEC";
 
-      log(
-        `DDF → trigger ${y} | forbidden ${forbidden}`,
-        "#22c55e"
-      );
+      log(`DDF → y=${y} forbidden=${forbidden}`, "#22c55e");
       return;
     }
 
-    // ================= STEP 6: EXECUTION (NEXT TICK ONLY) =================
-    if (state === "WAIT_EXEC") {
+    // ===== EXECUTION (NEXT TICK ONLY) =====
+    if (state === "EXEC") {
       const result = d;
-
-      log(`EXECUTION → ${result}`, "#60a5fa");
 
       if (result === forbidden) {
         log(`LOSS → ${result}`, "red");
-        ladderLevel += 1;
+        ladder += 1;
       } else {
         log(`WIN → ${result}`, "lime");
-        ladderLevel = 0;
+        ladder = 0;
       }
 
-      resetEngine();
+      resetStrategy();
     }
   }
 
   // ================= CONNECT =================
   function connect() {
-    resetEngine();
+    resetStrategy();
 
-    if (ws) {
-      ws.close();
-    }
+    if (ws) ws.close();
 
     token = localStorage.getItem("access_token");
 
-    if (!token) {
+    // 🔴 FIX: prevent authorize error completely
+    if (!token || typeof token !== "string") {
       log("NO TOKEN - LOGIN REQUIRED", "red");
       return;
     }
 
-    ws = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
+    ws = new WebSocket(WS_URL);
 
     ws.onopen = () => {
       log("WS CONNECTED", "yellow");
-      ws.send(JSON.stringify({ authorize: token }));
+
+      // ✅ FIXED AUTHORIZE (CLEAN + SAFE)
+      ws.send(JSON.stringify({
+        authorize: token.trim()
+      }));
     };
 
     ws.onmessage = (e) => {
@@ -195,6 +192,7 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
+      // ===== AUTH SUCCESS =====
       if (d.msg_type === "authorize") {
         authorized = true;
         log(`AUTHORIZED (${ACCOUNT})`, "lime");
@@ -203,29 +201,17 @@ document.addEventListener("DOMContentLoaded", () => {
         ws.send(JSON.stringify({ balance: 1 }));
       }
 
+      // ===== TICKS =====
       if (d.msg_type === "tick") {
         onTick(d.tick.quote);
       }
 
+      // ===== BALANCE =====
       if (d.msg_type === "balance") {
         balanceEl.textContent = Number(d.balance.balance).toFixed(2);
       }
 
-      if (d.msg_type === "proposal") {
-        ws.send(JSON.stringify({
-          buy: d.proposal.id,
-          price: d.proposal.ask_price
-        }));
-      }
-
-      if (d.msg_type === "buy") {
-        ws.send(JSON.stringify({
-          proposal_open_contract: 1,
-          contract_id: d.buy.contract_id,
-          subscribe: 1
-        }));
-      }
-
+      // ===== PROFIT =====
       if (d.msg_type === "proposal_open_contract") {
         const poc = d.proposal_open_contract;
 
@@ -263,19 +249,19 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   resetBtn.onclick = () => {
-    resetEngine();
+    resetStrategy();
     log("RESET DONE", "orange");
   };
 
   demoBtn.onclick = () => {
     ACCOUNT = "demo";
-    log("DEMO MODE", "blue");
+    log("SWITCHED DEMO", "blue");
     connect();
   };
 
   liveBtn.onclick = () => {
     ACCOUNT = "live";
-    log("LIVE MODE", "red");
+    log("SWITCHED LIVE", "red");
     connect();
   };
 });
