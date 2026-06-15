@@ -7,11 +7,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   const pauseBtn = $("pause");
   const stopBtn  = $("stop");
   const resetBtn = $("reset");
-  const modeBtn  = $("mode");
+
+  const demoBtn = $("demoBtn");
+  const liveBtn = $("liveBtn");
+  const modeIndicator = $("modeIndicator");
 
   const priceEl = $("price");
   const balanceEl = $("balance");
   const levelEl = $("level");
+  const profitEl = $("profit");
   const logEl = $("log");
   const stakeInput = $("stakeInput");
 
@@ -21,7 +25,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const VERCEL_URL = "https://oauthexchange23.vercel.app/api/token";
   const SYMBOL = "R_100";
 
-  // ✅ YOUR ACCOUNTS (FIXED)
+  // Demo / Live accounts
   const ACCOUNTS = {
     demo: "DOT92927394",
     live: "ROT91650098"
@@ -40,16 +44,25 @@ document.addEventListener("DOMContentLoaded", async () => {
   let ladderLevel = 0;
   let tradeLock = false;
 
+  // strategy state machine
   let buffer = [];
   let armed = false;
+  let stage = 0; // 0=search, 1=arm, 2=ready
+
   let m1 = null;
   let m2 = null;
 
   let BASE = 0.35;
+  let totalProfit = 0;
+
+  let pendingProposalId = null;
 
   // ================= LOG =================
   function log(msg, color = "#fff") {
-    logEl.innerHTML += `<div style="color:${color}">${msg}</div>`;
+    const div = document.createElement("div");
+    div.style.color = color;
+    div.textContent = msg;
+    logEl.appendChild(div);
     logEl.scrollTop = logEl.scrollHeight;
   }
 
@@ -59,35 +72,47 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  // ================= RESET STATE =================
+  // ================= MODE UI =================
+  function updateModeUI() {
+    if (accountType === "demo") {
+      modeIndicator.textContent = "DEMO MODE";
+      modeIndicator.className = "mode-indicator demo";
+    } else {
+      modeIndicator.textContent = "LIVE MODE";
+      modeIndicator.className = "mode-indicator live";
+    }
+  }
+
+  // ================= RESET =================
   function resetState() {
     authorized = false;
     tradeLock = false;
     buffer = [];
     armed = false;
+    stage = 0;
     m1 = null;
     m2 = null;
     ladderLevel = 0;
-    BASE = Number(stakeInput.value || 0.35);
+    totalProfit = 0;
+    pendingProposalId = null;
   }
 
-  // ================= LOGIN =================
+  // ================= LOGIN (PKCE unchanged) =================
   loginBtn.onclick = async () => {
     const verifier = crypto.randomUUID().replace(/-/g, "");
     const challenge = btoa(verifier).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
     localStorage.setItem("pkce_verifier", verifier);
 
-    const authUrl =
+    const url =
       `https://auth.deriv.com/oauth2/auth` +
-      `?response_type=code` +
-      `&client_id=${CLIENT_ID}` +
+      `?response_type=code&client_id=${CLIENT_ID}` +
       `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
       `&scope=trade` +
       `&code_challenge=${challenge}` +
       `&code_challenge_method=S256`;
 
-    window.location.href = authUrl;
+    window.location.href = url;
   };
 
   async function handleOAuth() {
@@ -119,7 +144,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     localStorage.setItem("access_token", token);
 
     log("LOGIN SUCCESS", "lime");
-
     window.history.replaceState({}, document.title, REDIRECT_URI);
   }
 
@@ -131,63 +155,69 @@ document.addEventListener("DOMContentLoaded", async () => {
     return +(BASE * mult).toFixed(2);
   }
 
-  // ================= STRATEGY =================
+  // ================= STRATEGY (SAFE STATE MACHINE) =================
   function onTick(price) {
     if (!running || paused || tradeLock) return;
 
     const digit = Math.floor(price % 10);
 
     priceEl.textContent = price.toFixed(2);
+
     log(`Tick ${price.toFixed(2)} → ${digit}`, "#38bdf8");
 
     buffer.push(digit);
     if (buffer.length > 10) buffer.shift();
 
-    // 🔥 2,3 ACTIVATOR
-    if (!armed) {
+    // STEP 1: LOOK FOR 2,3
+    if (stage === 0) {
       if (buffer.slice(-2).join("") === "23") {
-        armed = true;
-        m1 = null;
-        m2 = null;
-        log("ACTIVATOR 2,3 DETECTED", "lime");
+        stage = 1;
+        log("ACTIVATOR 2,3 FOUND", "lime");
       }
       return;
     }
 
-    if (m1 === null) return (m1 = digit);
-    if (m2 === null) return (m2 = digit);
-
-    const trigger = digit;
-
-    if (trigger === 9) {
-      log("Ignored trigger 9", "red");
-      armed = false;
-      buffer = [];
-      m1 = m2 = null;
+    // STEP 2: MOMENTUM 1
+    if (stage === 1) {
+      m1 = digit;
+      stage = 2;
       return;
     }
 
-    const barrier = trigger + 1;
+    // STEP 3: MOMENTUM 2
+    if (stage === 2) {
+      m2 = digit;
 
-    armed = false;
-    buffer = [];
-    m1 = m2 = null;
+      const trigger = digit;
 
-    if (ladderLevel === 0) ladderLevel = 1;
+      if (trigger === 9) {
+        log("INVALID TRIGGER 9 → RESET", "red");
+        stage = 0;
+        buffer = [];
+        return;
+      }
 
-    placeTrade(ladderLevel, barrier);
+      const barrier = trigger + 1;
+
+      executeTrade(barrier);
+
+      stage = 0;
+      buffer = [];
+    }
   }
 
-  // ================= TRADE ENGINE =================
-  function placeTrade(level, barrier) {
+  // ================= PROPER TRADE FLOW =================
+  function executeTrade(barrier) {
     if (!authorized || tradeLock) return;
 
     tradeLock = true;
 
     BASE = Number(stakeInput.value || 0.35);
+    const amount = stake(ladderLevel || 1);
 
-    const amount = stake(level);
+    pendingProposalId = null;
 
+    // STEP 1: REQUEST PROPOSAL
     send({
       proposal: 1,
       amount,
@@ -200,8 +230,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       barrier
     });
 
-    levelEl.textContent = level;
-    log(`TRADE L${level} → DIGITDIFF(${barrier})`, "#38bdf8");
+    log(`PROPOSAL REQUESTED → barrier ${barrier}`, "#38bdf8");
+
+    // buy will happen AFTER proposal response
   }
 
   // ================= CONNECTION =================
@@ -220,11 +251,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       if (d.msg_type === "authorize") {
         authorized = true;
-
         send({ ticks: SYMBOL, subscribe: 1 });
         send({ balance: 1 });
-
-        log("AUTHORIZED (" + accountType + ")", "lime");
+        log("AUTHORIZED", "lime");
       }
 
       if (d.msg_type === "tick") {
@@ -235,6 +264,19 @@ document.addEventListener("DOMContentLoaded", async () => {
         balanceEl.textContent = Number(d.balance.balance).toFixed(2);
       }
 
+      // STEP 1 RESPONSE → BUY
+      if (d.msg_type === "proposal") {
+        pendingProposalId = d.proposal.id;
+
+        send({
+          buy: pendingProposalId,
+          price: d.proposal.ask_price
+        });
+
+        log("BUY SENT", "lime");
+      }
+
+      // STEP 2 RESULT
       if (d.msg_type === "buy") {
         send({
           proposal_open_contract: 1,
@@ -243,6 +285,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         });
       }
 
+      // RESULT
       if (
         d.msg_type === "proposal_open_contract" &&
         d.proposal_open_contract.is_sold
@@ -250,14 +293,19 @@ document.addEventListener("DOMContentLoaded", async () => {
         tradeLock = false;
 
         const pnl = Number(d.proposal_open_contract.profit || 0);
+        totalProfit += pnl;
 
-        log(
-          pnl >= 0 ? `WIN +${pnl.toFixed(2)}` : `LOSS ${pnl.toFixed(2)}`,
-          pnl >= 0 ? "lime" : "red"
-        );
+        profitEl.textContent = totalProfit.toFixed(2);
+
+        log(pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`, pnl >= 0 ? "lime" : "red");
 
         if (pnl > 0) ladderLevel = 0;
         else if (ladderLevel < 3) ladderLevel++;
+      }
+
+      if (d.error) {
+        tradeLock = false;
+        log("ERROR: " + d.error.message, "red");
       }
     };
 
@@ -267,12 +315,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   // ================= BUTTONS =================
   startBtn.onclick = () => {
     if (!token) return alert("Login first");
-
     running = true;
-    paused = false;
-
     connect();
-
     log("BOT STARTED", "lime");
   };
 
@@ -292,16 +336,19 @@ document.addEventListener("DOMContentLoaded", async () => {
     log("RESET DONE", "orange");
   };
 
-  // ================= DEMO / LIVE SWITCH FIXED =================
-  modeBtn.onclick = () => {
-    accountType = accountType === "demo" ? "live" : "demo";
-
-    log("Switching to " + accountType + "...", "yellow");
-
-    if (ws) ws.close();
-
-    setTimeout(() => {
-      connect();
-    }, 500);
+  demoBtn.onclick = () => {
+    accountType = "demo";
+    updateModeUI();
+    ws?.close();
+    setTimeout(connect, 500);
   };
+
+  liveBtn.onclick = () => {
+    accountType = "live";
+    updateModeUI();
+    ws?.close();
+    setTimeout(connect, 500);
+  };
+
+  updateModeUI();
 });
