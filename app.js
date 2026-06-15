@@ -1,6 +1,7 @@
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
+  // ================= UI =================
   const loginBtn = $("login");
   const startBtn = $("start");
   const pauseBtn = $("pause");
@@ -18,6 +19,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const stakeInput = $("stakeInput");
   const modeIndicator = $("modeIndicator");
 
+  // ================= CONFIG =================
   const CLIENT_ID = "33wZZKTFZrmsZgFaAH53Z";
   const SYMBOL = "R_100";
 
@@ -41,27 +43,34 @@ document.addEventListener("DOMContentLoaded", () => {
   let ladderLevel = 0;
   let totalProfit = 0;
 
-  function log(msg, c = "#fff") {
-    const d = document.createElement("div");
-    d.textContent = msg;
-    d.style.color = c;
-    logEl.appendChild(d);
+  // ================= LOG =================
+  function log(msg, color = "#fff") {
+    const div = document.createElement("div");
+    div.style.color = color;
+    div.textContent = msg;
+    logEl.appendChild(div);
     logEl.scrollTop = logEl.scrollHeight;
   }
 
+  // ================= SEND =================
   function send(data) {
-    if (ws && ws.readyState === 1) ws.send(JSON.stringify(data));
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify(data));
+    }
   }
 
+  // ================= DIGIT =================
   function digit(price) {
     return Math.floor(Math.abs(price * 100)) % 10;
   }
 
+  // ================= STAKE =================
   function stake(level) {
     const base = Number(stakeInput.value || 0.35);
     return +(base * Math.pow(11.57, level)).toFixed(2);
   }
 
+  // ================= RESET =================
   function resetStrategy() {
     armActive = false;
     momentum = [];
@@ -69,19 +78,21 @@ document.addEventListener("DOMContentLoaded", () => {
     tradeLock = false;
   }
 
+  // ================= STRATEGY =================
   function onTick(price) {
-    if (!running || paused || tradeLock) return;
+    if (!running || paused) return;
 
     const d = digit(price);
+
+    // ================= ALWAYS LOG FIRST (FIX) =================
+    log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
 
     priceEl.textContent = price.toFixed(2);
 
     lastDigits.push(d);
     if (lastDigits.length > 10) lastDigits.shift();
 
-    log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
-
-    // ================= ARM DETECTION =================
+    // ================= ARM =================
     if (!armActive) {
       if (lastDigits.slice(-2).join("") === "23") {
         armActive = true;
@@ -91,7 +102,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // ================= MOMENTUM COLLECTION =================
+    // ================= MOMENTUM =================
     if (armActive && momentum.length < 3) {
       momentum.push(d);
       log(`MOMENTUM → ${momentum.join(",")}`, "#facc15");
@@ -100,26 +111,25 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // ================= TRIGGER =================
     if (armActive && momentum.length >= 3) {
-
       if (d === 9) {
         log("IGNORED 9", "red");
         resetStrategy();
         return;
       }
 
-      const winDigit = (d + 1) % 10;
+      const barrier = (d + 1) % 10;
 
       log(
-        `TRADE TRIGGER → momentum: ${momentum.join(",")} | win digit: ${winDigit}`,
+        `TRADE SIGNAL → momentum [${momentum.join(",")}] | win digit ${barrier}`,
         "#38bdf8"
       );
 
-      placeTrade(winDigit);
-
+      placeTrade(barrier);
       resetStrategy();
     }
   }
 
+  // ================= TRADE =================
   function placeTrade(barrier) {
     if (tradeLock) return;
 
@@ -142,6 +152,7 @@ document.addEventListener("DOMContentLoaded", () => {
     log(`TRADE SENT → ${barrier} | stake ${amount}`, "#38bdf8");
   }
 
+  // ================= CONNECT =================
   function connect() {
     resetStrategy();
 
@@ -163,6 +174,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         ws.onopen = () => {
           log("WS CONNECTED", "lime");
+
           send({ ticks: SYMBOL, subscribe: 1 });
           send({ balance: 1 });
         };
@@ -170,21 +182,17 @@ document.addEventListener("DOMContentLoaded", () => {
         ws.onmessage = (e) => {
           const d = JSON.parse(e.data);
 
+          // ================= BALANCE =================
           if (d.msg_type === "balance") {
             balanceEl.textContent = Number(d.balance.balance).toFixed(2);
           }
 
+          // ================= TICK =================
           if (d.msg_type === "tick") {
             onTick(d.tick.quote);
           }
 
-          if (d.msg_type === "proposal") {
-            send({
-              buy: d.proposal.id,
-              price: d.proposal.ask_price
-            });
-          }
-
+          // ================= BUY =================
           if (d.msg_type === "buy") {
             send({
               proposal_open_contract: 1,
@@ -193,6 +201,7 @@ document.addEventListener("DOMContentLoaded", () => {
             });
           }
 
+          // ================= RESULT =================
           if (d.msg_type === "proposal_open_contract") {
             const c = d.proposal_open_contract;
 
@@ -213,10 +222,15 @@ document.addEventListener("DOMContentLoaded", () => {
               levelEl.textContent = ladderLevel;
             }
           }
+
+          if (d.error) {
+            log("ERROR: " + d.error.message, "red");
+          }
         };
       });
   }
 
+  // ================= BUTTONS =================
   startBtn.onclick = () => {
     running = true;
     connect();
@@ -241,11 +255,6 @@ document.addEventListener("DOMContentLoaded", () => {
     log("RESET DONE", "orange");
   };
 
-  demoBtn.onclick = () => {
-    ACCOUNT = "demo";
-  };
-
-  liveBtn.onclick = () => {
-    ACCOUNT = "live";
-  };
+  demoBtn.onclick = () => (ACCOUNT = "demo");
+  liveBtn.onclick = () => (ACCOUNT = "live");
 });
