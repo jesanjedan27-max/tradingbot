@@ -1,11 +1,11 @@
-document.addEventListener("DOMContentLoaded", async () => {
+document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
   // ================= UI =================
   const loginBtn = $("login");
   const startBtn = $("start");
   const pauseBtn = $("pause");
-  const stopBtn  = $("stop");
+  const stopBtn = $("stop");
   const resetBtn = $("reset");
 
   const demoBtn = $("demoBtn");
@@ -15,8 +15,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   const balanceEl = $("balance");
   const levelEl = $("level");
   const logEl = $("log");
-
-  const stakeInput = $("stakeInput");
 
   // ================= CONFIG =================
   const CLIENT_ID = "33wZZKTFZrmsZgFaAH53Z";
@@ -30,7 +28,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   };
 
   // ================= STATE =================
-  let ws;
+  let ws = null;
   let token = localStorage.getItem("access_token");
 
   let running = false;
@@ -45,8 +43,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   let ladderLevel = 0;
   let tradeLock = false;
 
-  let BASE = 0.35;
-
   // ================= LOG =================
   function log(msg, color = "#fff") {
     const div = document.createElement("div");
@@ -56,32 +52,26 @@ document.addEventListener("DOMContentLoaded", async () => {
     logEl.scrollTop = logEl.scrollHeight;
   }
 
+  // ================= SAFE SEND (FIX CORE BUG) =================
   function send(data) {
-    if (ws && ws.readyState === 1) {
-      ws.send(JSON.stringify(data));
-    }
-  }
+    if (!ws || ws.readyState !== 1) return;
 
-  // ================= MODE UI =================
-  function setModeUI() {
-    if (accountType === "demo") {
-      demoBtn.style.background = "blue";
-      liveBtn.style.background = "";
-    } else {
-      liveBtn.style.background = "red";
-      demoBtn.style.background = "";
-    }
+    // 🔴 BLOCK EVERYTHING UNTIL AUTH IS COMPLETE
+    if (!authorized && !data.authorize) return;
+
+    ws.send(JSON.stringify(data));
   }
 
   // ================= DIGIT =================
-  function getDigit(price) {
+  function digitFromPrice(price) {
     return Math.floor(Math.abs(price * 100)) % 10;
   }
 
   // ================= STAKE =================
   function stake(level) {
-    const mult = Math.pow(11.57, level - 1);
-    return +(BASE * mult).toFixed(2);
+    const base = 0.35;
+    const mult = Math.pow(11.57, Math.max(0, level - 1));
+    return +(base * mult).toFixed(2);
   }
 
   // ================= RESET =================
@@ -91,6 +81,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     buffer = [];
     stage = 0;
     ladderLevel = 0;
+  }
+
+  // ================= MODE UI =================
+  function setModeUI() {
+    demoBtn.style.background = accountType === "demo" ? "blue" : "";
+    liveBtn.style.background = accountType === "live" ? "red" : "";
   }
 
   // ================= LOGIN =================
@@ -114,6 +110,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     window.location.href = url;
   };
 
+  // ================= OAUTH CALLBACK =================
   async function handleOAuth() {
     const url = new URL(window.location.href);
     const code = url.searchParams.get("code");
@@ -134,10 +131,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const data = await res.json();
 
-    token =
-      data.access_token ||
-      data.data?.access_token ||
-      null;
+    token = data.access_token || data.data?.access_token;
 
     if (!token) {
       log("OAuth FAILED", "red");
@@ -151,13 +145,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     window.history.replaceState({}, document.title, REDIRECT_URI);
   }
 
-  await handleOAuth();
+  handleOAuth();
 
   // ================= STRATEGY =================
   function onTick(price) {
     if (!running || paused || tradeLock) return;
 
-    const digit = getDigit(price);
+    const digit = digitFromPrice(price);
 
     priceEl.textContent = price.toFixed(2);
 
@@ -202,7 +196,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     tradeLock = true;
 
-    const amount = stake(ladderLevel || 1);
+    const amount = stake(ladderLevel);
 
     send({
       proposal: 1,
@@ -219,16 +213,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     log(`TRADE → ${barrier}`, "#38bdf8");
   }
 
-  // ================= CONNECT =================
+  // ================= CONNECTION =================
   function connect() {
     resetState();
 
-    if (ws) ws.close();
+    if (ws) {
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.close();
+    }
 
     token = localStorage.getItem("access_token");
 
-    if (!token || token.length < 10) {
-      log("INVALID TOKEN - LOGIN REQUIRED", "red");
+    if (!token) {
+      log("NO TOKEN", "red");
       return;
     }
 
@@ -237,25 +235,27 @@ document.addEventListener("DOMContentLoaded", async () => {
     ws.onopen = () => {
       log("WS CONNECTED", "yellow");
 
-      log("TOKEN OK → AUTH SENDING", "#38bdf8");
-
       send({ authorize: token });
     };
 
     ws.onmessage = (e) => {
       const d = JSON.parse(e.data);
 
+      if (d.error) {
+        log("ERROR: " + d.error.message, "red");
+        tradeLock = false;
+        return;
+      }
+
       if (d.msg_type === "authorize") {
         authorized = true;
 
         log(`AUTHORIZED (${accountType})`, "lime");
 
-        send({ ticks: SYMBOL, subscribe: 1 });
-
-        // FIX: safe balance delay
         setTimeout(() => {
+          send({ ticks: SYMBOL, subscribe: 1 });
           send({ balance: 1 });
-        }, 800);
+        }, 300);
       }
 
       if (d.msg_type === "tick") {
@@ -292,12 +292,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         log(pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`, pnl >= 0 ? "lime" : "red");
 
         if (pnl > 0) ladderLevel = 0;
-        else if (ladderLevel < 3) ladderLevel++;
-      }
-
-      if (d.error) {
-        tradeLock = false;
-        log("ERROR: " + d.error.message, "red");
+        else ladderLevel++;
       }
     };
 
@@ -324,7 +319,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   resetBtn.onclick = () => {
     resetState();
-    log("RESET", "orange");
+    log("RESET DONE", "orange");
   };
 
   demoBtn.onclick = () => {
