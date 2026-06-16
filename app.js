@@ -32,12 +32,9 @@ document.addEventListener("DOMContentLoaded", () => {
   let totalProfit = 0;
 
   // ================= STRATEGY STATE =================
-  let prevDigit = null;
-  let arm = false;
-  let momentum = [];
-
-  let pendingTrade = null;     // 🔥 FIX CORE
-  let waitingExecution = false;
+  let sequence = [];
+  let waitingProposal = false;
+  let proposalId = null;
 
   function log(msg, color = "#fff") {
     const div = document.createElement("div");
@@ -62,16 +59,16 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function resetStrategy() {
-    arm = false;
-    momentum = [];
-    pendingTrade = null;
-    waitingExecution = false;
-    prevDigit = null;
+    sequence = [];
+    waitingProposal = false;
+    proposalId = null;
   }
 
   // ================= TRADE =================
   function placeTrade(barrier) {
     const amount = stake(ladder);
+
+    waitingProposal = true;
 
     send({
       proposal: 1,
@@ -85,78 +82,47 @@ document.addEventListener("DOMContentLoaded", () => {
       barrier
     });
 
-    log(`TRADE SENT → barrier ${barrier} | stake ${amount}`, "#38bdf8");
+    log(`PROPOSAL SENT → DIGITDIFF ${barrier} | stake ${amount}`, "#38bdf8");
   }
 
-  // ================= CORE STRATEGY =================
+  // ================= STRATEGY =================
   function onTick(price) {
     if (!running || paused) return;
 
     const d = digit(price);
 
     priceEl.textContent = price.toFixed(2);
+
     log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
 
-    // ================= ARM =================
-    if (!arm) {
-      if (prevDigit === 2 && d === 3) {
-        arm = true;
-        momentum = [];
-        log("ARMED → 2 → 3", "lime");
-      }
-      prevDigit = d;
-      return;
-    }
+    if (waitingProposal) return;
 
-    // ================= MOMENTUM =================
-    if (momentum.length < 2) {
-      momentum.push(d);
-      log(`MOMENTUM → ${momentum.join(",")}`, "#facc15");
-      prevDigit = d;
-      return;
-    }
+    sequence.push(d);
+    if (sequence.length > 5) sequence.shift();
 
-    // ================= TRIGGER =================
-    if (momentum.length === 2 && !waitingExecution) {
+    if (sequence.length < 5) return;
 
-      if (d === 9) {
-        log("INVALID TRIGGER → 9 ignored", "red");
-        resetStrategy();
+    const [a, b, z1, z2, x] = sequence;
+
+    // PATTERN: 2,3,z,z,x
+    if (a === 2 && b === 3) {
+
+      if (x === 9) {
+        log("INVALID SEQUENCE (x=9)", "red");
+        sequence = [];
         return;
       }
 
-      const barrier = (d + 1) % 10;
+      const barrier = x + 1;
 
-      pendingTrade = barrier;
-      waitingExecution = true;
+      log(
+        `PATTERN FOUND → ${sequence.join(",")} → TRADE DIGITDIFF ${barrier}`,
+        "lime"
+      );
 
-      log(`TRIGGER STORED → barrier ${barrier}`, "#22c55e");
+      placeTrade(barrier);
 
-      prevDigit = d;
-      return;
-    }
-
-    // ================= NEXT TICK EXECUTION =================
-    if (waitingExecution && pendingTrade !== null) {
-
-      placeTrade(pendingTrade);
-
-      if (d === pendingTrade) {
-        log(`LOSS → ${d}`, "red");
-        ladder++;
-      } else {
-        log(`WIN → ${d}`, "lime");
-        ladder = 0;
-      }
-
-      levelEl.textContent = ladder;
-
-      // reset cycle
-      pendingTrade = null;
-      waitingExecution = false;
-      resetStrategy();
-
-      prevDigit = d;
+      sequence = [];
     }
   }
 
@@ -201,30 +167,57 @@ document.addEventListener("DOMContentLoaded", () => {
         ws.onmessage = (e) => {
           const d = JSON.parse(e.data);
 
+          // ================= TICKS =================
           if (d.msg_type === "tick") {
             onTick(d.tick.quote);
           }
 
+          // ================= BALANCE =================
           if (d.msg_type === "balance") {
             balanceEl.textContent = Number(d.balance.balance || 0).toFixed(2);
           }
 
+          // ================= PROPOSAL RESPONSE =================
+          if (d.msg_type === "proposal") {
+
+            if (!waitingProposal) return;
+
+            proposalId = d.proposal.id;
+
+            log("PROPOSAL RECEIVED → BUYING", "#22c55e");
+
+            send({
+              buy: proposalId,
+              price: d.proposal.ask_price
+            });
+          }
+
+          // ================= CONTRACT RESULT =================
           if (d.msg_type === "proposal_open_contract") {
+
             const c = d.proposal_open_contract;
 
-            if (c.is_sold) {
-              const pnl = Number(c.profit || 0);
+            if (!c.is_sold) return;
 
-              totalProfit += pnl;
-              profitEl.textContent = totalProfit.toFixed(2);
+            const pnl = Number(c.profit || 0);
 
-              balanceEl.textContent = Number(c.balance_after || 0).toFixed(2);
+            totalProfit += pnl;
 
-              log(
-                pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`,
-                pnl >= 0 ? "lime" : "red"
-              );
+            profitEl.textContent = totalProfit.toFixed(2);
+            balanceEl.textContent = Number(c.balance_after || 0).toFixed(2);
+
+            if (pnl >= 0) {
+              ladder = 0;
+              log(`WIN +${pnl}`, "lime");
+            } else {
+              ladder++;
+              log(`LOSS ${pnl}`, "red");
             }
+
+            levelEl.textContent = ladder;
+
+            waitingProposal = false;
+            resetStrategy();
           }
         };
 
