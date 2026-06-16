@@ -67,6 +67,25 @@ document.addEventListener("DOMContentLoaded", () => {
     prevDigit = null;
   }
 
+  // 🔥 NEW: REAL TRADE EXECUTION (FIX)
+  function placeTrade(barrier) {
+    const amount = stake(ladder);
+
+    send({
+      proposal: 1,
+      amount: amount,
+      basis: "stake",
+      contract_type: "DIGITDIFF",
+      currency: "USD",
+      duration: 1,
+      duration_unit: "t",
+      symbol: SYMBOL,
+      barrier: barrier
+    });
+
+    log(`TRADE SENT → barrier ${barrier} | stake ${amount}`, "cyan");
+  }
+
   function onTick(price) {
     if (!running || paused) return;
 
@@ -106,9 +125,12 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // EXECUTION NEXT TICK
+    // 🔥 FIXED EXECUTION (NOW TRADE ACTUALLY HAPPENS)
     if (executed) {
       const forbidden = (y + 1) % 10;
+
+      // ✅ PLACE TRADE HERE (THIS WAS MISSING BEFORE)
+      placeTrade(forbidden);
 
       if (d === forbidden) {
         log(`LOSS → ${d}`, "red");
