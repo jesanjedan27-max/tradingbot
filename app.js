@@ -1,3 +1,7 @@
+this way 
+
+
+
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -22,7 +26,6 @@ document.addEventListener("DOMContentLoaded", () => {
   // ================= CONFIG =================
   const CLIENT_ID = "33wZZKTFZrmsZgFaAH53Z";
   const SYMBOL = "R_100";
-  const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 
   let ACCOUNT = "demo";
   const ACCOUNTS = {
@@ -93,7 +96,6 @@ document.addEventListener("DOMContentLoaded", () => {
     priceEl.textContent = price.toFixed(2);
     log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
 
-    // ================= ARM (STRICT 2 → 3) =================
     if (!arm) {
       if (prevDigit === 2 && d === 3) {
         arm = true;
@@ -104,7 +106,6 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // ================= MOMENTUM (2 VALUES ONLY) =================
     if (momentum.length < 2) {
       momentum.push(d);
       log(`MOMENTUM → ${momentum.join(",")}`, "#facc15");
@@ -112,7 +113,6 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // ================= TRIGGER (Y) =================
     if (momentum.length === 2 && !executed) {
       y = d;
       executed = true;
@@ -120,13 +120,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const forbidden = (y + 1) % 10;
 
       log(`TRIGGER → y=${y} | forbidden=${forbidden}`, "#22c55e");
-
-      // wait next tick only
       prevDigit = d;
       return;
     }
 
-    // ================= EXECUTION (NEXT TICK ONLY) =================
     if (executed) {
       const forbidden = (y + 1) % 10;
 
@@ -158,65 +155,83 @@ document.addEventListener("DOMContentLoaded", () => {
 
     authorized = false;
 
-    ws = new WebSocket(WS_URL);
+    const accountId = ACCOUNTS[ACCOUNT];
 
-    ws.onopen = () => {
-      log("WS CONNECTED", "yellow");
+    fetch(
+      `https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + token,
+          "Deriv-App-ID": CLIENT_ID
+        }
+      }
+    )
+    .then(r => r.json())
+    .then(data => {
 
-      // 🔥 FIXED AUTH (NO ERROR EVER)
-      ws.send(JSON.stringify({
-        authorize: token
-      }));
-    };
-
-    ws.onmessage = (e) => {
-      const d = JSON.parse(e.data);
-
-      if (d.error) {
-        log("ERROR: " + d.error.message, "red");
+      if (!data?.data?.url) {
+        log("OTP FAILED", "red");
+        console.log(data);
         return;
       }
 
-      // ================= AUTH =================
-      if (d.msg_type === "authorize") {
+      ws = new WebSocket(data.data.url);
+
+      ws.onopen = () => {
+
+        log("WS CONNECTED", "lime");
+
         authorized = true;
-        log(`AUTHORIZED (${ACCOUNT})`, "lime");
 
-        send({ ticks: SYMBOL, subscribe: 1 });
-        send({ balance: 1 });
-      }
+        send({
+          ticks: SYMBOL,
+          subscribe: 1
+        });
 
-      // ================= TICK =================
-      if (d.msg_type === "tick") {
-        onTick(d.tick.quote);
-      }
+        send({
+          balance: 1
+        });
 
-      // ================= BALANCE =================
-      if (d.msg_type === "balance") {
-        balanceEl.textContent = Number(d.balance.balance).toFixed(2);
-      }
+      };
 
-      // ================= PROFIT =================
-      if (d.msg_type === "proposal_open_contract") {
-        const c = d.proposal_open_contract;
+      ws.onmessage = (e) => {
+        const d = JSON.parse(e.data);
 
-        if (c.is_sold) {
-          const pnl = Number(c.profit || 0);
-          totalProfit += pnl;
-
-          profitEl.textContent = totalProfit.toFixed(2);
-
-          log(
-            pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`,
-            pnl >= 0 ? "lime" : "red"
-          );
-
-          levelEl.textContent = ladder;
+        if (d.error) {
+          log("ERROR: " + d.error.message, "red");
+          return;
         }
-      }
-    };
 
-    ws.onclose = () => log("WS CLOSED", "red");
+        if (d.msg_type === "tick") {
+          onTick(d.tick.quote);
+        }
+
+        if (d.msg_type === "balance") {
+          balanceEl.textContent = Number(d.balance.balance).toFixed(2);
+        }
+
+        if (d.msg_type === "proposal_open_contract") {
+          const c = d.proposal_open_contract;
+
+          if (c.is_sold) {
+            const pnl = Number(c.profit || 0);
+            totalProfit += pnl;
+
+            profitEl.textContent = totalProfit.toFixed(2);
+
+            log(
+              pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`,
+              pnl >= 0 ? "lime" : "red"
+            );
+
+            levelEl.textContent = ladder;
+          }
+        }
+      };
+
+      ws.onclose = () => log("WS CLOSED", "red");
+    });
   }
 
   // ================= BUTTONS =================
