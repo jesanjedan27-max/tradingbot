@@ -1,7 +1,6 @@
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
-  // ================= UI =================
   const startBtn = $("start");
   const pauseBtn = $("pause");
   const stopBtn = $("stop");
@@ -17,30 +16,27 @@ document.addEventListener("DOMContentLoaded", () => {
   const logEl = $("log");
   const stakeInput = $("stakeInput");
 
-  // ================= CONFIG =================
-  const APP_ID = "1089";
   const SYMBOL = "R_100";
 
   let ACCOUNT = "demo";
-
-  let token = (localStorage.getItem("access_token") || "").trim();
+  const ACCOUNTS = {
+    demo: "DOT92927394",
+    live: "ROT91650098"
+  };
 
   let ws;
   let running = false;
   let paused = false;
-  let authorized = false;
 
   let ladder = 0;
   let totalProfit = 0;
 
-  // ================= STRATEGY =================
   let prevDigit = null;
   let arm = false;
   let momentum = [];
   let y = null;
   let executed = false;
 
-  // ================= LOG =================
   function log(msg, color = "#fff") {
     const div = document.createElement("div");
     div.style.color = color;
@@ -49,24 +45,20 @@ document.addEventListener("DOMContentLoaded", () => {
     logEl.scrollTop = logEl.scrollHeight;
   }
 
-  // ================= SEND =================
   function send(data) {
     if (!ws || ws.readyState !== 1) return;
     ws.send(JSON.stringify(data));
   }
 
-  // ================= DIGIT =================
   function digit(price) {
     return Math.floor(Math.abs(price * 100)) % 10;
   }
 
-  // ================= STAKE =================
   function stake(level) {
     const base = Number(stakeInput.value || 0.35);
-    return +(base * Math.pow(2, level)).toFixed(2);
+    return +(base * Math.pow(11.57, level)).toFixed(2);
   }
 
-  // ================= RESET =================
   function resetStrategy() {
     arm = false;
     momentum = [];
@@ -75,7 +67,6 @@ document.addEventListener("DOMContentLoaded", () => {
     prevDigit = null;
   }
 
-  // ================= STRATEGY =================
   function onTick(price) {
     if (!running || paused) return;
 
@@ -84,7 +75,7 @@ document.addEventListener("DOMContentLoaded", () => {
     priceEl.textContent = price.toFixed(2);
     log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
 
-    // ARM
+    // ARM (2 → 3)
     if (!arm) {
       if (prevDigit === 2 && d === 3) {
         arm = true;
@@ -95,7 +86,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // MOMENTUM (2 digits)
+    // MOMENTUM
     if (momentum.length < 2) {
       momentum.push(d);
       log(`MOMENTUM → ${momentum.join(",")}`, "#facc15");
@@ -109,8 +100,8 @@ document.addEventListener("DOMContentLoaded", () => {
       executed = true;
 
       const forbidden = (y + 1) % 10;
-
       log(`TRIGGER y=${y} forbidden=${forbidden}`, "#22c55e");
+
       prevDigit = d;
       return;
     }
@@ -133,73 +124,75 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // ================= CONNECT (FIXED PROPER DERIV FLOW) =================
   function connect() {
     resetStrategy();
 
     if (ws) ws.close();
 
-    if (!token || token.length < 20) {
-      log("NO TOKEN FOUND - LOGIN FIRST", "red");
-      return;
-    }
+    const accountId = ACCOUNTS[ACCOUNT];
 
-    ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`);
-
-    ws.onopen = () => {
-      log("WS CONNECTED", "lime");
-
-      send({
-        authorize: token
-      });
-    };
-
-    ws.onmessage = (e) => {
-      const d = JSON.parse(e.data);
-
-      if (d.error) {
-        log("ERROR: " + d.error.message, "red");
-        return;
-      }
-
-      // AUTH
-      if (d.msg_type === "authorize") {
-        authorized = true;
-        log("AUTHORIZED", "lime");
-
-        send({ ticks: SYMBOL, subscribe: 1 });
-        send({ balance: 1 });
-      }
-
-      // TICK
-      if (d.msg_type === "tick") {
-        onTick(d.tick.quote);
-      }
-
-      // BALANCE
-      if (d.msg_type === "balance") {
-        balanceEl.textContent = Number(d.balance.balance || 0).toFixed(2);
-      }
-
-      // PROFIT
-      if (d.msg_type === "proposal_open_contract") {
-        const c = d.proposal_open_contract;
-
-        if (c.is_sold) {
-          const pnl = Number(c.profit || 0);
-          totalProfit += pnl;
-
-          profitEl.textContent = totalProfit.toFixed(2);
-
-          log(pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`, pnl >= 0 ? "lime" : "red");
+    fetch(
+      `https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + localStorage.getItem("access_token"),
+          "Deriv-App-ID": "33wZZKTFZrmsZgFaAH53Z"
         }
       }
-    };
+    )
+      .then(r => r.json())
+      .then(data => {
 
-    ws.onclose = () => log("WS CLOSED", "red");
+        if (!data?.data?.url) {
+          log("OTP FAILED", "red");
+          console.log(data);
+          return;
+        }
+
+        ws = new WebSocket(data.data.url);
+
+        ws.onopen = () => {
+          log("WS CONNECTED", "lime");
+
+          setTimeout(() => {
+            send({ ticks: SYMBOL, subscribe: 1 });
+            send({ balance: 1 });
+          }, 300);
+        };
+
+        ws.onmessage = (e) => {
+          const d = JSON.parse(e.data);
+
+          if (d.msg_type === "tick") {
+            onTick(d.tick.quote);
+          }
+
+          if (d.msg_type === "balance") {
+            balanceEl.textContent = Number(d.balance.balance || 0).toFixed(2);
+          }
+
+          if (d.msg_type === "proposal_open_contract") {
+            const c = d.proposal_open_contract;
+
+            if (c.is_sold) {
+              const pnl = Number(c.profit || 0);
+              totalProfit += pnl;
+
+              profitEl.textContent = totalProfit.toFixed(2);
+
+              log(
+                pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`,
+                pnl >= 0 ? "lime" : "red"
+              );
+            }
+          }
+        };
+
+        ws.onclose = () => log("WS CLOSED", "red");
+      });
   }
 
-  // ================= BUTTONS =================
   startBtn.onclick = () => {
     running = true;
     connect();
