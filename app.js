@@ -17,8 +17,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const logEl = $("log");
   const stakeInput = $("stakeInput");
 
-  const modeIndicator = $("modeIndicator");
-
   // ================= CONFIG =================
   const CLIENT_ID = "33wZZKTFZrmsZgFaAH53Z";
   const SYMBOL = "R_100";
@@ -35,14 +33,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let running = false;
   let paused = false;
-  let authorized = false;
 
   let ladder = 0;
   let totalProfit = 0;
 
   // ================= STRATEGY STATE =================
   let prevDigit = null;
-
   let arm = false;
   let momentum = [];
   let y = null;
@@ -55,6 +51,12 @@ document.addEventListener("DOMContentLoaded", () => {
     div.textContent = msg;
     logEl.appendChild(div);
     logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  // ================= SEND (FIXED - NO AUTH BLOCK) =================
+  function send(data) {
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify(data));
   }
 
   // ================= DIGIT =================
@@ -74,13 +76,7 @@ document.addEventListener("DOMContentLoaded", () => {
     momentum = [];
     y = null;
     executed = false;
-  }
-
-  // ================= SEND =================
-  function send(data) {
-    if (!ws || ws.readyState !== 1) return;
-    if (!authorized) return;
-    ws.send(JSON.stringify(data));
+    prevDigit = null;
   }
 
   // ================= STRATEGY =================
@@ -92,16 +88,18 @@ document.addEventListener("DOMContentLoaded", () => {
     priceEl.textContent = price.toFixed(2);
     log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
 
+    // ARM: strict 2 → 3 sequence
     if (!arm) {
       if (prevDigit === 2 && d === 3) {
         arm = true;
         momentum = [];
-        log("ARMED → 2 → 3 confirmed", "lime");
+        log("ARMED → 2 → 3 detected", "lime");
       }
       prevDigit = d;
       return;
     }
 
+    // MOMENTUM (first 2 digits)
     if (momentum.length < 2) {
       momentum.push(d);
       log(`MOMENTUM → ${momentum.join(",")}`, "#facc15");
@@ -109,6 +107,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    // TRIGGER digit (y)
     if (momentum.length === 2 && !executed) {
       y = d;
       executed = true;
@@ -120,23 +119,25 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    // EXECUTION ON NEXT TICK ONLY
     if (executed) {
       const forbidden = (y + 1) % 10;
 
       if (d === forbidden) {
-        log(`LOSS → ${d}`, "red");
+        log(`LOSS → digit ${d}`, "red");
         ladder++;
       } else {
-        log(`WIN → ${d}`, "lime");
+        log(`WIN → digit ${d}`, "lime");
         ladder = 0;
       }
 
+      levelEl.textContent = ladder;
       resetStrategy();
       prevDigit = d;
     }
   }
 
-  // ================= CONNECT =================
+  // ================= CONNECT (FIXED OTP FLOW) =================
   function connect() {
     resetStrategy();
 
@@ -148,8 +149,6 @@ document.addEventListener("DOMContentLoaded", () => {
       log("NO VALID TOKEN", "red");
       return;
     }
-
-    authorized = false;
 
     const accountId = ACCOUNTS[ACCOUNT];
 
@@ -163,71 +162,66 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       }
     )
-    .then(r => r.json())
-    .then(data => {
+      .then(r => r.json())
+      .then(data => {
 
-      if (!data?.data?.url) {
-        log("OTP FAILED", "red");
-        console.log(data);
-        return;
-      }
-
-      ws = new WebSocket(data.data.url);
-
-      ws.onopen = () => {
-
-        log("WS CONNECTED", "lime");
-
-        authorized = true;
-
-        send({
-          ticks: SYMBOL,
-          subscribe: 1
-        });
-
-        send({
-          balance: 1
-        });
-
-      };
-
-      ws.onmessage = (e) => {
-        const d = JSON.parse(e.data);
-
-        if (d.error) {
-          log("ERROR: " + d.error.message, "red");
+        if (!data?.data?.url) {
+          log("OTP FAILED", "red");
+          console.log(data);
           return;
         }
 
-        if (d.msg_type === "tick") {
-          onTick(d.tick.quote);
-        }
+        ws = new WebSocket(data.data.url);
 
-        if (d.msg_type === "balance") {
-          balanceEl.textContent = Number(d.balance.balance).toFixed(2);
-        }
+        ws.onopen = () => {
+          log("WS CONNECTED", "lime");
 
-        if (d.msg_type === "proposal_open_contract") {
-          const c = d.proposal_open_contract;
+          setTimeout(() => {
+            send({ ticks: SYMBOL, subscribe: 1 });
+            send({ balance: 1 });
+          }, 300);
+        };
 
-          if (c.is_sold) {
-            const pnl = Number(c.profit || 0);
-            totalProfit += pnl;
+        ws.onmessage = (e) => {
+          const d = JSON.parse(e.data);
 
-            profitEl.textContent = totalProfit.toFixed(2);
-
-            log(
-              pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`,
-              pnl >= 0 ? "lime" : "red"
-            );
-
-            levelEl.textContent = ladder;
+          if (d.error) {
+            log("ERROR: " + d.error.message, "red");
+            return;
           }
-        }
-      };
 
-      ws.onclose = () => log("WS CLOSED", "red");
-    });
+          // TICK
+          if (d.msg_type === "tick") {
+            if (d.tick?.quote !== undefined) {
+              onTick(d.tick.quote);
+            }
+          }
+
+          // BALANCE
+          if (d.msg_type === "balance") {
+            balanceEl.textContent = Number(d.balance?.balance || 0).toFixed(2);
+          }
+
+          // RESULT
+          if (d.msg_type === "proposal_open_contract") {
+            const c = d.proposal_open_contract;
+
+            if (c.is_sold) {
+              const pnl = Number(c.profit || 0);
+              totalProfit += pnl;
+
+              profitEl.textContent = totalProfit.toFixed(2);
+
+              log(
+                pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`,
+                pnl >= 0 ? "lime" : "red"
+              );
+            }
+          }
+        };
+
+        ws.onclose = () => log("WS CLOSED", "red");
+      });
   }
 
   // ================= BUTTONS =================
