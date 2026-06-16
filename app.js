@@ -37,6 +37,9 @@ document.addEventListener("DOMContentLoaded", () => {
   let y = null;
   let executed = false;
 
+  let pendingProposal = null;
+  let lastBarrier = null;
+
   function log(msg, color = "#fff") {
     const div = document.createElement("div");
     div.style.color = color;
@@ -67,9 +70,10 @@ document.addEventListener("DOMContentLoaded", () => {
     prevDigit = null;
   }
 
-  // ================= TRADE =================
+  // ================= TRADE REQUEST =================
   function placeTrade(barrier) {
     const amount = stake(ladder);
+    lastBarrier = barrier;
 
     send({
       proposal: 1,
@@ -83,7 +87,7 @@ document.addEventListener("DOMContentLoaded", () => {
       barrier
     });
 
-    log(`TRADE SENT → barrier ${barrier} | stake ${amount}`, "#38bdf8");
+    log(`PROPOSAL REQUEST → barrier ${barrier}`, "#38bdf8");
   }
 
   function onTick(price) {
@@ -94,7 +98,7 @@ document.addEventListener("DOMContentLoaded", () => {
     priceEl.textContent = price.toFixed(2);
     log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
 
-    // ================= ARM =================
+    // ARM
     if (!arm) {
       if (prevDigit === 2 && d === 3) {
         arm = true;
@@ -105,7 +109,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // ================= MOMENTUM =================
+    // MOMENTUM
     if (momentum.length < 2) {
       momentum.push(d);
       log(`MOMENTUM → ${momentum.join(",")}`, "#facc15");
@@ -113,11 +117,10 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // ================= TRIGGER =================
+    // TRIGGER
     if (momentum.length === 2 && y === null) {
       y = d;
 
-      // ❌ INVALID RULE
       if (y === 9) {
         log("INVALID TRIGGER → 9 ignored", "red");
         resetStrategy();
@@ -135,13 +138,11 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // ================= EXECUTION =================
+    // EXECUTION
     if (executed && y !== null) {
-      const tradeDigit = y;
+      placeTrade(y);
 
-      placeTrade(tradeDigit);
-
-      if (d === tradeDigit) {
+      if (d === y) {
         log(`LOSS → ${d}`, "red");
         ladder++;
       } else {
@@ -150,7 +151,6 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       levelEl.textContent = ladder;
-
       resetStrategy();
       prevDigit = d;
     }
@@ -163,16 +163,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const accountId = ACCOUNTS[ACCOUNT];
 
-    fetch(
-      `https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: "Bearer " + localStorage.getItem("access_token"),
-          "Deriv-App-ID": "33wZZKTFZrmsZgFaAH53Z"
-        }
+    fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + localStorage.getItem("access_token"),
+        "Deriv-App-ID": "33wZZKTFZrmsZgFaAH53Z"
       }
-    )
+    })
       .then(r => r.json())
       .then(data => {
 
@@ -196,26 +193,29 @@ document.addEventListener("DOMContentLoaded", () => {
         ws.onmessage = (e) => {
           const d = JSON.parse(e.data);
 
-          // ================= TICK =================
+          // TICKS
           if (d.msg_type === "tick") {
             onTick(d.tick.quote);
           }
 
-          // ================= BALANCE =================
+          // BALANCE
           if (d.msg_type === "balance") {
             balanceEl.textContent = Number(d.balance.balance || 0).toFixed(2);
           }
 
-          // ================= BUY → CONTRACT TRACKING =================
-          if (d.msg_type === "buy") {
-            send({
-              proposal_open_contract: 1,
-              contract_id: d.buy.contract_id,
-              subscribe: 1
-            });
+          // PROPOSAL RESPONSE → BUY EXECUTION (CRITICAL FIX)
+          if (d.msg_type === "proposal") {
+            if (d.proposal?.id) {
+              send({
+                buy: d.proposal.id,
+                price: d.proposal.ask_price
+              });
+
+              log(`BUY SENT → proposal ${d.proposal.id}`, "lime");
+            }
           }
 
-          // ================= PROFIT / LOSS FIX =================
+          // RESULT TRACKING
           if (d.msg_type === "proposal_open_contract") {
             const c = d.proposal_open_contract;
 
@@ -225,14 +225,12 @@ document.addEventListener("DOMContentLoaded", () => {
               totalProfit += pnl;
               profitEl.textContent = totalProfit.toFixed(2);
 
+              balanceEl.textContent = Number(c.balance_after || 0).toFixed(2);
+
               log(
                 pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`,
                 pnl >= 0 ? "lime" : "red"
               );
-
-              if (c.balance_after !== undefined) {
-                balanceEl.textContent = Number(c.balance_after).toFixed(2);
-              }
             }
           }
         };
