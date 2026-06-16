@@ -45,11 +45,6 @@ document.addEventListener("DOMContentLoaded", () => {
     logEl.scrollTop = logEl.scrollHeight;
   }
 
-  function send(data) {
-    if (!ws || ws.readyState !== 1) return;
-    ws.send(JSON.stringify(data));
-  }
-
   function digit(price) {
     return Math.floor(Math.abs(price * 100)) % 10;
   }
@@ -57,6 +52,11 @@ document.addEventListener("DOMContentLoaded", () => {
   function stake(level) {
     const base = Number(stakeInput.value || 0.35);
     return +(base * Math.pow(11.57, level)).toFixed(2);
+  }
+
+  function send(data) {
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify(data));
   }
 
   function resetStrategy() {
@@ -67,23 +67,23 @@ document.addEventListener("DOMContentLoaded", () => {
     prevDigit = null;
   }
 
-  // 🔥 NEW: REAL TRADE EXECUTION (FIX)
+  // ================= TRADE EXECUTION =================
   function placeTrade(barrier) {
     const amount = stake(ladder);
 
     send({
       proposal: 1,
-      amount: amount,
+      amount,
       basis: "stake",
       contract_type: "DIGITDIFF",
       currency: "USD",
       duration: 1,
       duration_unit: "t",
       symbol: SYMBOL,
-      barrier: barrier
+      barrier
     });
 
-    log(`TRADE SENT → barrier ${barrier} | stake ${amount}`, "cyan");
+    log(`TRADE SENT → ${barrier} | stake ${amount}`, "#38bdf8");
   }
 
   function onTick(price) {
@@ -94,7 +94,7 @@ document.addEventListener("DOMContentLoaded", () => {
     priceEl.textContent = price.toFixed(2);
     log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
 
-    // ARM (2 → 3)
+    // ================= ARM =================
     if (!arm) {
       if (prevDigit === 2 && d === 3) {
         arm = true;
@@ -105,7 +105,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // MOMENTUM
+    // ================= MOMENTUM =================
     if (momentum.length < 2) {
       momentum.push(d);
       log(`MOMENTUM → ${momentum.join(",")}`, "#facc15");
@@ -113,26 +113,36 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // TRIGGER
-    if (momentum.length === 2 && !executed) {
+    // ================= TRIGGER =================
+    if (momentum.length === 2 && y === null) {
       y = d;
-      executed = true;
+
+      // ❌ INVALID RULE: 9 is not allowed
+      if (y === 9) {
+        log("INVALID TRIGGER → 9 ignored", "red");
+
+        resetStrategy();
+        return;
+      }
 
       const forbidden = (y + 1) % 10;
+
       log(`TRIGGER y=${y} forbidden=${forbidden}`, "#22c55e");
+
+      executed = true;
+      y = forbidden;
 
       prevDigit = d;
       return;
     }
 
-    // 🔥 FIXED EXECUTION (NOW TRADE ACTUALLY HAPPENS)
-    if (executed) {
-      const forbidden = (y + 1) % 10;
+    // ================= EXECUTION (NEXT TICK ONLY) =================
+    if (executed && y !== null) {
+      const tradeDigit = y;
 
-      // ✅ PLACE TRADE HERE (THIS WAS MISSING BEFORE)
-      placeTrade(forbidden);
+      placeTrade(tradeDigit);
 
-      if (d === forbidden) {
+      if (d === tradeDigit) {
         log(`LOSS → ${d}`, "red");
         ladder++;
       } else {
@@ -141,8 +151,10 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       levelEl.textContent = ladder;
+
       resetStrategy();
       prevDigit = d;
+      return;
     }
   }
 
