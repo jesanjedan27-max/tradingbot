@@ -18,26 +18,22 @@ document.addEventListener("DOMContentLoaded", () => {
   const stakeInput = $("stakeInput");
 
   // ================= CONFIG =================
-  const CLIENT_ID = "33wZZKTFZrmsZgFaAH53Z";
+  const APP_ID = "1089";
   const SYMBOL = "R_100";
 
   let ACCOUNT = "demo";
-  const ACCOUNTS = {
-    demo: "DOT92927394",
-    live: "ROT91650098"
-  };
 
-  // ================= STATE =================
-  let ws;
   let token = (localStorage.getItem("access_token") || "").trim();
 
+  let ws;
   let running = false;
   let paused = false;
+  let authorized = false;
 
   let ladder = 0;
   let totalProfit = 0;
 
-  // ================= STRATEGY STATE =================
+  // ================= STRATEGY =================
   let prevDigit = null;
   let arm = false;
   let momentum = [];
@@ -53,7 +49,7 @@ document.addEventListener("DOMContentLoaded", () => {
     logEl.scrollTop = logEl.scrollHeight;
   }
 
-  // ================= SEND (FIXED - NO AUTH BLOCK) =================
+  // ================= SEND =================
   function send(data) {
     if (!ws || ws.readyState !== 1) return;
     ws.send(JSON.stringify(data));
@@ -67,7 +63,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // ================= STAKE =================
   function stake(level) {
     const base = Number(stakeInput.value || 0.35);
-    return +(base * Math.pow(11.57, level)).toFixed(2);
+    return +(base * Math.pow(2, level)).toFixed(2);
   }
 
   // ================= RESET =================
@@ -88,18 +84,18 @@ document.addEventListener("DOMContentLoaded", () => {
     priceEl.textContent = price.toFixed(2);
     log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
 
-    // ARM: strict 2 → 3 sequence
+    // ARM
     if (!arm) {
       if (prevDigit === 2 && d === 3) {
         arm = true;
         momentum = [];
-        log("ARMED → 2 → 3 detected", "lime");
+        log("ARMED → 2 → 3", "lime");
       }
       prevDigit = d;
       return;
     }
 
-    // MOMENTUM (first 2 digits)
+    // MOMENTUM (2 digits)
     if (momentum.length < 2) {
       momentum.push(d);
       log(`MOMENTUM → ${momentum.join(",")}`, "#facc15");
@@ -107,27 +103,27 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // TRIGGER digit (y)
+    // TRIGGER
     if (momentum.length === 2 && !executed) {
       y = d;
       executed = true;
 
       const forbidden = (y + 1) % 10;
 
-      log(`TRIGGER → y=${y} | forbidden=${forbidden}`, "#22c55e");
+      log(`TRIGGER y=${y} forbidden=${forbidden}`, "#22c55e");
       prevDigit = d;
       return;
     }
 
-    // EXECUTION ON NEXT TICK ONLY
+    // EXECUTION NEXT TICK
     if (executed) {
       const forbidden = (y + 1) % 10;
 
       if (d === forbidden) {
-        log(`LOSS → digit ${d}`, "red");
+        log(`LOSS → ${d}`, "red");
         ladder++;
       } else {
-        log(`WIN → digit ${d}`, "lime");
+        log(`WIN → ${d}`, "lime");
         ladder = 0;
       }
 
@@ -137,91 +133,70 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // ================= CONNECT (FIXED OTP FLOW) =================
+  // ================= CONNECT (FIXED PROPER DERIV FLOW) =================
   function connect() {
     resetStrategy();
 
     if (ws) ws.close();
 
-    token = (localStorage.getItem("access_token") || "").trim();
-
     if (!token || token.length < 20) {
-      log("NO VALID TOKEN", "red");
+      log("NO TOKEN FOUND - LOGIN FIRST", "red");
       return;
     }
 
-    const accountId = ACCOUNTS[ACCOUNT];
+    ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`);
 
-    fetch(
-      `https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: "Bearer " + token,
-          "Deriv-App-ID": CLIENT_ID
+    ws.onopen = () => {
+      log("WS CONNECTED", "lime");
+
+      send({
+        authorize: token
+      });
+    };
+
+    ws.onmessage = (e) => {
+      const d = JSON.parse(e.data);
+
+      if (d.error) {
+        log("ERROR: " + d.error.message, "red");
+        return;
+      }
+
+      // AUTH
+      if (d.msg_type === "authorize") {
+        authorized = true;
+        log("AUTHORIZED", "lime");
+
+        send({ ticks: SYMBOL, subscribe: 1 });
+        send({ balance: 1 });
+      }
+
+      // TICK
+      if (d.msg_type === "tick") {
+        onTick(d.tick.quote);
+      }
+
+      // BALANCE
+      if (d.msg_type === "balance") {
+        balanceEl.textContent = Number(d.balance.balance || 0).toFixed(2);
+      }
+
+      // PROFIT
+      if (d.msg_type === "proposal_open_contract") {
+        const c = d.proposal_open_contract;
+
+        if (c.is_sold) {
+          const pnl = Number(c.profit || 0);
+          totalProfit += pnl;
+
+          profitEl.textContent = totalProfit.toFixed(2);
+
+          log(pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`, pnl >= 0 ? "lime" : "red");
         }
       }
-    )
-      .then(r => r.json())
-      .then(data => {
+    };
 
-        if (!data?.data?.url) {
-          log("OTP FAILED", "red");
-          console.log(data);
-          return;
-        }
-
-        ws = new WebSocket(data.data.url);
-
-        ws.onopen = () => {
-          log("WS CONNECTED", "lime");
-
-          setTimeout(() => {
-            send({ ticks: SYMBOL, subscribe: 1 });
-            send({ balance: 1 });
-          }, 300);
-        };
-
-        ws.onmessage = (e) => {
-          const d = JSON.parse(e.data);
-
-          if (d.error) {
-            log("ERROR: " + d.error.message, "red");
-            return;
-          }
-
-          // TICK
-          if (d.msg_type === "tick") {
-            if (d.tick?.quote !== undefined) {
-              onTick(d.tick.quote);
-            }
-          }
-
-          // BALANCE
-          if (d.msg_type === "balance") {
-            balanceEl.textContent = Number(d.balance?.balance || 0).toFixed(2);
-          }
-
-          // RESULT
-          if (d.msg_type === "proposal_open_contract") {
-            const c = d.proposal_open_contract;
-
-            if (c.is_sold) {
-              const pnl = Number(c.profit || 0);
-              totalProfit += pnl;
-
-              profitEl.textContent = totalProfit.toFixed(2);
-
-              log(
-                pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`,
-                pnl >= 0 ? "lime" : "red"
-              );
-            }
-          }
-        };
-
-        ws.onclose = () => log("WS CLOSED", "red");
-      });
+    ws.onclose = () => log("WS CLOSED", "red");
   }
 
   // ================= BUTTONS =================
