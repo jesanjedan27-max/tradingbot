@@ -67,7 +67,7 @@ document.addEventListener("DOMContentLoaded", () => {
     prevDigit = null;
   }
 
-  // ================= TRADE EXECUTION =================
+  // ================= TRADE =================
   function placeTrade(barrier) {
     const amount = stake(ladder);
 
@@ -83,7 +83,7 @@ document.addEventListener("DOMContentLoaded", () => {
       barrier
     });
 
-    log(`TRADE SENT → ${barrier} | stake ${amount}`, "#38bdf8");
+    log(`TRADE SENT → barrier ${barrier} | stake ${amount}`, "#38bdf8");
   }
 
   function onTick(price) {
@@ -117,10 +117,9 @@ document.addEventListener("DOMContentLoaded", () => {
     if (momentum.length === 2 && y === null) {
       y = d;
 
-      // ❌ INVALID RULE: 9 is not allowed
+      // ❌ INVALID RULE
       if (y === 9) {
         log("INVALID TRIGGER → 9 ignored", "red");
-
         resetStrategy();
         return;
       }
@@ -136,7 +135,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // ================= EXECUTION (NEXT TICK ONLY) =================
+    // ================= EXECUTION =================
     if (executed && y !== null) {
       const tradeDigit = y;
 
@@ -154,7 +153,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
       resetStrategy();
       prevDigit = d;
-      return;
     }
   }
 
@@ -198,27 +196,43 @@ document.addEventListener("DOMContentLoaded", () => {
         ws.onmessage = (e) => {
           const d = JSON.parse(e.data);
 
+          // ================= TICK =================
           if (d.msg_type === "tick") {
             onTick(d.tick.quote);
           }
 
+          // ================= BALANCE =================
           if (d.msg_type === "balance") {
             balanceEl.textContent = Number(d.balance.balance || 0).toFixed(2);
           }
 
+          // ================= BUY → CONTRACT TRACKING =================
+          if (d.msg_type === "buy") {
+            send({
+              proposal_open_contract: 1,
+              contract_id: d.buy.contract_id,
+              subscribe: 1
+            });
+          }
+
+          // ================= PROFIT / LOSS FIX =================
           if (d.msg_type === "proposal_open_contract") {
             const c = d.proposal_open_contract;
 
             if (c.is_sold) {
               const pnl = Number(c.profit || 0);
-              totalProfit += pnl;
 
+              totalProfit += pnl;
               profitEl.textContent = totalProfit.toFixed(2);
 
               log(
                 pnl >= 0 ? `WIN +${pnl}` : `LOSS ${pnl}`,
                 pnl >= 0 ? "lime" : "red"
               );
+
+              if (c.balance_after !== undefined) {
+                balanceEl.textContent = Number(c.balance_after).toFixed(2);
+              }
             }
           }
         };
