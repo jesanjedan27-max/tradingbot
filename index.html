@@ -4,9 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>PRO Deriv Bot</title>
-  <link rel="stylesheet" href="style.css">
+  <style>
+    body{font-family:Arial;background:#071126;color:#e6eef8}
+    .container{max-width:900px;margin:24px auto;padding:18px;background:#0f1724;border-radius:10px}
+    .row{display:flex;gap:8px;margin-bottom:8px}
+    button{padding:8px 12px;border-radius:6px;border:none;background:#2563eb;color:white;cursor:pointer}
+    .buttons{display:flex;gap:8px;margin:12px 0}
+    .inputs{margin:12px 0}
+    .stats{display:flex;gap:12px;flex-wrap:wrap}
+    .log{height:360px;overflow:auto;background:#071026;padding:10px;border-radius:6px;border:1px solid #123}
+    input[type=number]{padding:8px;border-radius:6px;border:1px solid #234;}
+  </style>
 </head>
-
 <body>
 
 <div class="container">
@@ -17,8 +26,6 @@
     <button id="demoBtn">Demo</button>
     <button id="liveBtn">Live</button>
   </div>
-
-  <button id="login">Login with Deriv</button>
 
   <div class="buttons">
     <button id="start">Start</button>
