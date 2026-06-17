@@ -115,7 +115,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const barrier = x + 1;
 
       log(
-        `PATTERN → ${sequence.join(",")} → DIGITDIFF ${barrier}`,
+        `PATTERN FOUND → ${sequence.join(",")} → DIGITDIFF ${barrier}`,
         "lime"
       );
 
@@ -164,7 +164,17 @@ document.addEventListener("DOMContentLoaded", () => {
         };
 
         ws.onmessage = (e) => {
+
           const d = JSON.parse(e.data);
+
+          console.log("WS:", d);
+
+          if (d.error) {
+            log(`ERROR → ${d.error.message}`, "red");
+            waitingProposal = false;
+            activeContractId = null;
+            return;
+          }
 
           // ================= TICK =================
           if (d.msg_type === "tick") {
@@ -182,6 +192,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
             if (!waitingProposal) return;
 
+            waitingProposal = false;
+
             log("PROPOSAL RECEIVED → BUYING", "#22c55e");
 
             send({
@@ -190,7 +202,7 @@ document.addEventListener("DOMContentLoaded", () => {
             });
           }
 
-          // ================= BUY CONFIRM =================
+          // ================= BUY =================
           if (d.msg_type === "buy") {
 
             activeContractId = d.buy.contract_id;
@@ -199,7 +211,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
             send({
               proposal_open_contract: 1,
-              contract_id: activeContractId
+              contract_id: activeContractId,
+              subscribe: 1
             });
           }
 
@@ -234,7 +247,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
               levelEl.textContent = ladder;
 
-              waitingProposal = false;
               activeContractId = null;
 
               resetStrategy();
