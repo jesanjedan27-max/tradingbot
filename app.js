@@ -17,6 +17,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const levelEl = $("level");
   const logEl = $("log");
   const stakeInput = $("stakeInput");
+  const tokenInput = $("tokenInput");
 
   const SYMBOL = "R_100";
 
@@ -211,11 +212,17 @@ document.addEventListener("DOMContentLoaded", () => {
     if (ws) ws.close();
 
     const accountId = ACCOUNTS[account];
-    const accessToken = localStorage.getItem("access_token");
+    const inputToken = tokenInput?.value.trim();
+    const storedToken = localStorage.getItem("access_token");
+    const accessToken = inputToken || storedToken;
 
     if (!accessToken) {
-      appendLogLine("Missing access_token in localStorage.", "red");
+      appendLogLine("Missing access_token. Paste it in the Access Token field.", "red");
       return;
+    }
+
+    if (inputToken) {
+      localStorage.setItem("access_token", accessToken);
     }
 
     try {
