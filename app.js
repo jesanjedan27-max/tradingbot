@@ -54,7 +54,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function send(data) {
-    if (!ws || ws.readyState !== 1) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
       log("WS not open — cannot send", "red");
       return;
     }
@@ -83,9 +83,7 @@ document.addEventListener("DOMContentLoaded", () => {
       basis: "stake",
       duration: 1,
       duration_unit: "t",
-      // include symbol so server accepts and validates correctly
-      symbol: SYMBOL,
-      // include underlying_symbol as some endpoints require this exact field
+      // include only underlying_symbol (server rejected 'symbol')
       underlying_symbol: SYMBOL,
       barrier: barrier
     };
@@ -153,7 +151,6 @@ document.addEventListener("DOMContentLoaded", () => {
     )
       .then(r => r.json())
       .then(data => {
-
         if (!data?.data?.url) {
           log("OTP FAILED", "red");
           console.log(data);
@@ -183,6 +180,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
           if (d.error) {
             log(`ERROR → ${d.error.message}`, "red");
+            console.error("Server error object:", d.error);
             waitingProposal = false;
             activeContractId = null;
             return;
@@ -193,18 +191,16 @@ document.addEventListener("DOMContentLoaded", () => {
           }
 
           if (d.msg_type === "balance") {
-            balanceEl.textContent =
-              Number(d.balance.balance || 0).toFixed(2);
+            balanceEl.textContent = Number(d.balance.balance || 0).toFixed(2);
           }
 
           if (d.msg_type === "proposal") {
-
             if (!waitingProposal) {
               console.log("IGNORING unsolicited proposal", d);
               return;
             }
 
-            // Validate proposal symbol if present
+            // Accept proposal only if underlying_symbol matches (if provided)
             const propSym = (d.proposal && (d.proposal.underlying_symbol || d.proposal.symbol)) || null;
             if (propSym && propSym !== SYMBOL) {
               log(`PROPOSAL for unexpected underlying ${propSym} — ignoring`, "red");
@@ -241,7 +237,6 @@ document.addEventListener("DOMContentLoaded", () => {
           }
 
           if (d.msg_type === "proposal_open_contract") {
-
             const c = d.proposal_open_contract;
             if (!c) return;
 
@@ -249,10 +244,8 @@ document.addEventListener("DOMContentLoaded", () => {
             balanceEl.textContent = Number(c.balance_after || 0).toFixed(2);
 
             if (c.is_sold) {
-
               const pnl = Number(c.profit || 0);
               totalProfit += pnl;
-
               profitEl.textContent = totalProfit.toFixed(2);
 
               if (pnl >= 0) {
