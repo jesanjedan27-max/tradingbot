@@ -64,7 +64,7 @@ document.addEventListener("DOMContentLoaded", () => {
     activeContractId = null;
   }
 
-  // ================= TRADE =================
+  // ================= TRADE (FIXED) =================
   function placeTrade(barrier) {
     const amount = stake(ladder);
 
@@ -78,7 +78,6 @@ document.addEventListener("DOMContentLoaded", () => {
       currency: "USD",
       duration: 1,
       duration_unit: "t",
-      symbol: SYMBOL,
       barrier
     });
 
@@ -164,21 +163,14 @@ document.addEventListener("DOMContentLoaded", () => {
         };
 
         ws.onmessage = (e) => {
-
           const d = JSON.parse(e.data);
 
           console.log("WS:", d);
 
-          // ✅ UPDATED BLOCK
           if (d.error) {
-
-            console.error("FULL ERROR:", d);
-
             log(`ERROR → ${d.error.message}`, "red");
-
             waitingProposal = false;
             activeContractId = null;
-
             return;
           }
 
@@ -253,6 +245,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
               levelEl.textContent = ladder;
 
+              waitingProposal = false;
               activeContractId = null;
 
               resetStrategy();
