@@ -21,6 +21,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const SYMBOL = "R_100";
 
+  const savedToken = localStorage.getItem("access_token");
+  if (tokenInput && savedToken) {
+    tokenInput.value = savedToken;
+  }
+
   const ACCOUNTS = {
     demo: "DOT92927394",
     live: "ROT91650098"
@@ -223,6 +228,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (inputToken) {
       localStorage.setItem("access_token", accessToken);
+      appendLogLine("Using access_token from input field.", "yellow");
+    } else {
+      appendLogLine("Using access_token from localStorage.", "yellow");
     }
 
     try {
