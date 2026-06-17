@@ -38,9 +38,9 @@ document.addEventListener("DOMContentLoaded", () => {
   let activeContractId = null;
 
   // Logging/tick config
-  const LOG_MAX_ENTRIES = 1200; // prune older log lines
-  const TICK_FLUSH_MS = 60;     // flush tick buffer interval (ms)
-  const TICK_BATCH_LIMIT = 500; // safety cap per flush
+  const LOG_MAX_ENTRIES = 1200;
+  const TICK_FLUSH_MS = 60;
+  const TICK_BATCH_LIMIT = 500;
   let tickBuffer = [];
   let tickFlushTimer = null;
 
@@ -49,7 +49,6 @@ document.addEventListener("DOMContentLoaded", () => {
     div.style.color = color;
     div.textContent = msg;
     logEl.appendChild(div);
-    // trim old entries
     while (logEl.children.length > LOG_MAX_ENTRIES) {
       logEl.removeChild(logEl.firstChild);
     }
@@ -70,11 +69,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function flushTickBuffer() {
     if (!tickBuffer.length) return;
-    // Limit batch size to avoid long tasks
     const batch = tickBuffer.splice(0, TICK_BATCH_LIMIT);
     const frag = document.createDocumentFragment();
 
-    // Append each tick as its own line for full visibility
     for (let i = 0; i < batch.length; i++) {
       const t = batch[i];
       const div = document.createElement("div");
@@ -84,7 +81,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     logEl.appendChild(frag);
-    // trim old entries
     while (logEl.children.length > LOG_MAX_ENTRIES) {
       logEl.removeChild(logEl.firstChild);
     }
@@ -205,14 +201,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const d = digit(price);
 
-    // update price display (immediate)
     if (priceEl) priceEl.textContent = Number(price).toFixed(2);
 
-    // push tick to buffer for batched DOM updates
     tickBuffer.push({ price, digit: d });
     startTickFlush();
 
-    // strategy must remain responsive -> act every tick
     if (waitingProposal || activeContractId) return;
 
     sequence.push(d);
@@ -327,8 +320,6 @@ document.addEventListener("DOMContentLoaded", () => {
               return;
             }
 
-            appendLogLine("PROPOSAL RECEIVED → BUYING", "#22c55e");
-
             send({
               buy: d.proposal.id,
               price: d.proposal.ask_price
@@ -342,7 +333,6 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             activeContractId = d.buy.contract_id;
-            appendLogLine(`BUY CONFIRMED → ${activeContractId}`, "#22c55e");
 
             send({
               proposal_open_contract: 1,
@@ -399,7 +389,6 @@ document.addEventListener("DOMContentLoaded", () => {
       });
   }
 
-  // Buttons
   startBtn.onclick = () => {
     running = true;
     connect();
