@@ -35,18 +35,12 @@ document.addEventListener("DOMContentLoaded", () => {
   let waitingProposal = false;
   let activeContractId = null;
 
-  // ================= LOGGING =================
   function log(msg, color = "#fff") {
     const div = document.createElement("div");
     div.style.color = color;
     div.textContent = msg;
     logEl.appendChild(div);
     logEl.scrollTop = logEl.scrollHeight;
-  }
-
-  // silent logs (NOT shown in UI)
-  function silentLog(msg) {
-    console.log(msg);
   }
 
   function digit(price) {
@@ -69,7 +63,7 @@ document.addEventListener("DOMContentLoaded", () => {
     activeContractId = null;
   }
 
-  // ================= TRADE =================
+  // ================= TRADE (FINAL FIXED FOR YOUR OTP FLOW) =================
   function placeTrade(barrier) {
     const amount = stake(ladder);
 
@@ -79,12 +73,17 @@ document.addEventListener("DOMContentLoaded", () => {
       proposal: 1,
       contract_type: "DIGITDIFF",
       currency: "USD",
-      amount,
+
+      amount: amount,
       basis: "stake",
+
       duration: 1,
       duration_unit: "t",
-      barrier
+
+      barrier: barrier
     };
+
+    console.log("PROPOSAL REQUEST →", req);
 
     send(req);
 
@@ -98,7 +97,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const d = digit(price);
 
     priceEl.textContent = price.toFixed(2);
-
     log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
 
     if (waitingProposal || activeContractId) return;
@@ -113,6 +111,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (a === 2 && b === 3) {
 
       if (x === 9) {
+        log("INVALID x=9 → ignored", "red");
         sequence = [];
         return;
       }
@@ -184,14 +183,14 @@ document.addEventListener("DOMContentLoaded", () => {
               Number(d.balance.balance || 0).toFixed(2);
           }
 
-          // ================= SILENT EXECUTION FLOW =================
-
           if (d.msg_type === "proposal") {
+
             if (!waitingProposal) return;
 
             waitingProposal = false;
 
-            silentLog("proposal received");
+            log("PROPOSAL RECEIVED → BUYING", "#22c55e");
+
             send({
               buy: d.proposal.id,
               price: d.proposal.ask_price
@@ -199,9 +198,10 @@ document.addEventListener("DOMContentLoaded", () => {
           }
 
           if (d.msg_type === "buy") {
+
             activeContractId = d.buy.contract_id;
 
-            silentLog("buy confirmed " + activeContractId);
+            log(`BUY CONFIRMED → ${activeContractId}`, "#22c55e");
 
             send({
               proposal_open_contract: 1,
