@@ -32,7 +32,10 @@ document.addEventListener("DOMContentLoaded", () => {
   let totalProfit = 0;
 
   let sequence = [];
+  // proposal retry state
   let waitingProposal = false;
+  let proposalVariants = null;
+  let proposalAttempt = 0;
   let activeContractId = null;
 
   function log(msg, color = "#fff") {
@@ -56,26 +59,26 @@ document.addEventListener("DOMContentLoaded", () => {
   function send(data) {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       log("WS not open — cannot send", "red");
-      return;
+      return false;
     }
     const payload = JSON.stringify(data);
     ws.send(payload);
     console.log("SENT:", payload);
+    return true;
   }
 
   function resetStrategy() {
     sequence = [];
     waitingProposal = false;
+    proposalVariants = null;
+    proposalAttempt = 0;
     activeContractId = null;
   }
 
-  // ================= TRADE (FIXED) =================
-  function placeTrade(barrier) {
+  // build proposal variants (ordered attempts)
+  function buildProposalVariants(barrier) {
     const amount = stake(ladder);
-
-    waitingProposal = true;
-
-    const req = {
+    const base = {
       proposal: 1,
       contract_type: "DIGITDIFF",
       currency: "USD",
@@ -83,16 +86,48 @@ document.addEventListener("DOMContentLoaded", () => {
       basis: "stake",
       duration: 1,
       duration_unit: "t",
-      // include only underlying_symbol (server rejected 'symbol')
-      underlying_symbol: SYMBOL,
       barrier: barrier
     };
 
-    console.log("PROPOSAL REQUEST →", req);
+    // variants: start with minimal (no symbol), then try underlying_symbol, then underlying, finally symbol
+    return [
+      Object.assign({}, base), // minimal
+      Object.assign({}, base, { underlying_symbol: SYMBOL }),
+      Object.assign({}, base, { underlying: SYMBOL }),
+      Object.assign({}, base, { symbol: SYMBOL })
+    ];
+  }
 
+  // send next available variant
+  function sendNextProposalVariant() {
+    if (!proposalVariants) return;
+    if (proposalAttempt >= proposalVariants.length) {
+      log("All proposal variants attempted — giving up", "red");
+      waitingProposal = false;
+      proposalVariants = null;
+      proposalAttempt = 0;
+      return;
+    }
+    const req = proposalVariants[proposalAttempt];
+    proposalAttempt++;
+    log(`SENDING PROPOSAL VARIANT #${proposalAttempt}`, "#a78bfa");
     send(req);
+  }
 
-    log(`PROPOSAL SENT → DIGITDIFF ${barrier} | stake ${amount}`, "#38bdf8");
+  // ================= TRADE (RETRYABLE) =================
+  function placeTrade(barrier) {
+    if (waitingProposal) {
+      log("Already waiting for a proposal — skipping new trade", "orange");
+      return;
+    }
+
+    // prepare variants then send first
+    proposalVariants = buildProposalVariants(barrier);
+    proposalAttempt = 0;
+    waitingProposal = true;
+
+    log(`PROPOSAL SENT → DIGITDIFF ${barrier} | stake ${proposalVariants[0].amount}`, "#38bdf8");
+    sendNextProposalVariant();
   }
 
   // ================= STRATEGY =================
@@ -101,7 +136,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const d = digit(price);
 
-    priceEl.textContent = price.toFixed(2);
+    if (priceEl) priceEl.textContent = price.toFixed(2);
     log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
 
     if (waitingProposal || activeContractId) return;
@@ -114,7 +149,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const [a, b, z1, z2, x] = sequence;
 
     if (a === 2 && b === 3) {
-
       if (x === 9) {
         log("INVALID x=9 → ignored", "red");
         sequence = [];
@@ -129,6 +163,40 @@ document.addEventListener("DOMContentLoaded", () => {
 
       sequence = [];
     }
+  }
+
+  // helper to inspect server error and decide retry
+  function handleValidationError(errMsg) {
+    if (!waitingProposal || !proposalVariants) return false;
+
+    // Normalize message
+    const msg = String(errMsg || "").toLowerCase();
+
+    // If server complains about missing underlying symbol, try variants that include it
+    if (msg.includes("underlying_symbol") || msg.includes("underlying symbol") || msg.includes("underlying")) {
+      log("Server requires underlying symbol — trying next variant", "orange");
+      sendNextProposalVariant();
+      return true;
+    }
+
+    // If server complains about symbol not allowed, skip variants that include symbol (they are last)
+    if (msg.includes("properties not allowed") && msg.includes("symbol")) {
+      // drop any remaining variants that include 'symbol'
+      proposalVariants = proposalVariants.filter(v => !("symbol" in v));
+      log("Server rejected 'symbol' property — removed symbol variants and retrying", "orange");
+      // reset attempt index to current length already tried; continue
+      sendNextProposalVariant();
+      return true;
+    }
+
+    // Generic "missing" or "invalid" clues: try next variant
+    if (msg.includes("missing") || msg.includes("invalid") || msg.includes("validation failed")) {
+      log("Validation error from server — trying next proposal variant", "orange");
+      sendNextProposalVariant();
+      return true;
+    }
+
+    return false;
   }
 
   // ================= CONNECT =================
@@ -161,7 +229,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
         ws.onopen = () => {
           log("WS CONNECTED", "lime");
-
           setTimeout(() => {
             send({ ticks: SYMBOL, subscribe: 1 });
             send({ balance: 1 });
@@ -179,10 +246,24 @@ document.addEventListener("DOMContentLoaded", () => {
           }
 
           if (d.error) {
-            log(`ERROR → ${d.error.message}`, "red");
+            log(`ERROR → ${d.error.message || JSON.stringify(d.error)}`, "red");
             console.error("Server error object:", d.error);
-            waitingProposal = false;
-            activeContractId = null;
+
+            // If this is a validation error while waiting for proposal, attempt next variant
+            if (waitingProposal) {
+              const tried = handleValidationError(d.error.message || JSON.stringify(d.error));
+              if (!tried) {
+                // no retry possible
+                waitingProposal = false;
+                proposalVariants = null;
+                proposalAttempt = 0;
+              }
+            } else {
+              // reset proposal state if not relevant
+              waitingProposal = false;
+              proposalVariants = null;
+              proposalAttempt = 0;
+            }
             return;
           }
 
@@ -195,20 +276,23 @@ document.addEventListener("DOMContentLoaded", () => {
           }
 
           if (d.msg_type === "proposal") {
+            // only accept proposals when we are expecting one
             if (!waitingProposal) {
               console.log("IGNORING unsolicited proposal", d);
               return;
             }
 
-            // Accept proposal only if underlying_symbol matches (if provided)
-            const propSym = (d.proposal && (d.proposal.underlying_symbol || d.proposal.symbol)) || null;
+            // Accept proposal and reset retry state
+            waitingProposal = false;
+            proposalVariants = null;
+            proposalAttempt = 0;
+
+            // Validate if proposal underlying matches (if provided)
+            const propSym = (d.proposal && (d.proposal.underlying_symbol || d.proposal.symbol || d.proposal.underlying)) || null;
             if (propSym && propSym !== SYMBOL) {
               log(`PROPOSAL for unexpected underlying ${propSym} — ignoring`, "red");
-              waitingProposal = false;
               return;
             }
-
-            waitingProposal = false;
 
             log("PROPOSAL RECEIVED → BUYING", "#22c55e");
 
@@ -221,12 +305,10 @@ document.addEventListener("DOMContentLoaded", () => {
           if (d.msg_type === "buy") {
             if (!d.buy || !d.buy.contract_id) {
               log("BUY response missing contract_id", "red");
-              waitingProposal = false;
               return;
             }
 
             activeContractId = d.buy.contract_id;
-
             log(`BUY CONFIRMED → ${activeContractId}`, "#22c55e");
 
             send({
@@ -259,6 +341,8 @@ document.addEventListener("DOMContentLoaded", () => {
               levelEl.textContent = ladder;
 
               waitingProposal = false;
+              proposalVariants = null;
+              proposalAttempt = 0;
               activeContractId = null;
 
               resetStrategy();
