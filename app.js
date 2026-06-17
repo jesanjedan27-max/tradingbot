@@ -124,10 +124,10 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     return [
-      Object.assign({}, base),
       Object.assign({}, base, { underlying_symbol: SYMBOL }),
       Object.assign({}, base, { underlying: SYMBOL }),
-      Object.assign({}, base, { symbol: SYMBOL })
+      Object.assign({}, base, { symbol: SYMBOL }),
+      Object.assign({}, base)
     ];
   }
 
