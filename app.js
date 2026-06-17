@@ -16,7 +16,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const logEl = $("log");
   const stakeInput = $("stakeInput");
 
-  const SYMBOL = "R_100";
+  const SYMBOL = "1HZ100V"; // IMPORTANT: proper Deriv underlying symbol format
 
   let ACCOUNT = "demo";
   const ACCOUNTS = {
@@ -31,7 +31,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let ladder = 0;
   let totalProfit = 0;
 
-  // ================= STATE =================
   let sequence = [];
   let waitingProposal = false;
   let activeContractId = null;
@@ -55,9 +54,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function send(data) {
     if (!ws || ws.readyState !== 1) return;
-
-    console.log("WS SEND FINAL:", data);
-
     ws.send(JSON.stringify(data));
   }
 
@@ -67,7 +63,7 @@ document.addEventListener("DOMContentLoaded", () => {
     activeContractId = null;
   }
 
-  // ================= TRADE (YOUR FIX APPLIED) =================
+  // ================= TRADE (FINAL CORRECT VERSION) =================
   function placeTrade(barrier) {
     const amount = stake(ladder);
 
@@ -75,17 +71,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const req = {
       proposal: 1,
-      amount,
-      basis: "stake",
       contract_type: "DIGITDIFF",
       currency: "USD",
+      underlying_symbol: SYMBOL,
+
+      amount: amount,
+      basis: "stake",
+
       duration: 1,
       duration_unit: "t",
-      barrier
+
+      barrier: barrier,
+      subscribe: 1
     };
 
     console.log("PROPOSAL REQUEST →", req);
-
     send(req);
 
     log(`PROPOSAL SENT → DIGITDIFF ${barrier} | stake ${amount}`, "#38bdf8");
@@ -98,7 +98,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const d = digit(price);
 
     priceEl.textContent = price.toFixed(2);
-
     log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
 
     if (waitingProposal || activeContractId) return;
@@ -120,10 +119,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const barrier = x + 1;
 
-      log(
-        `PATTERN FOUND → ${sequence.join(",")} → DIGITDIFF ${barrier}`,
-        "lime"
-      );
+      log(`PATTERN FOUND → ${sequence.join(",")} → DIGITDIFF ${barrier}`, "lime");
 
       placeTrade(barrier);
 
@@ -139,16 +135,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const accountId = ACCOUNTS[ACCOUNT];
 
-    fetch(
-      `https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: "Bearer " + localStorage.getItem("access_token"),
-          "Deriv-App-ID": "33wZZKTFZrmsZgFaAH53Z"
-        }
+    fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + localStorage.getItem("access_token"),
+        "Deriv-App-ID": "33wZZKTFZrmsZgFaAH53Z"
       }
-    )
+    })
       .then(r => r.json())
       .then(data => {
 
@@ -170,10 +163,7 @@ document.addEventListener("DOMContentLoaded", () => {
         };
 
         ws.onmessage = (e) => {
-
           const d = JSON.parse(e.data);
-
-          console.log("WS:", d);
 
           if (d.error) {
             log(`ERROR → ${d.error.message}`, "red");
@@ -182,18 +172,15 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
           }
 
-          // ================= TICK =================
           if (d.msg_type === "tick") {
             onTick(d.tick.quote);
           }
 
-          // ================= BALANCE =================
           if (d.msg_type === "balance") {
             balanceEl.textContent =
               Number(d.balance.balance || 0).toFixed(2);
           }
 
-          // ================= PROPOSAL =================
           if (d.msg_type === "proposal") {
 
             if (!waitingProposal) return;
@@ -208,7 +195,6 @@ document.addEventListener("DOMContentLoaded", () => {
             });
           }
 
-          // ================= BUY =================
           if (d.msg_type === "buy") {
 
             activeContractId = d.buy.contract_id;
@@ -222,23 +208,17 @@ document.addEventListener("DOMContentLoaded", () => {
             });
           }
 
-          // ================= CONTRACT =================
           if (d.msg_type === "proposal_open_contract") {
 
             const c = d.proposal_open_contract;
-
             if (!c) return;
 
-            profitEl.textContent =
-              Number(c.profit || 0).toFixed(2);
-
-            balanceEl.textContent =
-              Number(c.balance_after || 0).toFixed(2);
+            profitEl.textContent = Number(c.profit || 0).toFixed(2);
+            balanceEl.textContent = Number(c.balance_after || 0).toFixed(2);
 
             if (c.is_sold) {
 
               const pnl = Number(c.profit || 0);
-
               totalProfit += pnl;
 
               profitEl.textContent = totalProfit.toFixed(2);
