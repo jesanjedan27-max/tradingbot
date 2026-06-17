@@ -55,6 +55,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function send(data) {
     if (!ws || ws.readyState !== 1) return;
+
+    console.log("WS SEND FINAL:", data);
+
     ws.send(JSON.stringify(data));
   }
 
@@ -64,13 +67,13 @@ document.addEventListener("DOMContentLoaded", () => {
     activeContractId = null;
   }
 
-  // ================= TRADE (FIXED) =================
+  // ================= TRADE (YOUR FIX APPLIED) =================
   function placeTrade(barrier) {
     const amount = stake(ladder);
 
     waitingProposal = true;
 
-    send({
+    const req = {
       proposal: 1,
       amount,
       basis: "stake",
@@ -79,7 +82,11 @@ document.addEventListener("DOMContentLoaded", () => {
       duration: 1,
       duration_unit: "t",
       barrier
-    });
+    };
+
+    console.log("PROPOSAL REQUEST →", req);
+
+    send(req);
 
     log(`PROPOSAL SENT → DIGITDIFF ${barrier} | stake ${amount}`, "#38bdf8");
   }
@@ -163,6 +170,7 @@ document.addEventListener("DOMContentLoaded", () => {
         };
 
         ws.onmessage = (e) => {
+
           const d = JSON.parse(e.data);
 
           console.log("WS:", d);
