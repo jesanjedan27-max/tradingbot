@@ -1,4 +1,6 @@
-// Optimized app.js for Deriv DigitDiff bot
+// Deriv DigitDiff bot optimized for OTP error handling
+// Save this file as app.js alongside index.html.
+
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -6,7 +8,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const pauseBtn = $("pause");
   const stopBtn = $("stop");
   const resetBtn = $("reset");
-
   const demoBtn = $("demoBtn");
   const liveBtn = $("liveBtn");
 
@@ -19,19 +20,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const SYMBOL = "R_100";
 
-  let ACCOUNT = "demo";
   const ACCOUNTS = {
     demo: "DOT92927394",
     live: "ROT91650098"
   };
 
-  let ws;
+  let account = "demo";
+  let ws = null;
   let running = false;
   let paused = false;
-
   let ladder = 0;
   let totalProfit = 0;
-
   let sequence = [];
   let waitingProposal = false;
   let proposalVariants = null;
@@ -40,25 +39,44 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
-  const TICK_BATCH_LIMIT = 500;
+  const TICK_BATCH_LIMIT = 200;
   let tickBuffer = [];
   let tickFlushTimer = null;
 
-  function appendLogLine(msg, color = "#fff") {
-    const div = document.createElement("div");
-    div.style.color = color;
-    div.textContent = msg;
-    logEl.appendChild(div);
+  function appendLogLine(message, color = "#fff") {
+    const entry = document.createElement("div");
+    entry.style.color = color;
+    entry.textContent = message;
+    logEl.appendChild(entry);
     while (logEl.children.length > LOG_MAX_ENTRIES) {
       logEl.removeChild(logEl.firstChild);
     }
     logEl.scrollTop = logEl.scrollHeight;
-    console.log(msg);
+    console.log(message);
+  }
+
+  function log(message, color = "#fff") {
+    appendLogLine(message, color);
   }
 
   function startTickFlush() {
     if (tickFlushTimer) return;
-    tickFlushTimer = setInterval(flushTickBuffer, TICK_FLUSH_MS);
+    tickFlushTimer = setInterval(() => {
+      if (!tickBuffer.length) return;
+      const fragment = document.createDocumentFragment();
+      const batch = tickBuffer.splice(0, TICK_BATCH_LIMIT);
+      batch.forEach(({ price, digit }) => {
+        const row = document.createElement("div");
+        row.style.color = "#7dd3fc";
+        row.textContent = `Tick ${Number(price).toFixed(2)} → ${digit}`;
+        fragment.appendChild(row);
+      });
+      logEl.appendChild(fragment);
+      while (logEl.children.length > LOG_MAX_ENTRIES) {
+        logEl.removeChild(logEl.firstChild);
+      }
+      logEl.scrollTop = logEl.scrollHeight;
+    }, TICK_FLUSH_MS);
   }
 
   function stopTickFlush() {
@@ -67,48 +85,13 @@ document.addEventListener("DOMContentLoaded", () => {
     tickFlushTimer = null;
   }
 
-  function flushTickBuffer() {
-    if (!tickBuffer.length) return;
-    const batch = tickBuffer.splice(0, TICK_BATCH_LIMIT);
-    const frag = document.createDocumentFragment();
-
-    for (let i = 0; i < batch.length; i++) {
-      const t = batch[i];
-      const div = document.createElement("div");
-      div.style.color = "#38bdf8";
-      div.textContent = `Tick ${Number(t.price).toFixed(2)} → ${t.digit}`;
-      frag.appendChild(div);
-    }
-
-    logEl.appendChild(frag);
-    while (logEl.children.length > LOG_MAX_ENTRIES) {
-      logEl.removeChild(logEl.firstChild);
-    }
-    logEl.scrollTop = logEl.scrollHeight;
-  }
-
-  function log(msg, color = "#fff") {
-    appendLogLine(msg, color);
-  }
-
-  function digit(price) {
+  function digitFromPrice(price) {
     return Math.floor(Math.abs(price * 100)) % 10;
   }
 
   function stake(level) {
-    const base = Number(stakeInput.value || 0.35);
-    return +(base * Math.pow(11.57, level)).toFixed(2);
-  }
-
-  function send(data) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      appendLogLine("WS not open — cannot send", "red");
-      return false;
-    }
-    const payload = JSON.stringify(data);
-    ws.send(payload);
-    console.log("SENT:", payload);
-    return true;
+    const baseStake = Number(stakeInput.value || 0.35);
+    return Number((baseStake * Math.pow(11.57, level)).toFixed(2));
   }
 
   function resetStrategy() {
@@ -126,11 +109,11 @@ document.addEventListener("DOMContentLoaded", () => {
       proposal: 1,
       contract_type: "DIGITDIFF",
       currency: "USD",
-      amount: amount,
+      amount,
       basis: "stake",
       duration: 1,
       duration_unit: "t",
-      barrier: barrier
+      barrier
     };
 
     return [
@@ -141,50 +124,25 @@ document.addEventListener("DOMContentLoaded", () => {
     ];
   }
 
-  function sendNextProposalVariant() {
-    if (!proposalVariants) return;
-    if (proposalAttempt >= proposalVariants.length) {
-      appendLogLine("All proposal variants failed", "red");
-      waitingProposal = false;
-      proposalVariants = null;
-      proposalAttempt = 0;
-      return;
+  function sendMessage(data) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      appendLogLine("WS not open; cannot send.", "red");
+      return false;
     }
-    const req = proposalVariants[proposalAttempt];
-    proposalAttempt++;
-    send(req);
+    ws.send(JSON.stringify(data));
+    return true;
   }
 
-  function placeTrade(barrier) {
-    if (waitingProposal) {
-      appendLogLine("Already waiting for proposal — skipping", "orange");
-      return;
-    }
-
-    proposalVariants = buildProposalVariants(barrier);
-    proposalAttempt = 0;
-    waitingProposal = true;
-
-    appendLogLine(`TRADE → DIGITDIFF ${barrier} | stake ${proposalVariants[0].amount}`, "#38bdf8");
-    sendNextProposalVariant();
-  }
-
-  function handleValidationError(errMsg) {
+  function handleValidationError(errorText) {
     if (!waitingProposal || !proposalVariants) return false;
-    const msg = String(errMsg || "").toLowerCase();
+    const lower = String(errorText || "").toLowerCase();
 
-    if (msg.includes("underlying_symbol") || msg.includes("underlying symbol") || msg.includes("underlying")) {
+    if (lower.includes("underlying_symbol") || lower.includes("underlying") || lower.includes("properties not allowed") || lower.includes("symbol")) {
       sendNextProposalVariant();
       return true;
     }
 
-    if (msg.includes("properties not allowed") && msg.includes("symbol")) {
-      proposalVariants = proposalVariants.filter(v => !("symbol" in v));
-      sendNextProposalVariant();
-      return true;
-    }
-
-    if (msg.includes("missing") || msg.includes("invalid") || msg.includes("validation failed")) {
+    if (lower.includes("missing") || lower.includes("invalid") || lower.includes("validation failed")) {
       sendNextProposalVariant();
       return true;
     }
@@ -192,13 +150,39 @@ document.addEventListener("DOMContentLoaded", () => {
     return false;
   }
 
+  function sendNextProposalVariant() {
+    if (!proposalVariants) return;
+    if (proposalAttempt >= proposalVariants.length) {
+      appendLogLine("All proposal variants failed.", "red");
+      waitingProposal = false;
+      proposalVariants = null;
+      proposalAttempt = 0;
+      return;
+    }
+
+    const payload = proposalVariants[proposalAttempt++];
+    appendLogLine(`Proposal attempt ${proposalAttempt}: ${JSON.stringify(payload)}`, "#a78bfa");
+    sendMessage(payload);
+  }
+
+  function placeTrade(barrier) {
+    if (waitingProposal) {
+      appendLogLine("Already waiting for a proposal.", "orange");
+      return;
+    }
+
+    proposalVariants = buildProposalVariants(barrier);
+    proposalAttempt = 0;
+    waitingProposal = true;
+    appendLogLine(`TRADE -> DIGITDIFF barrier=${barrier} stake=${proposalVariants[0].amount}`, "lime");
+    sendNextProposalVariant();
+  }
+
   function onTick(price) {
     if (!running || paused) return;
-
-    const d = digit(price);
+    const d = digitFromPrice(price);
 
     if (priceEl) priceEl.textContent = Number(price).toFixed(2);
-
     tickBuffer.push({ price, digit: d });
     startTickFlush();
 
@@ -206,55 +190,47 @@ document.addEventListener("DOMContentLoaded", () => {
 
     sequence.push(d);
     if (sequence.length > 5) sequence.shift();
-
     if (sequence.length < 5) return;
 
     const [a, b, z1, z2, x] = sequence;
-
     if (a === 2 && b === 3) {
       if (x === 9) {
-        appendLogLine("INVALID x=9 → ignored", "red");
+        appendLogLine("Invalid x=9; ignoring.", "red");
         sequence = [];
         return;
       }
-
       const barrier = x + 1;
-
-      appendLogLine(`PATTERN → ${sequence.join(",")} = DIGITDIFF ${barrier}`, "lime");
-
+      appendLogLine(`Pattern ${sequence.join(",")} -> buy DIGITDIFF ${barrier}`, "#22c55e");
       placeTrade(barrier);
-
       sequence = [];
     }
   }
 
   async function connect() {
     resetStrategy();
-
     if (ws) ws.close();
 
-    const accountId = ACCOUNTS[ACCOUNT];
+    const accountId = ACCOUNTS[account];
     const accessToken = localStorage.getItem("access_token");
 
     if (!accessToken) {
-      appendLogLine("Missing access_token in localStorage", "red");
+      appendLogLine("Missing access_token in localStorage.", "red");
       return;
     }
 
     try {
-      const res = await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, {
+      const response = await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, {
         method: "POST",
         headers: {
-          Authorization: "Bearer " + accessToken,
+          Authorization: `Bearer ${accessToken}`,
           "Deriv-App-ID": "33wZZKTFZrmsZgFaAH53Z"
         }
       });
 
-      const text = await res.text();
-
-      if (!res.ok) {
-        appendLogLine(`OTP request failed ${res.status}`, "red");
-        appendLogLine(text.slice(0, 2000), "red");
+      const text = await response.text();
+      if (!response.ok) {
+        appendLogLine(`OTP request failed ${response.status}.`, "red");
+        appendLogLine(text, "red");
         console.error("OTP failure response:", text);
         return;
       }
@@ -262,138 +238,112 @@ document.addEventListener("DOMContentLoaded", () => {
       let data;
       try {
         data = JSON.parse(text);
-      } catch (e) {
-        appendLogLine("OTP response not JSON — server returned:", "red");
-        appendLogLine(text.slice(0, 2000), "red");
-        console.error("Full OTP response:", text);
+      } catch (err) {
+        appendLogLine("OTP response is not JSON.", "red");
+        appendLogLine(text, "red");
+        console.error("OTP parse error:", err, "response:", text);
         return;
       }
 
       if (!data?.data?.url) {
-        appendLogLine("OTP FAILED — no url in response", "red");
-        console.log(data);
+        appendLogLine("OTP response missing data.url.", "red");
+        appendLogLine(JSON.stringify(data), "red");
         return;
       }
 
       ws = new WebSocket(data.data.url);
 
       ws.onopen = () => {
-        appendLogLine("WS CONNECTED", "lime");
-        setTimeout(() => {
-          send({ ticks: SYMBOL, subscribe: 1 });
-          send({ balance: 1 });
-        }, 150);
+        appendLogLine("WS connected.", "lime");
+        sendMessage({ ticks: SYMBOL, subscribe: 1 });
+        sendMessage({ balance: 1 });
       };
 
-      ws.onmessage = (e) => {
-        let d;
+      ws.onmessage = e => {
+        let payload;
         try {
-          d = JSON.parse(e.data);
+          payload = JSON.parse(e.data);
         } catch (err) {
-          console.error("Invalid JSON message", e.data);
-          appendLogLine("Invalid JSON from WS", "red");
+          appendLogLine("Invalid JSON from WS.", "red");
+          console.error("WS parse error:", err, e.data);
           return;
         }
 
-        if (d.error) {
-          appendLogLine(`ERROR → ${d.error.message || JSON.stringify(d.error)}`, "red");
-          console.error("Server error object:", d.error);
+        if (payload.error) {
+          const message = payload.error.message || JSON.stringify(payload.error);
+          appendLogLine(`Error: ${message}`, "red");
+          if (!handleValidationError(message)) {
+            waitingProposal = false;
+            proposalVariants = null;
+            proposalAttempt = 0;
+          }
+          return;
+        }
 
-          if (waitingProposal) {
-            const tried = handleValidationError(d.error.message || JSON.stringify(d.error));
-            if (!tried) {
+        switch (payload.msg_type) {
+          case "tick":
+            onTick(payload.tick.quote);
+            break;
+          case "balance":
+            if (balanceEl) balanceEl.textContent = Number(payload.balance.balance || 0).toFixed(2);
+            break;
+          case "proposal":
+            if (!waitingProposal) break;
+            waitingProposal = false;
+            proposalVariants = null;
+            proposalAttempt = 0;
+            if (!payload.proposal) {
+              appendLogLine("Proposal response missing payload.", "red");
+              break;
+            }
+            sendMessage({ buy: payload.proposal.id, price: payload.proposal.ask_price });
+            break;
+          case "buy":
+            activeContractId = payload.buy?.contract_id || null;
+            if (activeContractId) {
+              sendMessage({ proposal_open_contract: 1, contract_id: activeContractId, subscribe: 1 });
+            }
+            break;
+          case "proposal_open_contract":
+            const contract = payload.proposal_open_contract;
+            if (!contract) return;
+            if (profitEl) profitEl.textContent = Number(contract.profit || 0).toFixed(2);
+            if (balanceEl) balanceEl.textContent = Number(contract.balance_after || 0).toFixed(2);
+            if (contract.is_sold) {
+              const pnl = Number(contract.profit || 0);
+              totalProfit += pnl;
+              profitEl.textContent = totalProfit.toFixed(2);
+              if (pnl >= 0) {
+                ladder = 0;
+                appendLogLine(`WIN +${pnl.toFixed(2)}`, "lime");
+              } else {
+                ladder += 1;
+                appendLogLine(`LOSS ${pnl.toFixed(2)}`, "red");
+              }
+              if (levelEl) levelEl.textContent = ladder;
               waitingProposal = false;
               proposalVariants = null;
               proposalAttempt = 0;
+              activeContractId = null;
+              resetStrategy();
             }
-          } else {
-            waitingProposal = false;
-            proposalVariants = null;
-            proposalAttempt = 0;
-          }
-          return;
-        }
-
-        if (d.msg_type === "tick") {
-          onTick(d.tick.quote);
-        }
-
-        if (d.msg_type === "balance") {
-          balanceEl.textContent = Number(d.balance.balance || 0).toFixed(2);
-        }
-
-        if (d.msg_type === "proposal") {
-          if (!waitingProposal) {
-            console.log("IGNORING unsolicited proposal", d);
-            return;
-          }
-
-          waitingProposal = false;
-          proposalVariants = null;
-          proposalAttempt = 0;
-
-          const propSym = (d.proposal && (d.proposal.underlying_symbol || d.proposal.symbol || d.proposal.underlying)) || null;
-          if (propSym && propSym !== SYMBOL) {
-            appendLogLine(`PROPOSAL for unexpected underlying ${propSym}`, "red");
-            return;
-          }
-
-          send({ buy: d.proposal.id, price: d.proposal.ask_price });
-        }
-
-        if (d.msg_type === "buy") {
-          if (!d.buy || !d.buy.contract_id) {
-            appendLogLine("BUY failed — no contract_id", "red");
-            return;
-          }
-
-          activeContractId = d.buy.contract_id;
-          send({ proposal_open_contract: 1, contract_id: activeContractId, subscribe: 1 });
-        }
-
-        if (d.msg_type === "proposal_open_contract") {
-          const c = d.proposal_open_contract;
-          if (!c) return;
-
-          profitEl.textContent = Number(c.profit || 0).toFixed(2);
-          balanceEl.textContent = Number(c.balance_after || 0).toFixed(2);
-
-          if (c.is_sold) {
-            const pnl = Number(c.profit || 0);
-            totalProfit += pnl;
-            profitEl.textContent = totalProfit.toFixed(2);
-
-            if (pnl >= 0) {
-              ladder = 0;
-              appendLogLine(`✓ WIN +${pnl}`, "lime");
-            } else {
-              ladder++;
-              appendLogLine(`✗ LOSS ${pnl}`, "red");
-            }
-
-            levelEl.textContent = ladder;
-
-            waitingProposal = false;
-            proposalVariants = null;
-            proposalAttempt = 0;
-            activeContractId = null;
-
-            resetStrategy();
-          }
+            break;
+          default:
+            break;
         }
       };
 
-      ws.onclose = (ev) => {
-        appendLogLine(`WS CLOSED (code ${ev.code})`, "red");
+      ws.onclose = ev => {
+        appendLogLine(`WS closed (code ${ev.code}).`, "orange");
         stopTickFlush();
       };
 
-      ws.onerror = (ev) => {
-        appendLogLine("WS ERROR", "red");
-        console.error("WebSocket error", ev);
+      ws.onerror = ev => {
+        appendLogLine("WS error.", "red");
+        console.error("WebSocket error:", ev);
       };
     } catch (err) {
-      appendLogLine("OTP fetch failed: " + String(err), "red");
+      appendLogLine(`OTP fetch failed: ${String(err)}`, "red");
       console.error(err);
     }
   }
@@ -411,34 +361,34 @@ document.addEventListener("DOMContentLoaded", () => {
 
   stopBtn.onclick = () => {
     running = false;
-    ws?.close();
-    appendLogLine("STOPPED", "red");
+    if (ws) ws.close();
     stopTickFlush();
+    appendLogLine("STOPPED", "red");
   };
 
   resetBtn.onclick = () => {
     resetStrategy();
     totalProfit = 0;
-    profitEl.textContent = "0.00";
+    if (profitEl) profitEl.textContent = "0.00";
     appendLogLine("RESET DONE", "orange");
   };
 
   demoBtn.onclick = () => {
-    ACCOUNT = "demo";
+    account = "demo";
     appendLogLine("DEMO MODE", "blue");
-    const mi = document.getElementById("modeIndicator");
+    const mi = $("modeIndicator");
     if (mi) mi.textContent = "JESAN 💲 MODE - DEMO";
   };
 
   liveBtn.onclick = () => {
-    ACCOUNT = "live";
+    account = "live";
     appendLogLine("LIVE MODE", "red");
-    const mi = document.getElementById("modeIndicator");
+    const mi = $("modeIndicator");
     if (mi) mi.textContent = "JESAN 💲 MODE - LIVE";
   };
 
   window.addEventListener("beforeunload", () => {
-    try { ws?.close(); } catch (e) {}
+    if (ws) ws.close();
     stopTickFlush();
   });
 });
