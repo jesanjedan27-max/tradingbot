@@ -169,10 +169,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
           console.log("WS:", d);
 
+          // ✅ UPDATED BLOCK
           if (d.error) {
+
+            console.error("FULL ERROR:", d);
+
             log(`ERROR → ${d.error.message}`, "red");
+
             waitingProposal = false;
             activeContractId = null;
+
             return;
           }
 
