@@ -144,7 +144,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function sendNextProposalVariant() {
     if (!proposalVariants) return;
     if (proposalAttempt >= proposalVariants.length) {
-      appendLogLine("All proposal variants attempted — no accepted proposal", "red");
+      appendLogLine("All proposal variants failed", "red");
       waitingProposal = false;
       proposalVariants = null;
       proposalAttempt = 0;
@@ -152,13 +152,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     const req = proposalVariants[proposalAttempt];
     proposalAttempt++;
-    appendLogLine(`SENDING PROPOSAL VARIANT #${proposalAttempt}`, "#a78bfa");
     send(req);
   }
 
   function placeTrade(barrier) {
     if (waitingProposal) {
-      appendLogLine("Already waiting for a proposal — skipping new trade", "orange");
+      appendLogLine("Already waiting for proposal — skipping", "orange");
       return;
     }
 
@@ -166,7 +165,7 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalAttempt = 0;
     waitingProposal = true;
 
-    appendLogLine(`PROPOSAL INIT → DIGITDIFF ${barrier} | stake ${proposalVariants[0].amount}`, "#38bdf8");
+    appendLogLine(`TRADE → DIGITDIFF ${barrier} | stake ${proposalVariants[0].amount}`, "#38bdf8");
     sendNextProposalVariant();
   }
 
@@ -175,20 +174,17 @@ document.addEventListener("DOMContentLoaded", () => {
     const msg = String(errMsg || "").toLowerCase();
 
     if (msg.includes("underlying_symbol") || msg.includes("underlying symbol") || msg.includes("underlying")) {
-      appendLogLine("Server requires underlying symbol — trying next variant", "orange");
       sendNextProposalVariant();
       return true;
     }
 
     if (msg.includes("properties not allowed") && msg.includes("symbol")) {
       proposalVariants = proposalVariants.filter(v => !("symbol" in v));
-      appendLogLine("Server rejected 'symbol' property — removed symbol variants and retrying", "orange");
       sendNextProposalVariant();
       return true;
     }
 
     if (msg.includes("missing") || msg.includes("invalid") || msg.includes("validation failed")) {
-      appendLogLine("Validation error from server — trying next proposal variant", "orange");
       sendNextProposalVariant();
       return true;
     }
@@ -224,7 +220,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const barrier = x + 1;
 
-      appendLogLine(`PATTERN FOUND → ${sequence.join(",")} → DIGITDIFF ${barrier}`, "lime");
+      appendLogLine(`PATTERN → ${sequence.join(",")} = DIGITDIFF ${barrier}`, "lime");
 
       placeTrade(barrier);
 
@@ -273,7 +269,7 @@ document.addEventListener("DOMContentLoaded", () => {
             d = JSON.parse(e.data);
           } catch (err) {
             console.error("Invalid JSON message", e.data);
-            appendLogLine("Received invalid JSON from WS", "red");
+            appendLogLine("Invalid JSON from WS", "red");
             return;
           }
 
@@ -316,7 +312,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const propSym = (d.proposal && (d.proposal.underlying_symbol || d.proposal.symbol || d.proposal.underlying)) || null;
             if (propSym && propSym !== SYMBOL) {
-              appendLogLine(`PROPOSAL for unexpected underlying ${propSym} — ignoring`, "red");
+              appendLogLine(`PROPOSAL for unexpected underlying ${propSym}`, "red");
               return;
             }
 
@@ -328,7 +324,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
           if (d.msg_type === "buy") {
             if (!d.buy || !d.buy.contract_id) {
-              appendLogLine("BUY response missing contract_id", "red");
+              appendLogLine("BUY failed — no contract_id", "red");
               return;
             }
 
@@ -355,10 +351,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
               if (pnl >= 0) {
                 ladder = 0;
-                appendLogLine(`WIN +${pnl}`, "lime");
+                appendLogLine(`✓ WIN +${pnl}`, "lime");
               } else {
                 ladder++;
-                appendLogLine(`LOSS ${pnl}`, "red");
+                appendLogLine(`✗ LOSS ${pnl}`, "red");
               }
 
               levelEl.textContent = ladder;
@@ -379,12 +375,12 @@ document.addEventListener("DOMContentLoaded", () => {
         };
 
         ws.onerror = (ev) => {
-          appendLogLine("WS ERROR — check console for details", "red");
+          appendLogLine("WS ERROR", "red");
           console.error("WebSocket error", ev);
         };
       })
       .catch(err => {
-        appendLogLine("OTP fetch failed: " + String(err), "red");
+        appendLogLine("OTP failed: " + String(err), "red");
         console.error(err);
       });
   }
@@ -411,7 +407,7 @@ document.addEventListener("DOMContentLoaded", () => {
     resetStrategy();
     totalProfit = 0;
     profitEl.textContent = "0.00";
-    appendLogLine("RESET DONE", "orange");
+    appendLogLine("RESET", "orange");
   };
 
   demoBtn.onclick = () => {
