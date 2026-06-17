@@ -31,10 +31,10 @@ document.addEventListener("DOMContentLoaded", () => {
   let ladder = 0;
   let totalProfit = 0;
 
-  // ================= STRATEGY STATE =================
+  // ================= STATE =================
   let sequence = [];
   let waitingProposal = false;
-  let proposalId = null;
+  let activeContractId = null;
 
   function log(msg, color = "#fff") {
     const div = document.createElement("div");
@@ -61,7 +61,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function resetStrategy() {
     sequence = [];
     waitingProposal = false;
-    proposalId = null;
+    activeContractId = null;
   }
 
   // ================= TRADE =================
@@ -95,7 +95,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
 
-    if (waitingProposal) return;
+    if (waitingProposal || activeContractId) return;
 
     sequence.push(d);
     if (sequence.length > 5) sequence.shift();
@@ -104,11 +104,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const [a, b, z1, z2, x] = sequence;
 
-    // PATTERN: 2,3,z,z,x
     if (a === 2 && b === 3) {
 
       if (x === 9) {
-        log("INVALID SEQUENCE (x=9)", "red");
+        log("INVALID x=9 → ignored", "red");
         sequence = [];
         return;
       }
@@ -116,7 +115,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const barrier = x + 1;
 
       log(
-        `PATTERN FOUND → ${sequence.join(",")} → TRADE DIGITDIFF ${barrier}`,
+        `PATTERN → ${sequence.join(",")} → DIGITDIFF ${barrier}`,
         "lime"
       );
 
@@ -167,57 +166,79 @@ document.addEventListener("DOMContentLoaded", () => {
         ws.onmessage = (e) => {
           const d = JSON.parse(e.data);
 
-          // ================= TICKS =================
+          // ================= TICK =================
           if (d.msg_type === "tick") {
             onTick(d.tick.quote);
           }
 
           // ================= BALANCE =================
           if (d.msg_type === "balance") {
-            balanceEl.textContent = Number(d.balance.balance || 0).toFixed(2);
+            balanceEl.textContent =
+              Number(d.balance.balance || 0).toFixed(2);
           }
 
-          // ================= PROPOSAL RESPONSE =================
+          // ================= PROPOSAL =================
           if (d.msg_type === "proposal") {
 
             if (!waitingProposal) return;
 
-            proposalId = d.proposal.id;
-
             log("PROPOSAL RECEIVED → BUYING", "#22c55e");
 
             send({
-              buy: proposalId,
+              buy: d.proposal.id,
               price: d.proposal.ask_price
             });
           }
 
-          // ================= CONTRACT RESULT =================
+          // ================= BUY CONFIRM =================
+          if (d.msg_type === "buy") {
+
+            activeContractId = d.buy.contract_id;
+
+            log(`BUY CONFIRMED → ${activeContractId}`, "#22c55e");
+
+            send({
+              proposal_open_contract: 1,
+              contract_id: activeContractId
+            });
+          }
+
+          // ================= CONTRACT =================
           if (d.msg_type === "proposal_open_contract") {
 
             const c = d.proposal_open_contract;
 
-            if (!c.is_sold) return;
+            if (!c) return;
 
-            const pnl = Number(c.profit || 0);
+            profitEl.textContent =
+              Number(c.profit || 0).toFixed(2);
 
-            totalProfit += pnl;
+            balanceEl.textContent =
+              Number(c.balance_after || 0).toFixed(2);
 
-            profitEl.textContent = totalProfit.toFixed(2);
-            balanceEl.textContent = Number(c.balance_after || 0).toFixed(2);
+            if (c.is_sold) {
 
-            if (pnl >= 0) {
-              ladder = 0;
-              log(`WIN +${pnl}`, "lime");
-            } else {
-              ladder++;
-              log(`LOSS ${pnl}`, "red");
+              const pnl = Number(c.profit || 0);
+
+              totalProfit += pnl;
+
+              profitEl.textContent = totalProfit.toFixed(2);
+
+              if (pnl >= 0) {
+                ladder = 0;
+                log(`WIN +${pnl}`, "lime");
+              } else {
+                ladder++;
+                log(`LOSS ${pnl}`, "red");
+              }
+
+              levelEl.textContent = ladder;
+
+              waitingProposal = false;
+              activeContractId = null;
+
+              resetStrategy();
             }
-
-            levelEl.textContent = ladder;
-
-            waitingProposal = false;
-            resetStrategy();
           }
         };
 
