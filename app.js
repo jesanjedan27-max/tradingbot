@@ -1,4 +1,4 @@
-// Deriv DigitDiff bot optimized for OTP error handling
+// Deriv DigitDiff bot optimized for payout-based recovery
 // Save this file as app.js alongside index.html.
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -20,6 +20,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const tokenInput = $("tokenInput");
 
   const SYMBOL = "R_100";
+  const DEFAULT_PAYOUT_RATIO = 11.57;
 
   const savedToken = localStorage.getItem("access_token");
   if (tokenInput && savedToken) {
@@ -35,6 +36,9 @@ document.addEventListener("DOMContentLoaded", () => {
   demoBtn.classList.add("active");
   let ws = null;
   let running = false;
+  let lastPayoutRatio = null;
+  let recoveryLoss = 0;
+  let currentStake = 0;
   let paused = false;
   let ladder = 0;
   let totalProfit = 0;
@@ -96,9 +100,14 @@ document.addEventListener("DOMContentLoaded", () => {
     return Math.floor(Math.abs(price * 100)) % 10;
   }
 
-  function stake(level) {
+  function stake() {
     const baseStake = Number(stakeInput.value || 0.35);
-    return Number((baseStake * Math.pow(11.57, level)).toFixed(2));
+    const payoutRatio = lastPayoutRatio && lastPayoutRatio > 1.01 ? lastPayoutRatio : DEFAULT_PAYOUT_RATIO;
+    if (recoveryLoss > 0 && payoutRatio > 1.01) {
+      const neededStake = (recoveryLoss + baseStake) / (payoutRatio - 1);
+      return Number(Math.max(baseStake, neededStake).toFixed(2));
+    }
+    return Number(baseStake.toFixed(2));
   }
 
   function resetStrategy() {
@@ -111,7 +120,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function buildProposalVariants(barrier) {
-    const amount = stake(ladder);
+    const amount = stake();
     const base = {
       proposal: 1,
       contract_type: "DIGITDIFF",
@@ -145,11 +154,13 @@ document.addEventListener("DOMContentLoaded", () => {
     const lower = String(errorText || "").toLowerCase();
 
     if (lower.includes("underlying_symbol") || lower.includes("underlying") || lower.includes("properties not allowed") || lower.includes("symbol")) {
+      appendLogLine("Proposal validation failed; retrying with required symbol field.", "orange");
       sendNextProposalVariant();
       return true;
     }
 
     if (lower.includes("missing") || lower.includes("invalid") || lower.includes("validation failed")) {
+      appendLogLine("Proposal validation failed; trying next option.", "orange");
       sendNextProposalVariant();
       return true;
     }
@@ -168,7 +179,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     const payload = proposalVariants[proposalAttempt++];
-    appendLogLine(`Proposal attempt ${proposalAttempt}: ${JSON.stringify(payload)}`, "#a78bfa");
+    const symbolLabel = payload.underlying_symbol ? "underlying_symbol" : payload.underlying ? "underlying" : payload.symbol ? "symbol" : "none";
+    appendLogLine(`Proposal attempt ${proposalAttempt}: ${symbolLabel} mode`, "#a78bfa");
     sendMessage(payload);
   }
 
@@ -312,6 +324,11 @@ document.addEventListener("DOMContentLoaded", () => {
               appendLogLine("Proposal response missing payload.", "red");
               break;
             }
+            currentStake = Number(payload.proposal.ask_price || 0);
+            if (payload.proposal.payout && currentStake > 0) {
+              lastPayoutRatio = Number(payload.proposal.payout / currentStake);
+              appendLogLine(`Payout ratio set to ${lastPayoutRatio.toFixed(2)}`, "#38bdf8");
+            }
             sendMessage({ buy: payload.proposal.id, price: payload.proposal.ask_price });
             break;
           case "buy":
@@ -330,11 +347,15 @@ document.addEventListener("DOMContentLoaded", () => {
               totalProfit += pnl;
               profitEl.textContent = totalProfit.toFixed(2);
               if (pnl >= 0) {
+                recoveryLoss = 0;
+                currentStake = 0;
                 ladder = 0;
                 appendLogLine(`WIN +${pnl.toFixed(2)}`, "lime");
               } else {
+                recoveryLoss += Math.abs(pnl);
                 ladder += 1;
-                appendLogLine(`LOSS ${pnl.toFixed(2)}`, "red");
+                const nextStake = stake();
+                appendLogLine(`LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)}`, "red");
               }
               if (levelEl) levelEl.textContent = ladder;
               waitingProposal = false;
@@ -385,7 +406,11 @@ document.addEventListener("DOMContentLoaded", () => {
   resetBtn.onclick = () => {
     resetStrategy();
     totalProfit = 0;
+    recoveryLoss = 0;
+    lastPayoutRatio = null;
+    ladder = 0;
     if (profitEl) profitEl.textContent = "0.00";
+    if (levelEl) levelEl.textContent = "0";
     appendLogLine("RESET DONE", "orange");
   };
 
