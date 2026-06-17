@@ -1,4 +1,4 @@
-// Deriv DigitDiff bot optimized for payout-based recovery
+// Deriv DigitDiff bot optimized for OTP error handling
 // Save this file as app.js alongside index.html.
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -38,6 +38,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let running = false;
   let lastPayoutRatio = null;
   let recoveryLoss = 0;
+  let targetProfit = 0;
   let currentStake = 0;
   let paused = false;
   let ladder = 0;
@@ -104,7 +105,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const baseStake = Number(stakeInput.value || 0.35);
     const payoutRatio = lastPayoutRatio && lastPayoutRatio > 1.01 ? lastPayoutRatio : DEFAULT_PAYOUT_RATIO;
     if (recoveryLoss > 0 && payoutRatio > 1.01) {
-      const neededStake = (recoveryLoss + baseStake) / (payoutRatio - 1);
+      // Size next stake to recover exactly the accumulated loss
+      const neededStake = recoveryLoss / (payoutRatio - 1);
       return Number(Math.max(baseStake, neededStake).toFixed(2));
     }
     return Number(baseStake.toFixed(2));
