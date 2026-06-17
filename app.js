@@ -41,6 +41,7 @@ document.addEventListener("DOMContentLoaded", () => {
     div.textContent = msg;
     logEl.appendChild(div);
     logEl.scrollTop = logEl.scrollHeight;
+    console.log(msg);
   }
 
   function digit(price) {
@@ -53,8 +54,13 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function send(data) {
-    if (!ws || ws.readyState !== 1) return;
-    ws.send(JSON.stringify(data));
+    if (!ws || ws.readyState !== 1) {
+      log("WS not open — cannot send", "red");
+      return;
+    }
+    const payload = JSON.stringify(data);
+    ws.send(payload);
+    console.log("SENT:", payload);
   }
 
   function resetStrategy() {
@@ -63,7 +69,7 @@ document.addEventListener("DOMContentLoaded", () => {
     activeContractId = null;
   }
 
-  // ================= TRADE (FINAL FIXED FOR YOUR OTP FLOW) =================
+  // ================= TRADE (FIXED) =================
   function placeTrade(barrier) {
     const amount = stake(ladder);
 
@@ -73,13 +79,14 @@ document.addEventListener("DOMContentLoaded", () => {
       proposal: 1,
       contract_type: "DIGITDIFF",
       currency: "USD",
-
       amount: amount,
       basis: "stake",
-
       duration: 1,
       duration_unit: "t",
-
+      // include symbol so server accepts and validates correctly
+      symbol: SYMBOL,
+      // include underlying_symbol as some endpoints require this exact field
+      underlying_symbol: SYMBOL,
       barrier: barrier
     };
 
@@ -165,7 +172,14 @@ document.addEventListener("DOMContentLoaded", () => {
         };
 
         ws.onmessage = (e) => {
-          const d = JSON.parse(e.data);
+          let d;
+          try {
+            d = JSON.parse(e.data);
+          } catch (err) {
+            console.error("Invalid JSON message", e.data);
+            log("Received invalid JSON from WS", "red");
+            return;
+          }
 
           if (d.error) {
             log(`ERROR → ${d.error.message}`, "red");
@@ -185,7 +199,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
           if (d.msg_type === "proposal") {
 
-            if (!waitingProposal) return;
+            if (!waitingProposal) {
+              console.log("IGNORING unsolicited proposal", d);
+              return;
+            }
+
+            // Validate proposal symbol if present
+            const propSym = (d.proposal && (d.proposal.underlying_symbol || d.proposal.symbol)) || null;
+            if (propSym && propSym !== SYMBOL) {
+              log(`PROPOSAL for unexpected underlying ${propSym} — ignoring`, "red");
+              waitingProposal = false;
+              return;
+            }
 
             waitingProposal = false;
 
@@ -198,6 +223,11 @@ document.addEventListener("DOMContentLoaded", () => {
           }
 
           if (d.msg_type === "buy") {
+            if (!d.buy || !d.buy.contract_id) {
+              log("BUY response missing contract_id", "red");
+              waitingProposal = false;
+              return;
+            }
 
             activeContractId = d.buy.contract_id;
 
@@ -243,7 +273,18 @@ document.addEventListener("DOMContentLoaded", () => {
           }
         };
 
-        ws.onclose = () => log("WS CLOSED", "red");
+        ws.onclose = (ev) => {
+          log(`WS CLOSED (code ${ev.code})`, "red");
+        };
+
+        ws.onerror = (ev) => {
+          log("WS ERROR — check console for details", "red");
+          console.error("WebSocket error", ev);
+        };
+      })
+      .catch(err => {
+        log("OTP fetch failed: " + String(err), "red");
+        console.error(err);
       });
   }
 
