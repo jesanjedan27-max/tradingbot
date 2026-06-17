@@ -1,4 +1,4 @@
-// Deriv DigitDiff bot optimized for OTP error handling
+// Deriv DigitDiff bot optimized for payout-based recovery
 // Save this file as app.js alongside index.html.
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -38,7 +38,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let running = false;
   let lastPayoutRatio = null;
   let recoveryLoss = 0;
-  let targetProfit = 0;
   let currentStake = 0;
   let paused = false;
   let ladder = 0;
