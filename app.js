@@ -1,3 +1,4 @@
+// Optimized app.js for Deriv DigitDiff bot
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -152,6 +153,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     const req = proposalVariants[proposalAttempt];
     proposalAttempt++;
+    // silent send (no verbose variant log)
     send(req);
   }
 
@@ -228,163 +230,165 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function connect() {
+  // patched connect with OTP text handling
+  async function connect() {
     resetStrategy();
 
     if (ws) ws.close();
 
     const accountId = ACCOUNTS[ACCOUNT];
-
-    fetch(
-      `https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`,
-      {
+    try {
+      const res = await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, {
         method: "POST",
         headers: {
           Authorization: "Bearer " + localStorage.getItem("access_token"),
           "Deriv-App-ID": "33wZZKTFZrmsZgFaAH53Z"
         }
+      });
+
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        appendLogLine("OTP response not JSON — server returned:", "red");
+        appendLogLine(text.slice(0, 2000), "red");
+        console.error("Full OTP response:", text);
+        return;
       }
-    )
-      .then(r => r.json())
-      .then(data => {
-        if (!data?.data?.url) {
-          appendLogLine("OTP FAILED", "red");
-          console.log(data);
+
+      if (!data?.data?.url) {
+        appendLogLine("OTP FAILED — no url in response", "red");
+        console.log(data);
+        return;
+      }
+
+      ws = new WebSocket(data.data.url);
+
+      ws.onopen = () => {
+        appendLogLine("WS CONNECTED", "lime");
+        setTimeout(() => {
+          send({ ticks: SYMBOL, subscribe: 1 });
+          send({ balance: 1 });
+        }, 150);
+      };
+
+      ws.onmessage = (e) => {
+        let d;
+        try {
+          d = JSON.parse(e.data);
+        } catch (err) {
+          console.error("Invalid JSON message", e.data);
+          appendLogLine("Invalid JSON from WS", "red");
           return;
         }
 
-        ws = new WebSocket(data.data.url);
+        if (d.error) {
+          appendLogLine(`ERROR → ${d.error.message || JSON.stringify(d.error)}`, "red");
+          console.error("Server error object:", d.error);
 
-        ws.onopen = () => {
-          appendLogLine("WS CONNECTED", "lime");
-          setTimeout(() => {
-            send({ ticks: SYMBOL, subscribe: 1 });
-            send({ balance: 1 });
-          }, 150);
-        };
-
-        ws.onmessage = (e) => {
-          let d;
-          try {
-            d = JSON.parse(e.data);
-          } catch (err) {
-            console.error("Invalid JSON message", e.data);
-            appendLogLine("Invalid JSON from WS", "red");
-            return;
-          }
-
-          if (d.error) {
-            appendLogLine(`ERROR → ${d.error.message || JSON.stringify(d.error)}`, "red");
-            console.error("Server error object:", d.error);
-
-            if (waitingProposal) {
-              const tried = handleValidationError(d.error.message || JSON.stringify(d.error));
-              if (!tried) {
-                waitingProposal = false;
-                proposalVariants = null;
-                proposalAttempt = 0;
-              }
-            } else {
+          if (waitingProposal) {
+            const tried = handleValidationError(d.error.message || JSON.stringify(d.error));
+            if (!tried) {
               waitingProposal = false;
               proposalVariants = null;
               proposalAttempt = 0;
             }
+          } else {
+            waitingProposal = false;
+            proposalVariants = null;
+            proposalAttempt = 0;
+          }
+          return;
+        }
+
+        if (d.msg_type === "tick") {
+          onTick(d.tick.quote);
+        }
+
+        if (d.msg_type === "balance") {
+          balanceEl.textContent = Number(d.balance.balance || 0).toFixed(2);
+        }
+
+        if (d.msg_type === "proposal") {
+          if (!waitingProposal) {
+            console.log("IGNORING unsolicited proposal", d);
             return;
           }
 
-          if (d.msg_type === "tick") {
-            onTick(d.tick.quote);
+          waitingProposal = false;
+          proposalVariants = null;
+          proposalAttempt = 0;
+
+          const propSym = (d.proposal && (d.proposal.underlying_symbol || d.proposal.symbol || d.proposal.underlying)) || null;
+          if (propSym && propSym !== SYMBOL) {
+            appendLogLine(`PROPOSAL for unexpected underlying ${propSym}`, "red");
+            return;
           }
 
-          if (d.msg_type === "balance") {
-            balanceEl.textContent = Number(d.balance.balance || 0).toFixed(2);
+          // silent buy
+          send({ buy: d.proposal.id, price: d.proposal.ask_price });
+        }
+
+        if (d.msg_type === "buy") {
+          if (!d.buy || !d.buy.contract_id) {
+            appendLogLine("BUY failed — no contract_id", "red");
+            return;
           }
 
-          if (d.msg_type === "proposal") {
-            if (!waitingProposal) {
-              console.log("IGNORING unsolicited proposal", d);
-              return;
+          activeContractId = d.buy.contract_id;
+          // request open contract subscription
+          send({ proposal_open_contract: 1, contract_id: activeContractId, subscribe: 1 });
+        }
+
+        if (d.msg_type === "proposal_open_contract") {
+          const c = d.proposal_open_contract;
+          if (!c) return;
+
+          profitEl.textContent = Number(c.profit || 0).toFixed(2);
+          balanceEl.textContent = Number(c.balance_after || 0).toFixed(2);
+
+          if (c.is_sold) {
+            const pnl = Number(c.profit || 0);
+            totalProfit += pnl;
+            profitEl.textContent = totalProfit.toFixed(2);
+
+            if (pnl >= 0) {
+              ladder = 0;
+              appendLogLine(`✓ WIN +${pnl}`, "lime");
+            } else {
+              ladder++;
+              appendLogLine(`✗ LOSS ${pnl}`, "red");
             }
+
+            levelEl.textContent = ladder;
 
             waitingProposal = false;
             proposalVariants = null;
             proposalAttempt = 0;
+            activeContractId = null;
 
-            const propSym = (d.proposal && (d.proposal.underlying_symbol || d.proposal.symbol || d.proposal.underlying)) || null;
-            if (propSym && propSym !== SYMBOL) {
-              appendLogLine(`PROPOSAL for unexpected underlying ${propSym}`, "red");
-              return;
-            }
-
-            send({
-              buy: d.proposal.id,
-              price: d.proposal.ask_price
-            });
+            resetStrategy();
           }
+        }
+      };
 
-          if (d.msg_type === "buy") {
-            if (!d.buy || !d.buy.contract_id) {
-              appendLogLine("BUY failed — no contract_id", "red");
-              return;
-            }
+      ws.onclose = (ev) => {
+        appendLogLine(`WS CLOSED (code ${ev.code})`, "red");
+        stopTickFlush();
+      };
 
-            activeContractId = d.buy.contract_id;
-
-            send({
-              proposal_open_contract: 1,
-              contract_id: activeContractId,
-              subscribe: 1
-            });
-          }
-
-          if (d.msg_type === "proposal_open_contract") {
-            const c = d.proposal_open_contract;
-            if (!c) return;
-
-            profitEl.textContent = Number(c.profit || 0).toFixed(2);
-            balanceEl.textContent = Number(c.balance_after || 0).toFixed(2);
-
-            if (c.is_sold) {
-              const pnl = Number(c.profit || 0);
-              totalProfit += pnl;
-              profitEl.textContent = totalProfit.toFixed(2);
-
-              if (pnl >= 0) {
-                ladder = 0;
-                appendLogLine(`✓ WIN +${pnl}`, "lime");
-              } else {
-                ladder++;
-                appendLogLine(`✗ LOSS ${pnl}`, "red");
-              }
-
-              levelEl.textContent = ladder;
-
-              waitingProposal = false;
-              proposalVariants = null;
-              proposalAttempt = 0;
-              activeContractId = null;
-
-              resetStrategy();
-            }
-          }
-        };
-
-        ws.onclose = (ev) => {
-          appendLogLine(`WS CLOSED (code ${ev.code})`, "red");
-          stopTickFlush();
-        };
-
-        ws.onerror = (ev) => {
-          appendLogLine("WS ERROR", "red");
-          console.error("WebSocket error", ev);
-        };
-      })
-      .catch(err => {
-        appendLogLine("OTP failed: " + String(err), "red");
-        console.error(err);
-      });
+      ws.onerror = (ev) => {
+        appendLogLine("WS ERROR", "red");
+        console.error("WebSocket error", ev);
+      };
+    } catch (err) {
+      appendLogLine("OTP fetch failed: " + String(err), "red");
+      console.error(err);
+    }
   }
 
+  // Buttons
   startBtn.onclick = () => {
     running = true;
     connect();
@@ -407,17 +411,21 @@ document.addEventListener("DOMContentLoaded", () => {
     resetStrategy();
     totalProfit = 0;
     profitEl.textContent = "0.00";
-    appendLogLine("RESET", "orange");
+    appendLogLine("RESET DONE", "orange");
   };
 
   demoBtn.onclick = () => {
     ACCOUNT = "demo";
     appendLogLine("DEMO MODE", "blue");
+    const mi = document.getElementById('modeIndicator');
+    if (mi) mi.textContent = 'JESAN 💲 MODE - DEMO';
   };
 
   liveBtn.onclick = () => {
     ACCOUNT = "live";
     appendLogLine("LIVE MODE", "red");
+    const mi = document.getElementById('modeIndicator');
+    if (mi) mi.textContent = 'JESAN 💲 MODE - LIVE';
   };
 
   window.addEventListener("beforeunload", () => {
