@@ -32,6 +32,7 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   let account = "demo";
+  demoBtn.classList.add("active");
   let ws = null;
   let running = false;
   let paused = false;
@@ -390,16 +391,28 @@ document.addEventListener("DOMContentLoaded", () => {
 
   demoBtn.onclick = () => {
     account = "demo";
+    demoBtn.classList.add("active");
+    liveBtn.classList.remove("active");
     appendLogLine("DEMO MODE", "blue");
     const mi = $("modeIndicator");
-    if (mi) mi.textContent = "JESAN 💲 MODE - DEMO";
+    if (mi) {
+      mi.textContent = "JESAN 💲 MODE - DEMO";
+      mi.classList.add("demo");
+      mi.classList.remove("live");
+    }
   };
 
   liveBtn.onclick = () => {
     account = "live";
+    liveBtn.classList.add("active");
+    demoBtn.classList.remove("active");
     appendLogLine("LIVE MODE", "red");
     const mi = $("modeIndicator");
-    if (mi) mi.textContent = "JESAN 💲 MODE - LIVE";
+    if (mi) {
+      mi.textContent = "JESAN 💲 MODE - LIVE";
+      mi.classList.add("live");
+      mi.classList.remove("demo");
+    }
   };
 
   window.addEventListener("beforeunload", () => {
