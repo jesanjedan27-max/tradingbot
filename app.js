@@ -32,19 +32,67 @@ document.addEventListener("DOMContentLoaded", () => {
   let totalProfit = 0;
 
   let sequence = [];
-  // proposal retry state
   let waitingProposal = false;
   let proposalVariants = null;
   let proposalAttempt = 0;
   let activeContractId = null;
 
-  function log(msg, color = "#fff") {
+  // Logging/tick config
+  const LOG_MAX_ENTRIES = 1200; // prune older log lines
+  const TICK_FLUSH_MS = 60;     // flush tick buffer interval (ms)
+  const TICK_BATCH_LIMIT = 500; // safety cap per flush
+  let tickBuffer = [];
+  let tickFlushTimer = null;
+
+  function appendLogLine(msg, color = "#fff") {
     const div = document.createElement("div");
     div.style.color = color;
     div.textContent = msg;
     logEl.appendChild(div);
+    // trim old entries
+    while (logEl.children.length > LOG_MAX_ENTRIES) {
+      logEl.removeChild(logEl.firstChild);
+    }
     logEl.scrollTop = logEl.scrollHeight;
     console.log(msg);
+  }
+
+  function startTickFlush() {
+    if (tickFlushTimer) return;
+    tickFlushTimer = setInterval(flushTickBuffer, TICK_FLUSH_MS);
+  }
+
+  function stopTickFlush() {
+    if (!tickFlushTimer) return;
+    clearInterval(tickFlushTimer);
+    tickFlushTimer = null;
+  }
+
+  function flushTickBuffer() {
+    if (!tickBuffer.length) return;
+    // Limit batch size to avoid long tasks
+    const batch = tickBuffer.splice(0, TICK_BATCH_LIMIT);
+    const frag = document.createDocumentFragment();
+
+    // Append each tick as its own line for full visibility
+    for (let i = 0; i < batch.length; i++) {
+      const t = batch[i];
+      const div = document.createElement("div");
+      div.style.color = "#38bdf8";
+      div.textContent = `Tick ${Number(t.price).toFixed(2)} → ${t.digit}`;
+      frag.appendChild(div);
+    }
+
+    logEl.appendChild(frag);
+    // trim old entries
+    while (logEl.children.length > LOG_MAX_ENTRIES) {
+      logEl.removeChild(logEl.firstChild);
+    }
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function log(msg, color = "#fff") {
+    appendLogLine(msg, color);
   }
 
   function digit(price) {
@@ -58,7 +106,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function send(data) {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-      log("WS not open — cannot send", "red");
+      appendLogLine("WS not open — cannot send", "red");
       return false;
     }
     const payload = JSON.stringify(data);
@@ -73,9 +121,9 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalVariants = null;
     proposalAttempt = 0;
     activeContractId = null;
+    tickBuffer.length = 0;
   }
 
-  // build proposal variants (ordered attempts)
   function buildProposalVariants(barrier) {
     const amount = stake(ladder);
     const base = {
@@ -89,20 +137,18 @@ document.addEventListener("DOMContentLoaded", () => {
       barrier: barrier
     };
 
-    // variants: start with minimal (no symbol), then try underlying_symbol, then underlying, finally symbol
     return [
-      Object.assign({}, base), // minimal
+      Object.assign({}, base),
       Object.assign({}, base, { underlying_symbol: SYMBOL }),
       Object.assign({}, base, { underlying: SYMBOL }),
       Object.assign({}, base, { symbol: SYMBOL })
     ];
   }
 
-  // send next available variant
   function sendNextProposalVariant() {
     if (!proposalVariants) return;
     if (proposalAttempt >= proposalVariants.length) {
-      log("All proposal variants attempted — giving up", "red");
+      appendLogLine("All proposal variants attempted — no accepted proposal", "red");
       waitingProposal = false;
       proposalVariants = null;
       proposalAttempt = 0;
@@ -110,35 +156,63 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     const req = proposalVariants[proposalAttempt];
     proposalAttempt++;
-    log(`SENDING PROPOSAL VARIANT #${proposalAttempt}`, "#a78bfa");
+    appendLogLine(`SENDING PROPOSAL VARIANT #${proposalAttempt}`, "#a78bfa");
     send(req);
   }
 
-  // ================= TRADE (RETRYABLE) =================
   function placeTrade(barrier) {
     if (waitingProposal) {
-      log("Already waiting for a proposal — skipping new trade", "orange");
+      appendLogLine("Already waiting for a proposal — skipping new trade", "orange");
       return;
     }
 
-    // prepare variants then send first
     proposalVariants = buildProposalVariants(barrier);
     proposalAttempt = 0;
     waitingProposal = true;
 
-    log(`PROPOSAL SENT → DIGITDIFF ${barrier} | stake ${proposalVariants[0].amount}`, "#38bdf8");
+    appendLogLine(`PROPOSAL INIT → DIGITDIFF ${barrier} | stake ${proposalVariants[0].amount}`, "#38bdf8");
     sendNextProposalVariant();
   }
 
-  // ================= STRATEGY =================
+  function handleValidationError(errMsg) {
+    if (!waitingProposal || !proposalVariants) return false;
+    const msg = String(errMsg || "").toLowerCase();
+
+    if (msg.includes("underlying_symbol") || msg.includes("underlying symbol") || msg.includes("underlying")) {
+      appendLogLine("Server requires underlying symbol — trying next variant", "orange");
+      sendNextProposalVariant();
+      return true;
+    }
+
+    if (msg.includes("properties not allowed") && msg.includes("symbol")) {
+      proposalVariants = proposalVariants.filter(v => !("symbol" in v));
+      appendLogLine("Server rejected 'symbol' property — removed symbol variants and retrying", "orange");
+      sendNextProposalVariant();
+      return true;
+    }
+
+    if (msg.includes("missing") || msg.includes("invalid") || msg.includes("validation failed")) {
+      appendLogLine("Validation error from server — trying next proposal variant", "orange");
+      sendNextProposalVariant();
+      return true;
+    }
+
+    return false;
+  }
+
   function onTick(price) {
     if (!running || paused) return;
 
     const d = digit(price);
 
-    if (priceEl) priceEl.textContent = price.toFixed(2);
-    log(`Tick ${price.toFixed(2)} → ${d}`, "#38bdf8");
+    // update price display (immediate)
+    if (priceEl) priceEl.textContent = Number(price).toFixed(2);
 
+    // push tick to buffer for batched DOM updates
+    tickBuffer.push({ price, digit: d });
+    startTickFlush();
+
+    // strategy must remain responsive -> act every tick
     if (waitingProposal || activeContractId) return;
 
     sequence.push(d);
@@ -150,14 +224,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (a === 2 && b === 3) {
       if (x === 9) {
-        log("INVALID x=9 → ignored", "red");
+        appendLogLine("INVALID x=9 → ignored", "red");
         sequence = [];
         return;
       }
 
       const barrier = x + 1;
 
-      log(`PATTERN FOUND → ${sequence.join(",")} → DIGITDIFF ${barrier}`, "lime");
+      appendLogLine(`PATTERN FOUND → ${sequence.join(",")} → DIGITDIFF ${barrier}`, "lime");
 
       placeTrade(barrier);
 
@@ -165,41 +239,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // helper to inspect server error and decide retry
-  function handleValidationError(errMsg) {
-    if (!waitingProposal || !proposalVariants) return false;
-
-    // Normalize message
-    const msg = String(errMsg || "").toLowerCase();
-
-    // If server complains about missing underlying symbol, try variants that include it
-    if (msg.includes("underlying_symbol") || msg.includes("underlying symbol") || msg.includes("underlying")) {
-      log("Server requires underlying symbol — trying next variant", "orange");
-      sendNextProposalVariant();
-      return true;
-    }
-
-    // If server complains about symbol not allowed, skip variants that include symbol (they are last)
-    if (msg.includes("properties not allowed") && msg.includes("symbol")) {
-      // drop any remaining variants that include 'symbol'
-      proposalVariants = proposalVariants.filter(v => !("symbol" in v));
-      log("Server rejected 'symbol' property — removed symbol variants and retrying", "orange");
-      // reset attempt index to current length already tried; continue
-      sendNextProposalVariant();
-      return true;
-    }
-
-    // Generic "missing" or "invalid" clues: try next variant
-    if (msg.includes("missing") || msg.includes("invalid") || msg.includes("validation failed")) {
-      log("Validation error from server — trying next proposal variant", "orange");
-      sendNextProposalVariant();
-      return true;
-    }
-
-    return false;
-  }
-
-  // ================= CONNECT =================
   function connect() {
     resetStrategy();
 
@@ -220,7 +259,7 @@ document.addEventListener("DOMContentLoaded", () => {
       .then(r => r.json())
       .then(data => {
         if (!data?.data?.url) {
-          log("OTP FAILED", "red");
+          appendLogLine("OTP FAILED", "red");
           console.log(data);
           return;
         }
@@ -228,11 +267,11 @@ document.addEventListener("DOMContentLoaded", () => {
         ws = new WebSocket(data.data.url);
 
         ws.onopen = () => {
-          log("WS CONNECTED", "lime");
+          appendLogLine("WS CONNECTED", "lime");
           setTimeout(() => {
             send({ ticks: SYMBOL, subscribe: 1 });
             send({ balance: 1 });
-          }, 300);
+          }, 150);
         };
 
         ws.onmessage = (e) => {
@@ -241,25 +280,22 @@ document.addEventListener("DOMContentLoaded", () => {
             d = JSON.parse(e.data);
           } catch (err) {
             console.error("Invalid JSON message", e.data);
-            log("Received invalid JSON from WS", "red");
+            appendLogLine("Received invalid JSON from WS", "red");
             return;
           }
 
           if (d.error) {
-            log(`ERROR → ${d.error.message || JSON.stringify(d.error)}`, "red");
+            appendLogLine(`ERROR → ${d.error.message || JSON.stringify(d.error)}`, "red");
             console.error("Server error object:", d.error);
 
-            // If this is a validation error while waiting for proposal, attempt next variant
             if (waitingProposal) {
               const tried = handleValidationError(d.error.message || JSON.stringify(d.error));
               if (!tried) {
-                // no retry possible
                 waitingProposal = false;
                 proposalVariants = null;
                 proposalAttempt = 0;
               }
             } else {
-              // reset proposal state if not relevant
               waitingProposal = false;
               proposalVariants = null;
               proposalAttempt = 0;
@@ -276,25 +312,22 @@ document.addEventListener("DOMContentLoaded", () => {
           }
 
           if (d.msg_type === "proposal") {
-            // only accept proposals when we are expecting one
             if (!waitingProposal) {
               console.log("IGNORING unsolicited proposal", d);
               return;
             }
 
-            // Accept proposal and reset retry state
             waitingProposal = false;
             proposalVariants = null;
             proposalAttempt = 0;
 
-            // Validate if proposal underlying matches (if provided)
             const propSym = (d.proposal && (d.proposal.underlying_symbol || d.proposal.symbol || d.proposal.underlying)) || null;
             if (propSym && propSym !== SYMBOL) {
-              log(`PROPOSAL for unexpected underlying ${propSym} — ignoring`, "red");
+              appendLogLine(`PROPOSAL for unexpected underlying ${propSym} — ignoring`, "red");
               return;
             }
 
-            log("PROPOSAL RECEIVED → BUYING", "#22c55e");
+            appendLogLine("PROPOSAL RECEIVED → BUYING", "#22c55e");
 
             send({
               buy: d.proposal.id,
@@ -304,12 +337,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
           if (d.msg_type === "buy") {
             if (!d.buy || !d.buy.contract_id) {
-              log("BUY response missing contract_id", "red");
+              appendLogLine("BUY response missing contract_id", "red");
               return;
             }
 
             activeContractId = d.buy.contract_id;
-            log(`BUY CONFIRMED → ${activeContractId}`, "#22c55e");
+            appendLogLine(`BUY CONFIRMED → ${activeContractId}`, "#22c55e");
 
             send({
               proposal_open_contract: 1,
@@ -332,10 +365,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
               if (pnl >= 0) {
                 ladder = 0;
-                log(`WIN +${pnl}`, "lime");
+                appendLogLine(`WIN +${pnl}`, "lime");
               } else {
                 ladder++;
-                log(`LOSS ${pnl}`, "red");
+                appendLogLine(`LOSS ${pnl}`, "red");
               }
 
               levelEl.textContent = ladder;
@@ -351,52 +384,59 @@ document.addEventListener("DOMContentLoaded", () => {
         };
 
         ws.onclose = (ev) => {
-          log(`WS CLOSED (code ${ev.code})`, "red");
+          appendLogLine(`WS CLOSED (code ${ev.code})`, "red");
+          stopTickFlush();
         };
 
         ws.onerror = (ev) => {
-          log("WS ERROR — check console for details", "red");
+          appendLogLine("WS ERROR — check console for details", "red");
           console.error("WebSocket error", ev);
         };
       })
       .catch(err => {
-        log("OTP fetch failed: " + String(err), "red");
+        appendLogLine("OTP fetch failed: " + String(err), "red");
         console.error(err);
       });
   }
 
-  // ================= BUTTONS =================
+  // Buttons
   startBtn.onclick = () => {
     running = true;
     connect();
-    log("BOT STARTED", "lime");
+    appendLogLine("BOT STARTED", "lime");
   };
 
   pauseBtn.onclick = () => {
     paused = !paused;
-    log(paused ? "PAUSED" : "RUNNING", "yellow");
+    appendLogLine(paused ? "PAUSED" : "RUNNING", "yellow");
   };
 
   stopBtn.onclick = () => {
     running = false;
     ws?.close();
-    log("STOPPED", "red");
+    appendLogLine("STOPPED", "red");
+    stopTickFlush();
   };
 
   resetBtn.onclick = () => {
     resetStrategy();
     totalProfit = 0;
     profitEl.textContent = "0.00";
-    log("RESET DONE", "orange");
+    appendLogLine("RESET DONE", "orange");
   };
 
   demoBtn.onclick = () => {
     ACCOUNT = "demo";
-    log("DEMO MODE", "blue");
+    appendLogLine("DEMO MODE", "blue");
   };
 
   liveBtn.onclick = () => {
     ACCOUNT = "live";
-    log("LIVE MODE", "red");
+    appendLogLine("LIVE MODE", "red");
   };
+
+  window.addEventListener("beforeunload", () => {
+    try { ws?.close(); } catch (e) {}
+    stopTickFlush();
+  });
 });
