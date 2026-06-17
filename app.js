@@ -16,7 +16,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const logEl = $("log");
   const stakeInput = $("stakeInput");
 
-  const SYMBOL = "1HZ100V"; // IMPORTANT: proper Deriv underlying symbol format
+  const SYMBOL = "R_100";
 
   let ACCOUNT = "demo";
   const ACCOUNTS = {
@@ -63,7 +63,7 @@ document.addEventListener("DOMContentLoaded", () => {
     activeContractId = null;
   }
 
-  // ================= TRADE (FINAL CORRECT VERSION) =================
+  // ================= TRADE (FINAL FIXED FOR YOUR OTP FLOW) =================
   function placeTrade(barrier) {
     const amount = stake(ladder);
 
@@ -73,7 +73,6 @@ document.addEventListener("DOMContentLoaded", () => {
       proposal: 1,
       contract_type: "DIGITDIFF",
       currency: "USD",
-      underlying_symbol: SYMBOL,
 
       amount: amount,
       basis: "stake",
@@ -81,11 +80,11 @@ document.addEventListener("DOMContentLoaded", () => {
       duration: 1,
       duration_unit: "t",
 
-      barrier: barrier,
-      subscribe: 1
+      barrier: barrier
     };
 
     console.log("PROPOSAL REQUEST →", req);
+
     send(req);
 
     log(`PROPOSAL SENT → DIGITDIFF ${barrier} | stake ${amount}`, "#38bdf8");
@@ -135,13 +134,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const accountId = ACCOUNTS[ACCOUNT];
 
-    fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer " + localStorage.getItem("access_token"),
-        "Deriv-App-ID": "33wZZKTFZrmsZgFaAH53Z"
+    fetch(
+      `https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + localStorage.getItem("access_token"),
+          "Deriv-App-ID": "33wZZKTFZrmsZgFaAH53Z"
+        }
       }
-    })
+    )
       .then(r => r.json())
       .then(data => {
 
