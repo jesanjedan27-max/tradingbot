@@ -1,4 +1,4 @@
-// Deriv DigitDiff bot optimized for OTP error handling
+// Deriv DigitDiff bot optimized for payout-based recovery
 // Save this file as app.js alongside index.html.
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -15,6 +15,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const balanceEl = $("balance");
   const profitEl = $("profit");
   const levelEl = $("level");
+  const lastDigitEl = $("lastDigit");
   const logEl = $("log");
   const stakeInput = $("stakeInput");
   const tokenInput = $("tokenInput");
@@ -81,7 +82,7 @@ document.addEventListener("DOMContentLoaded", () => {
       batch.forEach(({ price, digit }) => {
         const row = document.createElement("div");
         row.style.color = "#7dd3fc";
-        row.textContent = `Tick ${Number(price).toFixed(2)} → ${digit}`;
+        row.textContent = `Tick ${Number(price).toFixed(2)} → ${digit === null ? "-" : digit}`;
         fragment.appendChild(row);
       });
       logEl.appendChild(fragment);
@@ -99,12 +100,11 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function digitFromPrice(price) {
-    const text = String(price);
-    const match = text.match(/(\d)$/);
-    if (match) {
-      return Number(match[1]);
-    }
-    return Math.floor(Math.abs(Number(price) * 100)) % 10;
+    const value = Number(price);
+    if (Number.isNaN(value)) return null;
+    const str = value.toFixed(2);
+    const lastChar = str[str.length - 1];
+    return Number(lastChar);
   }
 
   function updateBalance(value) {
@@ -117,7 +117,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const baseStake = Number(stakeInput.value || 0.35);
     const payoutRatio = lastPayoutRatio && lastPayoutRatio > 1.01 ? lastPayoutRatio : DEFAULT_PAYOUT_RATIO;
     if (recoveryLoss > 0 && payoutRatio > 1.01) {
-      // Size next stake to recover exactly the accumulated loss
       const neededStake = recoveryLoss / (payoutRatio - 1);
       return Number(Math.max(baseStake, neededStake).toFixed(2));
     }
@@ -216,6 +215,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const d = digitFromPrice(price);
 
     if (priceEl) priceEl.textContent = Number(price).toFixed(2);
+    if (lastDigitEl) lastDigitEl.textContent = d === null ? "-" : d;
     tickBuffer.push({ price, digit: d });
     startTickFlush();
 
