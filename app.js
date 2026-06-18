@@ -357,8 +357,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const contract = payload.proposal_open_contract;
             if (!contract) return;
             if (profitEl) profitEl.textContent = Number(contract.profit || 0).toFixed(2);
-            if (contract.balance_after !== undefined) {
-              updateBalance(Number(contract.balance_after));
+            if (typeof contract.balance_after === "number" && !Number.isNaN(contract.balance_after) && contract.balance_after > 0) {
+              updateBalance(contract.balance_after);
             }
             if (contract.is_sold) {
               const pnl = Number(contract.profit || 0);
@@ -381,6 +381,9 @@ document.addEventListener("DOMContentLoaded", () => {
               proposalAttempt = 0;
               activeContractId = null;
               resetStrategy();
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                sendMessage({ balance: 1 });
+              }
             }
             break;
           default:
