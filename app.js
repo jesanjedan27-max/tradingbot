@@ -1,4 +1,4 @@
-// Deriv DigitDiff bot optimized for payout-based recovery
+// Deriv DigitDiff bot optimized for OTP error handling
 // Save this file as app.js alongside index.html.
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -38,7 +38,9 @@ document.addEventListener("DOMContentLoaded", () => {
   let running = false;
   let lastPayoutRatio = null;
   let recoveryLoss = 0;
+  let targetProfit = 0;
   let currentStake = 0;
+  let lastBalance = null;
   let paused = false;
   let ladder = 0;
   let totalProfit = 0;
@@ -97,7 +99,18 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function digitFromPrice(price) {
-    return Math.floor(Math.abs(price * 100)) % 10;
+    const text = String(price);
+    const match = text.match(/(\d)$/);
+    if (match) {
+      return Number(match[1]);
+    }
+    return Math.floor(Math.abs(Number(price) * 100)) % 10;
+  }
+
+  function updateBalance(value) {
+    if (typeof value !== "number" || Number.isNaN(value)) return;
+    lastBalance = value;
+    if (balanceEl) balanceEl.textContent = value.toFixed(2);
   }
 
   function stake() {
@@ -314,7 +327,9 @@ document.addEventListener("DOMContentLoaded", () => {
             onTick(payload.tick.quote);
             break;
           case "balance":
-            if (balanceEl) balanceEl.textContent = Number(payload.balance.balance || 0).toFixed(2);
+            if (payload.balance && payload.balance.balance !== undefined) {
+              updateBalance(Number(payload.balance.balance));
+            }
             break;
           case "proposal":
             if (!waitingProposal) break;
@@ -342,7 +357,9 @@ document.addEventListener("DOMContentLoaded", () => {
             const contract = payload.proposal_open_contract;
             if (!contract) return;
             if (profitEl) profitEl.textContent = Number(contract.profit || 0).toFixed(2);
-            if (balanceEl) balanceEl.textContent = Number(contract.balance_after || 0).toFixed(2);
+            if (contract.balance_after !== undefined) {
+              updateBalance(Number(contract.balance_after));
+            }
             if (contract.is_sold) {
               const pnl = Number(contract.profit || 0);
               totalProfit += pnl;
@@ -409,9 +426,12 @@ document.addEventListener("DOMContentLoaded", () => {
     totalProfit = 0;
     recoveryLoss = 0;
     lastPayoutRatio = null;
+    currentStake = 0;
+    lastBalance = null;
     ladder = 0;
     if (profitEl) profitEl.textContent = "0.00";
     if (levelEl) levelEl.textContent = "0";
+    if (balanceEl) balanceEl.textContent = "-";
     appendLogLine("RESET DONE", "orange");
   };
 
