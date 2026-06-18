@@ -13,6 +13,7 @@
       padding: 0;
     }
 
+    /* ================= CONTAINER ================= */
     .container {
       max-width: 520px;
       margin: 30px auto;
@@ -22,6 +23,7 @@
       box-shadow: 0 0 20px rgba(0, 0, 0, 0.4);
     }
 
+    /* ================= TITLE ================= */
     h1 {
       text-align: center;
       color: #38bdf8;
@@ -29,6 +31,7 @@
       font-size: 20px;
     }
 
+    /* ================= MODE INDICATOR ================= */
     .mode-indicator {
       text-align: center;
       font-size: 16px;
@@ -51,6 +54,7 @@
       border: 1px solid #ef4444;
     }
 
+    /* ================= BUTTON ROW ================= */
     .row {
       display: flex;
       gap: 8px;
@@ -104,6 +108,7 @@
       border-color: #ef4444;
     }
 
+    /* ================= INPUTS ================= */
     .inputs {
       margin-top: 10px;
       background: #111827;
@@ -133,6 +138,7 @@
       box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.12);
     }
 
+    /* ================= STATS ================= */
     .stats {
       margin-top: 10px;
       background: #111827;
@@ -155,6 +161,7 @@
       border-bottom: none;
     }
 
+    /* ================= LOG ================= */
     .log {
       margin-top: 10px;
       background: #0b1220;
@@ -167,10 +174,31 @@
       line-height: 1.4;
     }
 
-    #price { color: #38bdf8; font-weight: bold; }
-    #balance { color: #22c55e; font-weight: bold; }
-    #level { color: #facc15; font-weight: bold; }
-    #profit { color: #a78bfa; font-weight: bold; }
+    /* ================= LIVE DATA COLORS ================= */
+    #price {
+      color: #38bdf8;
+      font-weight: bold;
+    }
+
+    #lastDigit {
+      color: #f97316;
+      font-weight: bold;
+    }
+
+    #balance {
+      color: #22c55e;
+      font-weight: bold;
+    }
+
+    #level {
+      color: #facc15;
+      font-weight: bold;
+    }
+
+    #profit {
+      color: #a78bfa;
+      font-weight: bold;
+    }
   </style>
 </head>
 <body>
@@ -203,6 +231,7 @@
 
   <div class="stats">
     <div>Price: <span id="price">-</span></div>
+    <div>Last Digit: <span id="lastDigit">-</span></div>
     <div>Balance: <span id="balance">-</span></div>
     <div>Level: <span id="level">0</span></div>
     <div>Profit: <span id="profit">0.00</span></div>
