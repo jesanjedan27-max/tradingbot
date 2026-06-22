@@ -121,7 +121,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const baseStake = Number(stakeInput.value || 0.35);
     const payoutRatio = lastPayoutRatio && lastPayoutRatio > 1.01 ? lastPayoutRatio : DEFAULT_PAYOUT_RATIO;
     if (recoveryLoss > 0 && payoutRatio > 1.01) {
-      // Size next stake to recover exactly the accumulated loss
       const neededStake = recoveryLoss / (payoutRatio - 1);
       return Number(Math.max(baseStake, neededStake).toFixed(2));
     }
@@ -260,10 +259,6 @@ document.addEventListener("DOMContentLoaded", () => {
     startTickFlush();
 
     addParitySample(d);
-    const biasLabel = getParityBias();
-    if (biasLabel) {
-      appendLogLine(`Parity bias = ${biasLabel} (${parityHistory.filter(v => v === biasLabel).length}/${parityHistory.length})`, "#c4b5fd");
-    }
 
     if (waitingProposal || activeContractId) return;
 
