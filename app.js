@@ -1,4 +1,4 @@
-// Deriv DigitDiff bot optimized for payout-based recovery
+// Deriv DigitDiff bot optimized for OTP error handling
 // Save this file as app.js alongside index.html.
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -50,6 +50,10 @@ document.addEventListener("DOMContentLoaded", () => {
   let proposalVariants = null;
   let proposalAttempt = 0;
   let activeContractId = null;
+  const parityHistory = [];
+  const PARITY_HISTORY_MAX = 24;
+  const PARITY_MIN_SAMPLES = 6;
+  const PARITY_BIAS_THRESHOLD = 2;
 
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
@@ -117,6 +121,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const baseStake = Number(stakeInput.value || 0.35);
     const payoutRatio = lastPayoutRatio && lastPayoutRatio > 1.01 ? lastPayoutRatio : DEFAULT_PAYOUT_RATIO;
     if (recoveryLoss > 0 && payoutRatio > 1.01) {
+      // Size next stake to recover exactly the accumulated loss
       const neededStake = recoveryLoss / (payoutRatio - 1);
       return Number(Math.max(baseStake, neededStake).toFixed(2));
     }
@@ -129,7 +134,42 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalVariants = null;
     proposalAttempt = 0;
     activeContractId = null;
+    parityHistory.length = 0;
     tickBuffer.length = 0;
+  }
+
+  function addParitySample(digit) {
+    if (typeof digit !== "number" || Number.isNaN(digit)) return;
+    if (parityHistory.length >= PARITY_HISTORY_MAX) {
+      parityHistory.shift();
+    }
+    parityHistory.push(digit % 2 === 0 ? "even" : "odd");
+  }
+
+  function getParityBias() {
+    if (parityHistory.length < PARITY_MIN_SAMPLES) return null;
+    const counts = { odd: 0, even: 0 };
+    parityHistory.forEach(value => {
+      counts[value]++;
+    });
+    if (counts.odd >= counts.even + PARITY_BIAS_THRESHOLD) return "odd";
+    if (counts.even >= counts.odd + PARITY_BIAS_THRESHOLD) return "even";
+    return null;
+  }
+
+  function getParityAwareBarrier(x) {
+    const bias = getParityBias();
+    if (bias === null) return null;
+
+    const baseNext = x + 1;
+    const nextOdd = x % 2 === 0 ? baseNext : baseNext + 1;
+    const nextEven = x % 2 === 1 ? baseNext : baseNext + 2;
+    const normalize = n => (n >= 10 ? n - 10 : n);
+
+    if (bias === "odd") {
+      return normalize(nextOdd);
+    }
+    return normalize(nextEven);
   }
 
   function buildProposalVariants(barrier) {
@@ -219,6 +259,12 @@ document.addEventListener("DOMContentLoaded", () => {
     tickBuffer.push({ price, digit: d });
     startTickFlush();
 
+    addParitySample(d);
+    const biasLabel = getParityBias();
+    if (biasLabel) {
+      appendLogLine(`Parity bias = ${biasLabel} (${parityHistory.filter(v => v === biasLabel).length}/${parityHistory.length})`, "#c4b5fd");
+    }
+
     if (waitingProposal || activeContractId) return;
 
     sequence.push(d);
@@ -232,8 +278,13 @@ document.addEventListener("DOMContentLoaded", () => {
         sequence = [];
         return;
       }
-      const barrier = x + 1;
-      appendLogLine(`Pattern ${sequence.join(",")} -> buy DIGITDIFF ${barrier}`, "#22c55e");
+      const barrier = getParityAwareBarrier(x);
+      if (barrier === null) {
+        appendLogLine(`Pattern ${sequence.join(",")} found but parity bias is weak; skipping.`, "orange");
+        sequence = [];
+        return;
+      }
+      appendLogLine(`Pattern ${sequence.join(",")} -> buy DIGITDIFF ${barrier} (bias=${getParityBias()})`, "#22c55e");
       placeTrade(barrier);
       sequence = [];
     }
