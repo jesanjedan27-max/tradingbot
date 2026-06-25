@@ -1,6 +1,4 @@
-// Deriv DigitDiff bot optimized for OTP error handling
-// Save this file as app.js alongside index.html.
-
+// Deriv DigitDiff bot — consecutive-pair strategy with post-result chaining
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -39,22 +37,30 @@ document.addEventListener("DOMContentLoaded", () => {
   let running = false;
   let lastPayoutRatio = null;
   let recoveryLoss = 0;
-  let targetProfit = 0;
   let currentStake = 0;
   let lastBalance = null;
   let paused = false;
   let ladder = 0;
   let totalProfit = 0;
-  let sequence = [];
   let waitingProposal = false;
   let proposalVariants = null;
   let proposalAttempt = 0;
   let activeContractId = null;
-  const parityHistory = [];
-  const PARITY_HISTORY_MAX = 24;
-  const PARITY_MIN_SAMPLES = 6;
-  const PARITY_BIAS_THRESHOLD = 2;
 
+  // ── Strategy state ──────────────────────────────────────────────────────────
+  // When set, the bot only looks for this specific A,B pair next.
+  // null = open scan (any valid pair).
+  let targetPair = null;    // e.g. [1, 2]
+
+  // Phase tracking within a sequence
+  // "scan_ab" → waiting to see A then B consecutively
+  // "scan_x"  → A,B seen; now waiting for x (0-8, not 9)
+  //             trade fires immediately: barrier = x+1 (that's y)
+  let phase = "scan_ab";
+  let seqA = null;
+  let seqB = null;
+
+  // ── Log / tick buffering ────────────────────────────────────────────────────
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
   const TICK_BATCH_LIMIT = 200;
@@ -107,8 +113,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const value = Number(price);
     if (Number.isNaN(value)) return null;
     const str = value.toFixed(2);
-    const lastChar = str[str.length - 1];
-    return Number(lastChar);
+    return Number(str[str.length - 1]);
   }
 
   function updateBalance(value) {
@@ -119,7 +124,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function stake() {
     const baseStake = Number(stakeInput.value || 0.35);
-    const payoutRatio = lastPayoutRatio && lastPayoutRatio > 1.01 ? lastPayoutRatio : DEFAULT_PAYOUT_RATIO;
+    const payoutRatio = lastPayoutRatio && lastPayoutRatio > 1.01
+      ? lastPayoutRatio
+      : DEFAULT_PAYOUT_RATIO;
     if (recoveryLoss > 0 && payoutRatio > 1.01) {
       const neededStake = recoveryLoss / (payoutRatio - 1);
       return Number(Math.max(baseStake, neededStake).toFixed(2));
@@ -127,49 +134,55 @@ document.addEventListener("DOMContentLoaded", () => {
     return Number(baseStake.toFixed(2));
   }
 
-  function resetStrategy() {
-    sequence = [];
+  // ── Strategy helpers ────────────────────────────────────────────────────────
+
+  /**
+   * Given a result digit (the last digit of the settled contract price),
+   * derive the next target pair.
+   * Special rule: digit 9 → next pair is [0, 1].
+   */
+  function nextPairFromResultDigit(digit) {
+    if (digit === 9) return [0, 1];
+    if (digit >= 0 && digit <= 8) return [digit, digit + 1];
+    return null; // shouldn't happen
+  }
+
+  /**
+   * Reset sequence scan but keep the martingale state intact.
+   * If nextTarget is provided, restrict the next scan to that pair.
+   */
+  function resetSequence(nextTarget = null) {
+    phase = "scan_ab";
+    seqA = null;
+    seqB = null;
     waitingProposal = false;
     proposalVariants = null;
     proposalAttempt = 0;
     activeContractId = null;
-    parityHistory.length = 0;
+    targetPair = nextTarget;
+
+    if (nextTarget) {
+      appendLogLine(
+        `Next scan: looking for pair [${nextTarget[0]},${nextTarget[1]}]`,
+        "#a78bfa"
+      );
+    } else {
+      appendLogLine("Next scan: open (any consecutive pair)", "#a78bfa");
+    }
+  }
+
+  function fullReset() {
+    resetSequence(null);
+    totalProfit = 0;
+    recoveryLoss = 0;
+    lastPayoutRatio = null;
+    currentStake = 0;
+    lastBalance = null;
+    ladder = 0;
     tickBuffer.length = 0;
   }
 
-  function addParitySample(digit) {
-    if (typeof digit !== "number" || Number.isNaN(digit)) return;
-    if (parityHistory.length >= PARITY_HISTORY_MAX) {
-      parityHistory.shift();
-    }
-    parityHistory.push(digit % 2 === 0 ? "even" : "odd");
-  }
-
-  function getParityBias() {
-    if (parityHistory.length < PARITY_MIN_SAMPLES) return null;
-    const counts = { odd: 0, even: 0 };
-    parityHistory.forEach(value => {
-      counts[value]++;
-    });
-    if (counts.odd >= counts.even + PARITY_BIAS_THRESHOLD) return "odd";
-    if (counts.even >= counts.odd + PARITY_BIAS_THRESHOLD) return "even";
-    return null;
-  }
-
-  function getParityAwareBarrier(x) {
-    const bias = getParityBias();
-    if (bias === null) return null;
-
-    const baseNext = x + 1;
-    const nextOdd = x % 2 === 0 ? baseNext : baseNext + 1;
-    const nextEven = x % 2 === 1 ? baseNext : baseNext + 2;
-    const normalize = n => (n >= 10 ? n - 10 : n);
-
-    if (bias === "odd") {
-      return normalize(nextOdd);
-    }
-    return normalize(nextEven);
-  }
+  // ── Proposal / trade plumbing ───────────────────────────────────────────────
 
   function buildProposalVariants(barrier) {
     const amount = stake();
@@ -183,7 +196,6 @@ document.addEventListener("DOMContentLoaded", () => {
       duration_unit: "t",
       barrier
     };
-
     return [
       Object.assign({}, base, { underlying_symbol: SYMBOL }),
       Object.assign({}, base, { underlying: SYMBOL }),
@@ -204,19 +216,19 @@ document.addEventListener("DOMContentLoaded", () => {
   function handleValidationError(errorText) {
     if (!waitingProposal || !proposalVariants) return false;
     const lower = String(errorText || "").toLowerCase();
-
-    if (lower.includes("underlying_symbol") || lower.includes("underlying") || lower.includes("properties not allowed") || lower.includes("symbol")) {
-      appendLogLine("Proposal validation failed; retrying with required symbol field.", "orange");
+    if (
+      lower.includes("underlying_symbol") ||
+      lower.includes("underlying") ||
+      lower.includes("properties not allowed") ||
+      lower.includes("symbol") ||
+      lower.includes("missing") ||
+      lower.includes("invalid") ||
+      lower.includes("validation failed")
+    ) {
+      appendLogLine("Proposal validation failed; retrying next variant.", "orange");
       sendNextProposalVariant();
       return true;
     }
-
-    if (lower.includes("missing") || lower.includes("invalid") || lower.includes("validation failed")) {
-      appendLogLine("Proposal validation failed; trying next option.", "orange");
-      sendNextProposalVariant();
-      return true;
-    }
-
     return false;
   }
 
@@ -229,9 +241,14 @@ document.addEventListener("DOMContentLoaded", () => {
       proposalAttempt = 0;
       return;
     }
-
     const payload = proposalVariants[proposalAttempt++];
-    const symbolLabel = payload.underlying_symbol ? "underlying_symbol" : payload.underlying ? "underlying" : payload.symbol ? "symbol" : "none";
+    const symbolLabel = payload.underlying_symbol
+      ? "underlying_symbol"
+      : payload.underlying
+        ? "underlying"
+        : payload.symbol
+          ? "symbol"
+          : "none";
     appendLogLine(`Proposal attempt ${proposalAttempt}: ${symbolLabel} mode`, "#a78bfa");
     sendMessage(payload);
   }
@@ -241,52 +258,97 @@ document.addEventListener("DOMContentLoaded", () => {
       appendLogLine("Already waiting for a proposal.", "orange");
       return;
     }
-
     proposalVariants = buildProposalVariants(barrier);
     proposalAttempt = 0;
     waitingProposal = true;
-    appendLogLine(`TRADE -> DIGITDIFF barrier=${barrier} stake=${proposalVariants[0].amount}`, "lime");
+    appendLogLine(
+      `TRADE → DIGITDIFF barrier=${barrier} stake=${proposalVariants[0].amount}`,
+      "lime"
+    );
     sendNextProposalVariant();
   }
+
+  // ── Tick / sequence engine ──────────────────────────────────────────────────
 
   function onTick(price) {
     if (!running || paused) return;
     const d = digitFromPrice(price);
+    if (d === null) return;
 
     if (priceEl) priceEl.textContent = Number(price).toFixed(2);
-    if (lastDigitEl) lastDigitEl.textContent = d === null ? "-" : d;
+    if (lastDigitEl) lastDigitEl.textContent = d;
     tickBuffer.push({ price, digit: d });
     startTickFlush();
 
-    addParitySample(d);
-
+    // Don't process sequence logic while a trade is in flight
     if (waitingProposal || activeContractId) return;
 
-    sequence.push(d);
-    if (sequence.length > 5) sequence.shift();
-    if (sequence.length < 5) return;
+    // ── Phase: scan_ab ────────────────────────────────────────────────────────
+    // Looking for two consecutive digits (A, B) where B = A+1, A in 0-8.
+    // If targetPair is set we only accept that specific pair.
+    if (phase === "scan_ab") {
+      if (seqA === null) {
+        // Need the first digit of a candidate pair
+        if (targetPair) {
+          if (d === targetPair[0]) {
+            seqA = d;
+          }
+        } else {
+          // Any digit 0-8 can start a pair
+          if (d >= 0 && d <= 8) {
+            seqA = d;
+          }
+        }
+        return;
+      }
 
-    const [a, b, z1, z2, x] = sequence;
-    if (a === 2 && b === 3) {
-      if (x === 9) {
-        appendLogLine("Invalid x=9; ignoring.", "red");
-        sequence = [];
+      // We have seqA; check if d is seqA+1 (i.e. B = A+1)
+      if (d === seqA + 1) {
+        // Valid pair!
+        if (targetPair && (seqA !== targetPair[0] || d !== targetPair[1])) {
+          // Doesn't match required pair — restart candidate
+          seqA = (d >= 0 && d <= 8) ? d : null;
+          return;
+        }
+        seqB = d;
+        phase = "scan_x";
+        appendLogLine(`Pair [${seqA},${seqB}] found → waiting for x`, "#38bdf8");
+      } else {
+        // Not consecutive; reset candidate
+        // d itself could be the start of a new pair
+        if (targetPair) {
+          seqA = (d === targetPair[0]) ? d : null;
+        } else {
+          seqA = (d >= 0 && d <= 8) ? d : null;
+        }
+      }
+      return;
+    }
+
+    // ── Phase: scan_x ────────────────────────────────────────────────────────
+    // Waiting for x: any digit 0-8 (digit 9 invalidates → restart from scan_ab).
+    // Once x is seen, fire trade immediately — barrier = x+1 (that's y).
+    if (phase === "scan_x") {
+      if (d === 9) {
+        appendLogLine("x=9 is invalid; restarting pair scan.", "red");
+        resetSequence(targetPair);
         return;
       }
-      const barrier = getParityAwareBarrier(x);
-      if (barrier === null) {
-        appendLogLine(`Pattern ${sequence.join(",")} found but parity bias is weak; skipping.`, "orange");
-        sequence = [];
-        return;
-      }
-      appendLogLine(`Pattern ${sequence.join(",")} -> buy DIGITDIFF ${barrier} (bias=${getParityBias()})`, "#22c55e");
+      const x = d;
+      const barrier = x + 1; // y = x+1
+      appendLogLine(
+        `Pattern [${seqA},${seqB},${x} ddf ${barrier}] → BUY DIGITDIFF barrier=${barrier}`,
+        "#22c55e"
+      );
       placeTrade(barrier);
-      sequence = [];
+      // Sequence resets after contract settles (in proposal_open_contract handler)
     }
   }
 
+  // ── WebSocket / connection ──────────────────────────────────────────────────
+
   async function connect() {
-    resetStrategy();
+    resetSequence(null);
     if (ws) ws.close();
 
     const accountId = ACCOUNTS[account];
@@ -307,19 +369,21 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     try {
-      const response = await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Deriv-App-ID": "33wZZKTFZrmsZgFaAH53Z"
+      const response = await fetch(
+        `https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Deriv-App-ID": "33wZZKTFZrmsZgFaAH53Z"
+          }
         }
-      });
+      );
 
       const text = await response.text();
       if (!response.ok) {
         appendLogLine(`OTP request failed ${response.status}.`, "red");
         appendLogLine(text, "red");
-        console.error("OTP failure response:", text);
         return;
       }
 
@@ -329,7 +393,6 @@ document.addEventListener("DOMContentLoaded", () => {
       } catch (err) {
         appendLogLine("OTP response is not JSON.", "red");
         appendLogLine(text, "red");
-        console.error("OTP parse error:", err, "response:", text);
         return;
       }
 
@@ -353,7 +416,6 @@ document.addEventListener("DOMContentLoaded", () => {
           payload = JSON.parse(e.data);
         } catch (err) {
           appendLogLine("Invalid JSON from WS.", "red");
-          console.error("WS parse error:", err, e.data);
           return;
         }
 
@@ -372,11 +434,13 @@ document.addEventListener("DOMContentLoaded", () => {
           case "tick":
             onTick(payload.tick.quote);
             break;
+
           case "balance":
-            if (payload.balance && payload.balance.balance !== undefined) {
+            if (payload.balance?.balance !== undefined) {
               updateBalance(Number(payload.balance.balance));
             }
             break;
+
           case "proposal":
             if (!waitingProposal) break;
             waitingProposal = false;
@@ -389,49 +453,92 @@ document.addEventListener("DOMContentLoaded", () => {
             currentStake = Number(payload.proposal.ask_price || 0);
             if (payload.proposal.payout && currentStake > 0) {
               lastPayoutRatio = Number(payload.proposal.payout / currentStake);
-              appendLogLine(`Payout ratio set to ${lastPayoutRatio.toFixed(2)}`, "#38bdf8");
+              appendLogLine(
+                `Payout ratio set to ${lastPayoutRatio.toFixed(2)}`,
+                "#38bdf8"
+              );
             }
-            sendMessage({ buy: payload.proposal.id, price: payload.proposal.ask_price });
+            sendMessage({
+              buy: payload.proposal.id,
+              price: payload.proposal.ask_price
+            });
             break;
+
           case "buy":
             activeContractId = payload.buy?.contract_id || null;
             if (activeContractId) {
-              sendMessage({ proposal_open_contract: 1, contract_id: activeContractId, subscribe: 1 });
+              sendMessage({
+                proposal_open_contract: 1,
+                contract_id: activeContractId,
+                subscribe: 1
+              });
             }
             break;
-          case "proposal_open_contract":
+
+          case "proposal_open_contract": {
             const contract = payload.proposal_open_contract;
             if (!contract) return;
+
             if (profitEl) profitEl.textContent = Number(contract.profit || 0).toFixed(2);
-            if (typeof contract.balance_after === "number" && !Number.isNaN(contract.balance_after) && contract.balance_after > 0) {
+
+            if (
+              typeof contract.balance_after === "number" &&
+              !Number.isNaN(contract.balance_after) &&
+              contract.balance_after > 0
+            ) {
               updateBalance(contract.balance_after);
             }
+
             if (contract.is_sold) {
               const pnl = Number(contract.profit || 0);
               totalProfit += pnl;
-              profitEl.textContent = totalProfit.toFixed(2);
+              if (profitEl) profitEl.textContent = totalProfit.toFixed(2);
+
+              // Derive the result digit from the exit tick price
+              const exitPrice = contract.exit_tick || contract.exit_tick_display_value;
+              const resultDigit = exitPrice !== undefined
+                ? digitFromPrice(exitPrice)
+                : null;
+
+              // Compute the next target pair from the result digit
+              const nextTarget = resultDigit !== null
+                ? nextPairFromResultDigit(resultDigit)
+                : null;
+
               if (pnl >= 0) {
                 recoveryLoss = 0;
                 currentStake = 0;
                 ladder = 0;
-                appendLogLine(`WIN +${pnl.toFixed(2)}`, "lime");
+                appendLogLine(
+                  `WIN +${pnl.toFixed(2)}` +
+                  (resultDigit !== null ? ` (digit=${resultDigit})` : "") +
+                  (nextTarget ? ` → next pair [${nextTarget[0]},${nextTarget[1]}]` : ""),
+                  "lime"
+                );
               } else {
                 recoveryLoss += Math.abs(pnl);
                 ladder += 1;
                 const nextStake = stake();
-                appendLogLine(`LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)}`, "red");
+                appendLogLine(
+                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)}` +
+                  (resultDigit !== null ? ` (digit=${resultDigit})` : "") +
+                  (nextTarget ? ` → next pair [${nextTarget[0]},${nextTarget[1]}]` : ""),
+                  "red"
+                );
               }
+
               if (levelEl) levelEl.textContent = ladder;
-              waitingProposal = false;
-              proposalVariants = null;
-              proposalAttempt = 0;
-              activeContractId = null;
-              resetStrategy();
+
               if (ws && ws.readyState === WebSocket.OPEN) {
                 sendMessage({ balance: 1 });
               }
+
+              // Reset sequence, feeding the next target pair
+              resetSequence(nextTarget);
             }
             break;
+          }
+
           default:
             break;
         }
@@ -452,6 +559,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // ── Button handlers ─────────────────────────────────────────────────────────
+
   startBtn.onclick = () => {
     running = true;
     connect();
@@ -471,13 +580,7 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   resetBtn.onclick = () => {
-    resetStrategy();
-    totalProfit = 0;
-    recoveryLoss = 0;
-    lastPayoutRatio = null;
-    currentStake = 0;
-    lastBalance = null;
-    ladder = 0;
+    fullReset();
     if (profitEl) profitEl.textContent = "0.00";
     if (levelEl) levelEl.textContent = "0";
     if (balanceEl) balanceEl.textContent = "-";
