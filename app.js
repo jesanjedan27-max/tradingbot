@@ -59,6 +59,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let phase = "scan_ab";
   let seqA = null;
   let seqB = null;
+  let lastSeenDigit = null; // always tracks the most recent tick digit
 
   // ── Log / tick buffering ────────────────────────────────────────────────────
   const LOG_MAX_ENTRIES = 1200;
@@ -280,6 +281,9 @@ document.addEventListener("DOMContentLoaded", () => {
     tickBuffer.push({ price, digit: d });
     startTickFlush();
 
+    // Always track last digit — used to set next target pair after trade settles
+    lastSeenDigit = d;
+
     // Don't process sequence logic while a trade is in flight
     if (waitingProposal || activeContractId) return;
 
@@ -494,11 +498,11 @@ document.addEventListener("DOMContentLoaded", () => {
               totalProfit += pnl;
               if (profitEl) profitEl.textContent = totalProfit.toFixed(2);
 
-              // Derive the result digit from the exit tick price
+              // Get result digit: use lastSeenDigit from tick stream (most reliable).
+              // Fall back to exit_tick from contract if available.
               const exitPrice = contract.exit_tick || contract.exit_tick_display_value;
-              const resultDigit = exitPrice !== undefined
-                ? digitFromPrice(exitPrice)
-                : null;
+              const exitDigit = exitPrice !== undefined ? digitFromPrice(exitPrice) : null;
+              const resultDigit = exitDigit !== null ? exitDigit : lastSeenDigit;
 
               // Compute the next target pair from the result digit
               const nextTarget = resultDigit !== null
