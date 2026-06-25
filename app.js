@@ -59,7 +59,8 @@ document.addEventListener("DOMContentLoaded", () => {
   let phase = "scan_ab";
   let seqA = null;
   let seqB = null;
-  let lastSeenDigit = null; // always tracks the most recent tick digit
+  let settlementDigit = null;  // digit of the first tick after buy — the true settlement digit
+  let captureNextTick = false; // when true, the next tick is the settlement tick
 
   // ── Log / tick buffering ────────────────────────────────────────────────────
   const LOG_MAX_ENTRIES = 1200;
@@ -156,6 +157,8 @@ document.addEventListener("DOMContentLoaded", () => {
     phase = "scan_ab";
     seqA = null;
     seqB = null;
+    settlementDigit = null;
+    captureNextTick = false;
     waitingProposal = false;
     proposalVariants = null;
     proposalAttempt = 0;
@@ -281,8 +284,11 @@ document.addEventListener("DOMContentLoaded", () => {
     tickBuffer.push({ price, digit: d });
     startTickFlush();
 
-    // Always track last digit — used to set next target pair after trade settles
-    lastSeenDigit = d;
+    // Capture the very first tick after buy is confirmed — that IS the settlement tick
+    if (captureNextTick) {
+      settlementDigit = d;
+      captureNextTick = false;
+    }
 
     // Don't process sequence logic while a trade is in flight
     if (waitingProposal || activeContractId) return;
@@ -470,6 +476,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
           case "buy":
             activeContractId = payload.buy?.contract_id || null;
+            settlementDigit = null;
+            captureNextTick = true; // next tick = settlement tick for 1-tick DIGITDIFF
             if (activeContractId) {
               sendMessage({
                 proposal_open_contract: 1,
@@ -498,11 +506,11 @@ document.addEventListener("DOMContentLoaded", () => {
               totalProfit += pnl;
               if (profitEl) profitEl.textContent = totalProfit.toFixed(2);
 
-              // Get result digit: use lastSeenDigit from tick stream (most reliable).
-              // Fall back to exit_tick from contract if available.
+              // Get result digit: settlementDigit = first tick after buy (the true settlement tick).
+              // Fall back to exit_tick from contract if settlementDigit wasn't captured.
               const exitPrice = contract.exit_tick || contract.exit_tick_display_value;
               const exitDigit = exitPrice !== undefined ? digitFromPrice(exitPrice) : null;
-              const resultDigit = exitDigit !== null ? exitDigit : lastSeenDigit;
+              const resultDigit = settlementDigit !== null ? settlementDigit : exitDigit;
 
               // Compute the next target pair from the result digit
               const nextTarget = resultDigit !== null
