@@ -19,6 +19,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const tokenInput = $("tokenInput");
 
   const SYMBOL = "R_100";
+  const DEFAULT_PAYOUT_RATIO = 11.57;
 
   const savedToken = localStorage.getItem("access_token");
   if (tokenInput && savedToken) {
@@ -45,8 +46,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let proposalVariants = null;
   let proposalAttempt = 0;
   let activeContractId = null;
-  let probing = false;       // true while waiting for the live-payout probe proposal
-  let pendingBarrier = null; // barrier saved during probe, used for real proposal
 
   // ── Strategy state ──────────────────────────────────────────────────────────
   // When set, the bot only looks for this specific A,B pair next.
@@ -125,17 +124,16 @@ document.addEventListener("DOMContentLoaded", () => {
     if (balanceEl) balanceEl.textContent = value.toFixed(2);
   }
 
-  function baseStakeAmount() {
-    return Number(stakeInput.value || 0.35);
-  }
-
-  function recoveryStake(liveRatio) {
-    const base = baseStakeAmount();
-    if (recoveryLoss > 0 && liveRatio > 1.01) {
-      const needed = recoveryLoss / (liveRatio - 1);
-      return Number(Math.max(base, needed).toFixed(2));
+  function stake() {
+    const baseStake = Number(stakeInput.value || 0.35);
+    const payoutRatio = lastPayoutRatio && lastPayoutRatio > 1.01
+      ? lastPayoutRatio
+      : DEFAULT_PAYOUT_RATIO;
+    if (recoveryLoss > 0 && payoutRatio > 1.01) {
+      const neededStake = recoveryLoss / (payoutRatio - 1);
+      return Number(Math.max(baseStake, neededStake).toFixed(2));
     }
-    return Number(base.toFixed(2));
+    return Number(baseStake.toFixed(2));
   }
 
   // ── Strategy helpers ────────────────────────────────────────────────────────
@@ -165,8 +163,6 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalVariants = null;
     proposalAttempt = 0;
     activeContractId = null;
-    probing = false;
-    pendingBarrier = null;
     targetPair = nextTarget;
 
     if (nextTarget) {
@@ -192,7 +188,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ── Proposal / trade plumbing ───────────────────────────────────────────────
 
-  function buildProposalVariants(barrier, amount) {
+  function buildProposalVariants(barrier) {
+    const amount = stake();
     const base = {
       proposal: 1,
       contract_type: "DIGITDIFF",
@@ -265,14 +262,13 @@ document.addEventListener("DOMContentLoaded", () => {
       appendLogLine("Already waiting for a proposal.", "orange");
       return;
     }
-    // Always probe with base stake first to get the live payout ratio.
-    // The proposal handler uses it to calculate the correct recovery stake.
-    pendingBarrier = barrier;
-    probing = true;
-    proposalVariants = buildProposalVariants(barrier, baseStakeAmount());
+    proposalVariants = buildProposalVariants(barrier);
     proposalAttempt = 0;
     waitingProposal = true;
-    appendLogLine(`Probing live payout ratio → DIGITDIFF barrier=${barrier}`, "#38bdf8");
+    appendLogLine(
+      `TRADE → DIGITDIFF barrier=${barrier} stake=${proposalVariants[0].amount}`,
+      "lime"
+    );
     sendNextProposalVariant();
   }
 
@@ -464,55 +460,18 @@ document.addEventListener("DOMContentLoaded", () => {
               appendLogLine("Proposal response missing payload.", "red");
               break;
             }
-            {
-              const probeAskPrice = Number(payload.proposal.ask_price || 0);
-              const probePayout   = Number(payload.proposal.payout   || 0);
-
-              // Always update live payout ratio from this proposal
-              if (probePayout > 0 && probeAskPrice > 0) {
-                lastPayoutRatio = probePayout / probeAskPrice;
-                appendLogLine(
-                  `Live payout ratio: ${lastPayoutRatio.toFixed(4)} ` +
-                  `(payout=${probePayout} / stake=${probeAskPrice})`,
-                  "#38bdf8"
-                );
-              }
-
-              if (probing) {
-                // We have the live ratio — calculate the correct stake
-                probing = false;
-                const correctStake = recoveryStake(lastPayoutRatio);
-
-                if (Math.abs(correctStake - probeAskPrice) < 0.01) {
-                  // Base stake is enough — buy the probe proposal directly
-                  currentStake = probeAskPrice;
-                  appendLogLine(
-                    `TRADE → DIGITDIFF barrier=${pendingBarrier} stake=${currentStake}`,
-                    "lime"
-                  );
-                  sendMessage({ buy: payload.proposal.id, price: payload.proposal.ask_price });
-                } else {
-                  // Recovery stake differs — request a new proposal with the correct amount
-                  appendLogLine(
-                    `Recovery stake=${correctStake} (probe was ${probeAskPrice}) → re-requesting proposal`,
-                    "orange"
-                  );
-                  currentStake = correctStake;
-                  proposalVariants = buildProposalVariants(pendingBarrier, correctStake);
-                  proposalAttempt = 0;
-                  waitingProposal = true;
-                  sendNextProposalVariant();
-                }
-              } else {
-                // Real (non-probe) proposal — buy it
-                currentStake = probeAskPrice;
-                appendLogLine(
-                  `TRADE → DIGITDIFF barrier=${pendingBarrier} stake=${currentStake}`,
-                  "lime"
-                );
-                sendMessage({ buy: payload.proposal.id, price: payload.proposal.ask_price });
-              }
+            currentStake = Number(payload.proposal.ask_price || 0);
+            if (payload.proposal.payout && currentStake > 0) {
+              lastPayoutRatio = Number(payload.proposal.payout / currentStake);
+              appendLogLine(
+                `Payout ratio set to ${lastPayoutRatio.toFixed(2)}`,
+                "#38bdf8"
+              );
             }
+            sendMessage({
+              buy: payload.proposal.id,
+              price: payload.proposal.ask_price
+            });
             break;
 
           case "buy":
@@ -571,9 +530,9 @@ document.addEventListener("DOMContentLoaded", () => {
               } else {
                 recoveryLoss += Math.abs(pnl);
                 ladder += 1;
-                const nextStake = recoveryStake(lastPayoutRatio);
+                const nextStake = stake();
                 appendLogLine(
-                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake≈${nextStake.toFixed(2)} (live ratio will be re-probed)` +
+                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)}` +
                   (resultDigit !== null ? ` (digit=${resultDigit})` : "") +
                   (nextTarget ? ` → next pair [${nextTarget[0]},${nextTarget[1]}]` : ""),
                   "red"
@@ -606,4 +565,68 @@ document.addEventListener("DOMContentLoaded", () => {
         appendLogLine("WS error.", "red");
         console.error("WebSocket error:", ev);
       };
-    } catch (err)
+    } catch (err) {
+      appendLogLine(`OTP fetch failed: ${String(err)}`, "red");
+      console.error(err);
+    }
+  }
+
+  // ── Button handlers ─────────────────────────────────────────────────────────
+
+  startBtn.onclick = () => {
+    running = true;
+    connect();
+    appendLogLine("BOT STARTED", "lime");
+  };
+
+  pauseBtn.onclick = () => {
+    paused = !paused;
+    appendLogLine(paused ? "PAUSED" : "RUNNING", "yellow");
+  };
+
+  stopBtn.onclick = () => {
+    running = false;
+    if (ws) ws.close();
+    stopTickFlush();
+    appendLogLine("STOPPED", "red");
+  };
+
+  resetBtn.onclick = () => {
+    fullReset();
+    if (profitEl) profitEl.textContent = "0.00";
+    if (levelEl) levelEl.textContent = "0";
+    if (balanceEl) balanceEl.textContent = "-";
+    appendLogLine("RESET DONE", "orange");
+  };
+
+  demoBtn.onclick = () => {
+    account = "demo";
+    demoBtn.classList.add("active");
+    liveBtn.classList.remove("active");
+    appendLogLine("DEMO MODE", "blue");
+    const mi = $("modeIndicator");
+    if (mi) {
+      mi.textContent = "JESAN 💲 MODE - DEMO";
+      mi.classList.add("demo");
+      mi.classList.remove("live");
+    }
+  };
+
+  liveBtn.onclick = () => {
+    account = "live";
+    liveBtn.classList.add("active");
+    demoBtn.classList.remove("active");
+    appendLogLine("LIVE MODE", "red");
+    const mi = $("modeIndicator");
+    if (mi) {
+      mi.textContent = "JESAN 💲 MODE - LIVE";
+      mi.classList.add("live");
+      mi.classList.remove("demo");
+    }
+  };
+
+  window.addEventListener("beforeunload", () => {
+    if (ws) ws.close();
+    stopTickFlush();
+  });
+});
