@@ -9,7 +9,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function el(id) { return document.getElementById(id); }
 
-  var loginScreen         = el("loginScreen");
   var botScreen           = el("botScreen");
   var loginBtn            = el("loginBtn");
   var logoutBtn           = el("logoutBtn");
@@ -79,6 +78,32 @@ document.addEventListener("DOMContentLoaded", () => {
       "&nonce=derivbot1";
   }
 
+  function updateLoginUI() {
+    var loggedIn = !!activeToken;
+
+    loginBtn.style.display = loggedIn ? "none" : "";
+    logoutBtn.style.display = loggedIn ? "" : "none";
+
+    startBtn.disabled = !loggedIn;
+    pauseBtn.disabled = !loggedIn;
+    stopBtn.disabled = !loggedIn;
+    resetBtn.disabled = !loggedIn;
+    demoBtn.disabled = !loggedIn;
+    liveBtn.disabled = !loggedIn;
+    stakeInput.disabled = !loggedIn;
+
+    if (!loggedIn) {
+      accountDisplay.textContent = "Not logged in";
+      accountTypeEl.textContent = "-";
+      modeIndicator.textContent = "JESAN 💲 MODE - LOGIN";
+      modeIndicator.className = "mode-indicator demo";
+      accountSelectorWrap.style.display = "none";
+      log("Please login to start trading.", "yellow");
+    } else {
+      accountSelectorWrap.style.display = accounts.length > 1 ? "" : "none";
+    }
+  }
+
   if (loginBtn) {
     loginBtn.addEventListener("click", function () {
       window.location.href = buildLoginUrl();
@@ -135,17 +160,8 @@ document.addEventListener("DOMContentLoaded", () => {
   function clearSession() {
     try { localStorage.removeItem("deriv_bot_accounts"); } catch (e) {}
     accounts = []; activeToken = null; activeLoginid = null;
+    updateLoginUI();
     window.history.replaceState({}, document.title, REDIRECT_URI);
-  }
-
-  function showLoginScreen() {
-    loginScreen.style.display = "";
-    botScreen.style.display = "none";
-  }
-
-  function showBotScreen() {
-    loginScreen.style.display = "none";
-    botScreen.style.display = "";
   }
 
   function buildAccountDropdown(accs) {
@@ -177,43 +193,7 @@ document.addEventListener("DOMContentLoaded", () => {
       modeIndicator.textContent = "JESAN 💲 MODE - LIVE";
       modeIndicator.className = "mode-indicator live";
     }
-  }
-
-  var fromOAuth = parseOAuthCallback();
-
-  if (fromOAuth.length > 0) {
-    accounts = fromOAuth;
-    saveAccounts(accounts);
-    window.history.replaceState({}, document.title, REDIRECT_URI);
-  } else {
-    accounts = loadAccounts();
-  }
-
-  if (accounts.length === 0) {
-    showLoginScreen();
-  } else {
-    showBotScreen();
-
-    if (accounts.length > 1) {
-      accountSelectorWrap.style.display = "";
-      buildAccountDropdown(accounts);
-      accountSelector.addEventListener("change", function () {
-        if (ws) { ws.close(); ws = null; }
-        applyAccount(Number(accountSelector.value));
-        log("Account changed — press Start to reconnect.", "yellow");
-      });
-    }
-
-    applyAccount(0);
-    createSwitchUI();
-
-    if (fromOAuth.length > 0) {
-      log("Login successful ✓ — connecting…", "lime");
-      running = true;
-      connect();
-    } else {
-      log("Session restored — press Start to begin.", "lime");
-    }
+    updateLoginUI();
   }
 
   function log(msg, color) {
@@ -584,7 +564,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (ws) ws.close();
     stopTickFlush();
     clearSession();
-    showLoginScreen();
+    log("Logged out.", "yellow");
   };
 
   startBtn.onclick = function() {
@@ -634,4 +614,25 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   window.addEventListener("beforeunload", function() { if (ws) ws.close(); stopTickFlush(); });
+
+  var fromOAuth = parseOAuthCallback();
+
+  if (fromOAuth.length > 0) {
+    accounts = fromOAuth;
+    saveAccounts(accounts);
+    applyAccount(0);
+    createSwitchUI();
+    log("Login successful ✓ — connecting…", "lime");
+    running = true;
+    connect();
+  } else {
+    accounts = loadAccounts();
+    if (accounts.length > 0) {
+      applyAccount(0);
+      createSwitchUI();
+      log("Session restored — press Start to begin.", "lime");
+    } else {
+      updateLoginUI();
+    }
+  }
 });
