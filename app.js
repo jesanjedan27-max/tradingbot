@@ -1,20 +1,16 @@
-// Deriv DigitDiff Bot
-// OAuth login URL is in index.html — no JS needed to click login.
-// This file handles: token parsing after redirect, WebSocket, trading.
-
 document.addEventListener("DOMContentLoaded", () => {
 
-  // ── Config ────────────────────────────────────────────────────────────────
-  const CLIENT_ID   = "33wZZKTFZrmsZgFaAH53Z";
+  const CLIENT_ID = "33wZZKTFZrmsZgFaAH53Z";
+  const AUTH_ENDPOINT = "https://oauth.deriv.com/oauth2/auth";
   const WS_ENDPOINT = "wss://ws.derivws.com/websockets/v3?app_id=" + CLIENT_ID;
-  const SYMBOL      = "R_100";
+  const SYMBOL = "R_100";
   const SWITCH_MULTIPLIERS = [1, 4.05 / 0.35, 52.63 / 0.35];
 
-  // ── DOM ───────────────────────────────────────────────────────────────────
   function el(id) { return document.getElementById(id); }
 
   var loginScreen         = el("loginScreen");
   var botScreen           = el("botScreen");
+  var loginBtn            = el("loginBtn");
   var logoutBtn           = el("logoutBtn");
   var accountDisplay      = el("accountDisplay");
   var accountTypeEl       = el("accountType");
@@ -35,12 +31,10 @@ document.addEventListener("DOMContentLoaded", () => {
   var logEl               = el("log");
   var stakeInput          = el("stakeInput");
 
-  // ── Auth state ────────────────────────────────────────────────────────────
   var accounts      = [];
   var activeToken   = null;
   var activeLoginid = null;
 
-  // ── Bot state ─────────────────────────────────────────────────────────────
   var ws      = null;
   var running = false;
   var paused  = false;
@@ -75,63 +69,93 @@ document.addEventListener("DOMContentLoaded", () => {
   var tickBuffer     = [];
   var tickFlushTimer = null;
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // PARSE OAUTH CALLBACK
-  // After login Deriv redirects to your page with tokens in the URL:
-  //   https://jesanjedan27-max.github.io/tradingbot/?token1=xxx&acct1=CR123&cur1=USD
-  // ═══════════════════════════════════════════════════════════════════════════
+  function getRedirectUri() {
+    var path = window.location.pathname;
+    if (path.endsWith("index.html")) {
+      path = path.slice(0, -10);
+    }
+    if (!path.endsWith("/")) {
+      path += "/";
+    }
+    return window.location.origin + path;
+  }
+
+  function buildLoginUrl() {
+    return AUTH_ENDPOINT +
+      "?response_type=token" +
+      "&client_id=" + encodeURIComponent(CLIENT_ID) +
+      "&redirect_uri=" + encodeURIComponent(getRedirectUri()) +
+      "&scope=" + encodeURIComponent("read trade payments admin") +
+      "&nonce=derivbot1";
+  }
+
+  if (loginBtn) {
+    loginBtn.addEventListener("click", function () {
+      window.location.href = buildLoginUrl();
+    });
+  }
 
   function parseOAuthCallback() {
-    // Check query string first, then hash fragment
     var search = window.location.search;
-    var hash   = window.location.hash.replace(/^#/, "?");
-
+    var hash = window.location.hash.replace(/^#/, "?");
     var qp = new URLSearchParams(search);
     var hp = new URLSearchParams(hash);
+    var params = qp.has("token1") || qp.has("access_token") ? qp : hp;
 
-    var params = qp.get("token1") ? qp : hp;
-    if (!params.get("token1")) return [];
+    if (!params.has("token1") && !params.has("access_token")) return [];
 
     var result = [];
-    var i = 1;
-    while (params.get("token" + i)) {
-      var loginid = params.get("acct" + i) || ("Account " + i);
+    if (params.has("token1")) {
+      var i = 1;
+      while (params.get("token" + i)) {
+        var loginid = params.get("acct" + i) || ("Account " + i);
+        result.push({
+          token: params.get("token" + i),
+          loginid: loginid,
+          currency: params.get("cur" + i) || "USD",
+          is_virtual: loginid.toUpperCase().indexOf("VRT") === 0
+        });
+        i++;
+      }
+    } else {
+      var loginid = params.get("loginid") || params.get("acct1") || "Deriv Account";
       result.push({
-        token:      params.get("token" + i),
-        loginid:    loginid,
-        currency:   params.get("cur" + i) || "USD",
-        is_virtual: loginid.toUpperCase().indexOf("VRT") === 0
+        token: params.get("access_token"),
+        loginid: loginid,
+        currency: params.get("currency") || "USD",
+        is_virtual: params.get("is_virtual") === "1" ||
+          loginid.toUpperCase().indexOf("VRT") === 0
       });
-      i++;
     }
+
     return result;
   }
 
   function saveAccounts(accs) {
-    try { localStorage.setItem("deriv_bot_accounts", JSON.stringify(accs)); } catch(e) {}
+    try { localStorage.setItem("deriv_bot_accounts", JSON.stringify(accs)); } catch (e) {}
   }
 
   function loadAccounts() {
     try {
       var raw = localStorage.getItem("deriv_bot_accounts");
       return raw ? JSON.parse(raw) : [];
-    } catch(e) { return []; }
+    } catch (e) { return []; }
   }
 
   function clearSession() {
-    try { localStorage.removeItem("deriv_bot_accounts"); } catch(e) {}
+    try { localStorage.removeItem("deriv_bot_accounts"); } catch (e) {}
     accounts = []; activeToken = null; activeLoginid = null;
-    window.history.replaceState({}, document.title, window.location.pathname);
+    window.history.replaceState({}, document.title, getRedirectUri());
   }
 
   function showLoginScreen() {
     loginScreen.style.display = "";
-    botScreen.style.display   = "none";
+    botScreen.style.display = "none";
   }
 
   function showBotScreen() {
     loginScreen.style.display = "none";
-    botScreen.style.display   = "";
+    botScreen.style.display = "";
   }
 
   function buildAccountDropdown(accs) {
@@ -148,32 +172,29 @@ document.addEventListener("DOMContentLoaded", () => {
   function applyAccount(idx) {
     var acc = accounts[idx];
     if (!acc) return;
-    activeToken   = acc.token;
+    activeToken = acc.token;
     activeLoginid = acc.loginid;
     accountDisplay.textContent = acc.loginid;
-    accountTypeEl.textContent  = acc.is_virtual ? "Demo" : "Real";
+    accountTypeEl.textContent = acc.is_virtual ? "Demo" : "Real";
     if (acc.is_virtual) {
       demoBtn.classList.add("active");
       liveBtn.classList.remove("active");
       modeIndicator.textContent = "JESAN 💲 MODE - DEMO";
-      modeIndicator.className   = "mode-indicator demo";
+      modeIndicator.className = "mode-indicator demo";
     } else {
       liveBtn.classList.add("active");
       demoBtn.classList.remove("active");
       modeIndicator.textContent = "JESAN 💲 MODE - LIVE";
-      modeIndicator.className   = "mode-indicator live";
+      modeIndicator.className = "mode-indicator live";
     }
   }
-
-  // ── Boot ──────────────────────────────────────────────────────────────────
 
   var fromOAuth = parseOAuthCallback();
 
   if (fromOAuth.length > 0) {
     accounts = fromOAuth;
     saveAccounts(accounts);
-    // Remove tokens from the URL bar
-    window.history.replaceState({}, document.title, window.location.pathname);
+    window.history.replaceState({}, document.title, getRedirectUri());
   } else {
     accounts = loadAccounts();
   }
@@ -186,7 +207,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (accounts.length > 1) {
       accountSelectorWrap.style.display = "";
       buildAccountDropdown(accounts);
-      accountSelector.addEventListener("change", function() {
+      accountSelector.addEventListener("change", function () {
         if (ws) { ws.close(); ws = null; }
         applyAccount(Number(accountSelector.value));
         log("Account changed — press Start to reconnect.", "yellow");
@@ -205,10 +226,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // LOGGING
-  // ─────────────────────────────────────────────────────────────────────────
-
   function log(msg, color) {
     var row = document.createElement("div");
     row.style.color = color || "#fff";
@@ -220,7 +237,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function startTickFlush() {
     if (tickFlushTimer) return;
-    tickFlushTimer = setInterval(function() {
+    tickFlushTimer = setInterval(function () {
       if (!tickBuffer.length) return;
       var frag = document.createDocumentFragment();
       var batch = tickBuffer.splice(0, TICK_LIMIT);
@@ -241,10 +258,6 @@ document.addEventListener("DOMContentLoaded", () => {
     clearInterval(tickFlushTimer);
     tickFlushTimer = null;
   }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // HELPERS
-  // ─────────────────────────────────────────────────────────────────────────
 
   function lastDigit(price) {
     var v = Number(price);
@@ -281,8 +294,6 @@ document.addEventListener("DOMContentLoaded", () => {
     return Number(base.toFixed(2));
   }
 
-  // ── Stake switch UI ───────────────────────────────────────────────────────
-
   function createSwitchUI() {
     if (!stakeInput || el("stakeModeBtn")) return;
     var wrap = stakeInput.parentElement;
@@ -308,7 +319,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function refreshLevels() {
       ldisp.textContent = stakeLevels().map(function(v, i) { return "Lvl " + (i+1) + ": $" + v; }).join("  →  ");
     }
-    stakeInput.addEventListener("input", function() { if (stakeMode === "switch") refreshLevels(); });
+    stakeInput.addEventListener("input", function () { if (stakeMode === "switch") refreshLevels(); });
 
     function refreshUI() {
       if (stakeMode === "switch") {
@@ -335,10 +346,6 @@ document.addEventListener("DOMContentLoaded", () => {
     refreshUI();
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // STRATEGY
-  // ─────────────────────────────────────────────────────────────────────────
-
   function nextPair(digit) {
     if (digit === 9) return [0, 1];
     if (digit >= 0 && digit <= 8) return [digit, digit + 1];
@@ -360,10 +367,6 @@ document.addEventListener("DOMContentLoaded", () => {
     currentStake = 0; lastBalance = null; ladder = 0; stakeLevelIdx = 0;
     tickBuffer.length = 0;
   }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // PROPOSAL / TRADE
-  // ─────────────────────────────────────────────────────────────────────────
 
   function proposalPayloads(barrier, amount) {
     var base = { proposal: 1, contract_type: "DIGITDIFF", currency: "USD",
@@ -410,10 +413,6 @@ document.addEventListener("DOMContentLoaded", () => {
     sendProposal();
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // TICK ENGINE
-  // ─────────────────────────────────────────────────────────────────────────
-
   function onTick(price) {
     if (!running || paused) return;
     var d = lastDigit(price);
@@ -452,10 +451,6 @@ document.addEventListener("DOMContentLoaded", () => {
       trade(barrier);
     }
   }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // WEBSOCKET
-  // ─────────────────────────────────────────────────────────────────────────
 
   function connect() {
     if (!activeToken) { log("No token — please login.", "red"); return; }
@@ -593,10 +588,6 @@ document.addEventListener("DOMContentLoaded", () => {
     ws.onclose = function(ev) { log("WebSocket closed (code " + ev.code + ").", "orange"); stopTickFlush(); };
     ws.onerror = function()   { log("WebSocket error.", "red"); };
   }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // BUTTON HANDLERS
-  // ─────────────────────────────────────────────────────────────────────────
 
   logoutBtn.onclick = function() {
     running = false;
