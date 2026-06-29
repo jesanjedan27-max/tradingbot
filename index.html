@@ -18,14 +18,14 @@
     <div class="login-box">
       <p class="login-desc">Sign in with your Deriv account to start trading.</p>
 
-      <!-- Plain link — no JavaScript needed to redirect -->
-      <a
-        href="https://oauth.deriv.com/oauth2/authorize?app_id=33wZZKTFZrmsZgFaAH53Z&l=EN&brand=deriv"
-        class="login-btn"
-      >🔐 Login with Deriv</a>
+      <!--
+        href is set by app.js on load (so the nonce can be randomised).
+        The onclick is a hard fallback in case JS sets it after the click.
+      -->
+      <a id="loginLink" href="#" class="login-btn">🔐 Login with Deriv</a>
 
       <p class="login-note">
-        You will be redirected to Deriv's secure login page and brought back here automatically.
+        You will be taken to Deriv's login page and redirected back here automatically.
       </p>
     </div>
   </div>
@@ -33,7 +33,6 @@
   <!-- ── BOT SCREEN (shown after login) ── -->
   <div id="botScreen" style="display:none;">
 
-    <!-- Account info bar -->
     <div class="account-bar">
       <div class="account-info">
         <span class="account-label">Account</span>
@@ -46,19 +45,16 @@
       <button id="logoutBtn" class="logout-btn">Logout</button>
     </div>
 
-    <!-- Account selector (shown when user has multiple accounts) -->
     <div id="accountSelectorWrap" style="display:none;" class="inputs">
       <label>Select Account</label>
       <select id="accountSelector" class="account-select"></select>
     </div>
 
-    <!-- Demo / Live toggle -->
     <div class="row">
       <button id="demoBtn" class="active">Demo</button>
       <button id="liveBtn">Live</button>
     </div>
 
-    <!-- Control buttons -->
     <div class="buttons">
       <button id="start">Start</button>
       <button id="pause">Pause</button>
@@ -66,13 +62,11 @@
       <button id="reset">Reset</button>
     </div>
 
-    <!-- Stake input -->
     <div class="inputs">
       <label>Stake ($)</label>
       <input id="stakeInput" type="number" value="0.35" step="0.01" min="0.35" />
     </div>
 
-    <!-- Stats -->
     <div class="stats">
       <div>Price: <span id="price">-</span></div>
       <div>Last Digit: <span id="lastDigit">-</span></div>
@@ -81,12 +75,11 @@
       <div>Profit: <span id="profit">0.00</span></div>
     </div>
 
-    <!-- Log -->
     <div id="log" class="log"></div>
 
-  </div><!-- /botScreen -->
+  </div>
 
-</div><!-- /container -->
+</div>
 
 <script src="app.js"></script>
 </body>
