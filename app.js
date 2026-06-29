@@ -11,6 +11,8 @@ const startBtn = $("start");
 const pauseBtn = $("pause");
 const stopBtn = $("stop");
 const resetBtn = $("reset");
+const demoBtn = $("demoBtn");
+const liveBtn = $("liveBtn");
 
 const statusEl = $("status");
 const balanceEl = $("balance");
@@ -24,6 +26,7 @@ let accessToken = null;
 let activeLoginid = null;
 let running = false;
 let paused = false;
+let isDemo = true;
 
 function log(msg, color) {
   if (!logEl) return;
@@ -45,9 +48,7 @@ function setLoginState(token, loginid, currency, isVirtual) {
   if (accountTypeEl) accountTypeEl.textContent = isVirtual ? "Demo" : "Real";
   if (loginBtn) loginBtn.style.display = "none";
   if (logoutBtn) logoutBtn.style.display = "inline-block";
-  [startBtn, pauseBtn, stopBtn, resetBtn].forEach((btn) => {
-    if (btn) btn.disabled = false;
-  });
+  [startBtn, pauseBtn, stopBtn, resetBtn].forEach((btn) => { if (btn) btn.disabled = false; });
   setStatus("Logged in");
   log(`Logged in as ${loginid} (${isVirtual ? "Demo" : "Real"})`, "lime");
 }
@@ -59,23 +60,25 @@ function setLoggedOutState() {
   if (accountTypeEl) accountTypeEl.textContent = "-";
   if (loginBtn) loginBtn.style.display = "inline-block";
   if (logoutBtn) logoutBtn.style.display = "none";
-  [startBtn, pauseBtn, stopBtn, resetBtn].forEach((btn) => {
-    if (btn) btn.disabled = true;
-  });
+  [startBtn, pauseBtn, stopBtn, resetBtn].forEach((btn) => { if (btn) btn.disabled = true; });
   setStatus("Logged out");
   log("Please login to start trading.", "yellow");
 }
 
+function activateMode(demo) {
+  isDemo = demo;
+  if (demoBtn) demoBtn.classList.toggle("active", demo);
+  if (liveBtn) liveBtn.classList.toggle("active", !demo);
+  log(`Mode switched to ${demo ? "Demo" : "Live"}`, demo ? "lime" : "orange");
+}
+
 function buildLoginUrl() {
-  return (
-    "https://auth.deriv.com/oauth2/auth" +
+  return "https://auth.deriv.com/oauth2/auth" +
     "?response_type=token" +
     `&client_id=${encodeURIComponent(CLIENT_ID)}` +
     `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-    "&scope=" +
-    encodeURIComponent("trade") +
-    "&nonce=derivbot1"
-  );
+    "&scope=" + encodeURIComponent("trade") +
+    "&nonce=derivbot1";
 }
 
 if (loginBtn) {
@@ -92,6 +95,14 @@ if (logoutBtn) {
   });
 }
 
+if (demoBtn) {
+  demoBtn.addEventListener("click", () => activateMode(true));
+}
+
+if (liveBtn) {
+  liveBtn.addEventListener("click", () => activateMode(false));
+}
+
 function parseTokenFromUrl() {
   const hash = window.location.hash.replace(/^#/, "?");
   const params = new URLSearchParams(hash);
@@ -100,9 +111,7 @@ function parseTokenFromUrl() {
       token: params.get("access_token"),
       loginid: params.get("loginid") || "Deriv Account",
       currency: params.get("currency") || "USD",
-      isVirtual:
-        params.get("is_virtual") === "1" ||
-        (params.get("loginid") || "").toUpperCase().startsWith("VRT"),
+      isVirtual: params.get("is_virtual") === "1" || (params.get("loginid") || "").toUpperCase().startsWith("VRT")
     };
   }
   return null;
@@ -114,8 +123,7 @@ function connect() {
     return;
   }
 
-  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING))
-    return;
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
   if (ws) ws.close();
 
@@ -206,16 +214,12 @@ if (resetBtn) {
 function init() {
   const tokenData = parseTokenFromUrl();
   if (tokenData) {
-    setLoginState(
-      tokenData.token,
-      tokenData.loginid,
-      tokenData.currency,
-      tokenData.isVirtual
-    );
+    setLoginState(tokenData.token, tokenData.loginid, tokenData.currency, tokenData.isVirtual);
     window.history.replaceState({}, document.title, REDIRECT_URI);
   } else {
     setLoggedOutState();
   }
+  activateMode(true);
 }
 
 init();
