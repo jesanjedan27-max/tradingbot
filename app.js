@@ -75,7 +75,7 @@ document.addEventListener("DOMContentLoaded", () => {
       "?response_type=token" +
       "&client_id=" + encodeURIComponent(CLIENT_ID) +
       "&redirect_uri=" + encodeURIComponent(REDIRECT_URI) +
-      "&scope=" + encodeURIComponent("read trade payments admin") +
+      "&scope=" + encodeURIComponent("trade") +
       "&nonce=derivbot1";
   }
 
@@ -539,8 +539,8 @@ document.addEventListener("DOMContentLoaded", () => {
           totalProfit += pnl;
           profitEl.textContent = totalProfit.toFixed(2);
 
-          var exitD = (c.exit_tick !== undefined) ? lastDigit(c.exit_tick) : null;
-          var resD = (settlementDigit !== null) ? settlementDigit : exitD;
+          var exitD  = (c.exit_tick !== undefined) ? lastDigit(c.exit_tick) : null;
+          var resD   = (settlementDigit !== null) ? settlementDigit : exitD;
           var nxtPair = (resD !== null) ? nextPair(resD) : null;
 
           if (pnl >= 0) {
