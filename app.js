@@ -1,7 +1,8 @@
 document.addEventListener("DOMContentLoaded", () => {
 
   const CLIENT_ID = "33wZZKTFZrmsZgFaAH53Z";
-  const AUTH_ENDPOINT = "https://oauth.deriv.com/oauth2/auth";
+  const AUTH_ENDPOINT = "https://auth.deriv.com/oauth2/auth";
+  const REDIRECT_URI = "https://jesanjedan27-max.github.io/tradingbot/";
   const WS_ENDPOINT = "wss://ws.derivws.com/websockets/v3?app_id=" + CLIENT_ID;
   const SYMBOL = "R_100";
   const SWITCH_MULTIPLIERS = [1, 4.05 / 0.35, 52.63 / 0.35];
@@ -69,22 +70,11 @@ document.addEventListener("DOMContentLoaded", () => {
   var tickBuffer     = [];
   var tickFlushTimer = null;
 
-  function getRedirectUri() {
-    var path = window.location.pathname;
-    if (path.endsWith("index.html")) {
-      path = path.slice(0, -10);
-    }
-    if (!path.endsWith("/")) {
-      path += "/";
-    }
-    return window.location.origin + path;
-  }
-
   function buildLoginUrl() {
     return AUTH_ENDPOINT +
       "?response_type=token" +
       "&client_id=" + encodeURIComponent(CLIENT_ID) +
-      "&redirect_uri=" + encodeURIComponent(getRedirectUri()) +
+      "&redirect_uri=" + encodeURIComponent(REDIRECT_URI) +
       "&scope=" + encodeURIComponent("read trade payments admin") +
       "&nonce=derivbot1";
   }
@@ -145,7 +135,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function clearSession() {
     try { localStorage.removeItem("deriv_bot_accounts"); } catch (e) {}
     accounts = []; activeToken = null; activeLoginid = null;
-    window.history.replaceState({}, document.title, getRedirectUri());
+    window.history.replaceState({}, document.title, REDIRECT_URI);
   }
 
   function showLoginScreen() {
@@ -194,7 +184,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (fromOAuth.length > 0) {
     accounts = fromOAuth;
     saveAccounts(accounts);
-    window.history.replaceState({}, document.title, getRedirectUri());
+    window.history.replaceState({}, document.title, REDIRECT_URI);
   } else {
     accounts = loadAccounts();
   }
@@ -549,8 +539,8 @@ document.addEventListener("DOMContentLoaded", () => {
           totalProfit += pnl;
           profitEl.textContent = totalProfit.toFixed(2);
 
-          var exitD  = (c.exit_tick !== undefined) ? lastDigit(c.exit_tick) : null;
-          var resD   = (settlementDigit !== null) ? settlementDigit : exitD;
+          var exitD = (c.exit_tick !== undefined) ? lastDigit(c.exit_tick) : null;
+          var resD = (settlementDigit !== null) ? settlementDigit : exitD;
           var nxtPair = (resD !== null) ? nextPair(resD) : null;
 
           if (pnl >= 0) {
