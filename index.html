@@ -2,18 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>PRO Deriv Bot</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Deriv Trading Bot</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-
-<div class="container">
-
-  <h1>⚙ PRO DERiv BOT</h1>
-  <div id="modeIndicator" class="mode-indicator demo">JESAN 💲 MODE - LOGIN</div>
-
-  <div id="botScreen">
+  <div class="container">
+    <h1>Deriv Trading Bot</h1>
 
     <div class="account-bar">
       <div class="account-info">
@@ -24,48 +19,26 @@
         <span class="account-label">Type</span>
         <span id="accountType">-</span>
       </div>
-      <button id="loginBtn" class="login-btn" type="button" style="flex:none;margin-left:auto;padding:8px 14px;font-size:13px;">
-        🔐 Login
-      </button>
-      <button id="logoutBtn" class="logout-btn" style="display:none;">Logout</button>
-    </div>
-
-    <div id="accountSelectorWrap" style="display:none;" class="inputs">
-      <label>Select Account</label>
-      <select id="accountSelector" class="account-select"></select>
+      <button id="login" class="login-btn">Login</button>
+      <button id="logout" class="logout-btn" style="display:none;">Logout</button>
     </div>
 
     <div class="row">
-      <button id="demoBtn" class="active">Demo</button>
-      <button id="liveBtn">Live</button>
-    </div>
-
-    <div class="buttons">
-      <button id="start">Start</button>
-      <button id="pause">Pause</button>
-      <button id="stop">Stop</button>
-      <button id="reset">Reset</button>
-    </div>
-
-    <div class="inputs">
-      <label>Stake ($)</label>
-      <input id="stakeInput" type="number" value="0.35" step="0.01" min="0.35" />
+      <button id="start" disabled>Start</button>
+      <button id="pause" disabled>Pause</button>
+      <button id="stop" disabled>Stop</button>
+      <button id="reset" disabled>Reset</button>
     </div>
 
     <div class="stats">
-      <div>Price: <span id="price">-</span></div>
-      <div>Last Digit: <span id="lastDigit">-</span></div>
-      <div>Balance: <span id="balance">-</span></div>
-      <div>Level: <span id="level">0</span></div>
-      <div>Profit: <span id="profit">0.00</span></div>
+      <div>Status: <span id="status">Logged out</span></div>
+      <div>Balance: <span id="balance">--</span></div>
+      <div>Price: <span id="price">--</span></div>
     </div>
 
     <div id="log" class="log"></div>
-
   </div>
 
-</div>
-
-<script src="app.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>
