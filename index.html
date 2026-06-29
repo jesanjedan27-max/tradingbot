@@ -13,27 +13,41 @@
     <div class="account-bar">
       <div class="account-info">
         <span class="account-label">Account</span>
-        <span id="accountDisplay">Not logged in</span>
+        <span id="accountDisplay" class="account-value">Not logged in</span>
       </div>
       <div class="account-info">
         <span class="account-label">Type</span>
-        <span id="accountType">-</span>
+        <span id="accountType" class="account-value">-</span>
       </div>
       <button id="login" class="login-btn">Login</button>
       <button id="logout" class="logout-btn" style="display:none;">Logout</button>
     </div>
 
-    <div class="row">
-      <button id="start" disabled>Start</button>
-      <button id="pause" disabled>Pause</button>
-      <button id="stop" disabled>Stop</button>
-      <button id="reset" disabled>Reset</button>
+    <div class="control-row">
+      <button id="start" disabled>START</button>
+      <button id="pause" disabled>PAUSE</button>
+      <button id="stop" disabled>STOP</button>
+      <button id="reset" disabled>RESET</button>
+    </div>
+
+    <div class="mode-row">
+      <button id="demoBtn" class="mode-btn active">Demo</button>
+      <button id="liveBtn" class="mode-btn">Live</button>
     </div>
 
     <div class="stats">
-      <div>Status: <span id="status">Logged out</span></div>
-      <div>Balance: <span id="balance">--</span></div>
-      <div>Price: <span id="price">--</span></div>
+      <div>
+        <span class="status-label">Status</span>
+        <span id="status" class="value">Logged out</span>
+      </div>
+      <div>
+        <span class="balance-label">Balance</span>
+        <span id="balance" class="value">--</span>
+      </div>
+      <div>
+        <span class="price-label">Price</span>
+        <span id="price" class="value">--</span>
+      </div>
     </div>
 
     <div id="log" class="log"></div>
