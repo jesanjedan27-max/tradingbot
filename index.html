@@ -18,14 +18,9 @@
     <div class="login-box">
       <p class="login-desc">Sign in with your Deriv account to start trading.</p>
 
-      <!--
-        Full URL hardcoded here — works even if JavaScript fails to load.
-        redirect_uri is URL-encoded so the browser sends it correctly.
-      -->
-      <a
-        href="https://auth.deriv.com/oauth2/auth?response_type=token&client_id=33wZZKTFZrmsZgFaAH53Z&redirect_uri=https%3A%2F%2Fjesanjedan27-max.github.io%2Ftradingbot%2F&scope=read+trade+payments+admin&nonce=derivbot1"
-        class="login-btn"
-      >🔐 Login with Deriv</a>
+      <button id="loginBtn" class="login-btn" type="button">
+        🔐 Login with Deriv
+      </button>
 
       <p class="login-note">
         You will be taken to Deriv's login page and redirected back here automatically.
@@ -86,4 +81,4 @@
 
 <script src="app.js"></script>
 </body>
-  </html>
+</html>
