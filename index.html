@@ -19,10 +19,13 @@
       <p class="login-desc">Sign in with your Deriv account to start trading.</p>
 
       <!--
-        href is set by app.js on load (so the nonce can be randomised).
-        The onclick is a hard fallback in case JS sets it after the click.
+        Full URL hardcoded here — works even if JavaScript fails to load.
+        redirect_uri is URL-encoded so the browser sends it correctly.
       -->
-      <a id="loginLink" href="#" class="login-btn">🔐 Login with Deriv</a>
+      <a
+        href="https://auth.deriv.com/oauth2/auth?response_type=token&client_id=33wZZKTFZrmsZgFaAH53Z&redirect_uri=https%3A%2F%2Fjesanjedan27-max.github.io%2Ftradingbot%2F&scope=read+trade+payments+admin&nonce=derivbot1"
+        class="login-btn"
+      >🔐 Login with Deriv</a>
 
       <p class="login-note">
         You will be taken to Deriv's login page and redirected back here automatically.
