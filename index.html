@@ -13,11 +13,17 @@
   <h1>⚙ PRO DERIV BOT</h1>
   <div id="modeIndicator" class="mode-indicator demo">JESAN 💲 MODE - DEMO</div>
 
-  <!-- ── LOGIN SCREEN (shown when not logged in) ── -->
+  <!-- ── LOGIN SCREEN ── -->
   <div id="loginScreen">
     <div class="login-box">
       <p class="login-desc">Sign in with your Deriv account to start trading.</p>
-      <button id="loginBtn" class="login-btn">🔐 Login with Deriv</button>
+
+      <!-- Plain link — no JavaScript needed to redirect -->
+      <a
+        href="https://oauth.deriv.com/oauth2/authorize?app_id=33wZZKTFZrmsZgFaAH53Z&l=EN&brand=deriv"
+        class="login-btn"
+      >🔐 Login with Deriv</a>
+
       <p class="login-note">
         You will be redirected to Deriv's secure login page and brought back here automatically.
       </p>
@@ -40,7 +46,7 @@
       <button id="logoutBtn" class="logout-btn">Logout</button>
     </div>
 
-    <!-- Account selector (if user has multiple accounts) -->
+    <!-- Account selector (shown when user has multiple accounts) -->
     <div id="accountSelectorWrap" style="display:none;" class="inputs">
       <label>Select Account</label>
       <select id="accountSelector" class="account-select"></select>
@@ -84,4 +90,4 @@
 
 <script src="app.js"></script>
 </body>
-                                          </html>
+  </html>
