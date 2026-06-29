@@ -9,7 +9,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function el(id) { return document.getElementById(id); }
 
-  var botScreen           = el("botScreen");
   var loginBtn            = el("loginBtn");
   var logoutBtn           = el("logoutBtn");
   var accountDisplay      = el("accountDisplay");
@@ -78,29 +77,41 @@ document.addEventListener("DOMContentLoaded", () => {
       "&nonce=derivbot1";
   }
 
+  function log(msg, color) {
+    if (!logEl) return;
+    var row = document.createElement("div");
+    row.style.color = color || "#fff";
+    row.textContent = msg;
+    logEl.appendChild(row);
+    while (logEl.children.length > LOG_MAX) logEl.removeChild(logEl.firstChild);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
   function updateLoginUI() {
     var loggedIn = !!activeToken;
 
-    loginBtn.style.display = loggedIn ? "none" : "";
-    logoutBtn.style.display = loggedIn ? "" : "none";
+    if (loginBtn) loginBtn.style.display = loggedIn ? "none" : "";
+    if (logoutBtn) logoutBtn.style.display = loggedIn ? "" : "none";
 
-    startBtn.disabled = !loggedIn;
-    pauseBtn.disabled = !loggedIn;
-    stopBtn.disabled = !loggedIn;
-    resetBtn.disabled = !loggedIn;
-    demoBtn.disabled = !loggedIn;
-    liveBtn.disabled = !loggedIn;
-    stakeInput.disabled = !loggedIn;
+    if (startBtn) startBtn.disabled = !loggedIn;
+    if (pauseBtn) pauseBtn.disabled = !loggedIn;
+    if (stopBtn) stopBtn.disabled = !loggedIn;
+    if (resetBtn) resetBtn.disabled = !loggedIn;
+    if (demoBtn) demoBtn.disabled = !loggedIn;
+    if (liveBtn) liveBtn.disabled = !loggedIn;
+    if (stakeInput) stakeInput.disabled = !loggedIn;
 
     if (!loggedIn) {
-      accountDisplay.textContent = "Not logged in";
-      accountTypeEl.textContent = "-";
-      modeIndicator.textContent = "JESAN 💲 MODE - LOGIN";
-      modeIndicator.className = "mode-indicator demo";
-      accountSelectorWrap.style.display = "none";
+      if (accountDisplay) accountDisplay.textContent = "Not logged in";
+      if (accountTypeEl) accountTypeEl.textContent = "-";
+      if (modeIndicator) {
+        modeIndicator.textContent = "JESAN 💲 MODE - LOGIN";
+        modeIndicator.className = "mode-indicator demo";
+      }
+      if (accountSelectorWrap) accountSelectorWrap.style.display = "none";
       log("Please login to start trading.", "yellow");
-    } else {
-      accountSelectorWrap.style.display = accounts.length > 1 ? "" : "none";
+    } else if (accounts.length > 1) {
+      if (accountSelectorWrap) accountSelectorWrap.style.display = "";
     }
   }
 
@@ -108,6 +119,8 @@ document.addEventListener("DOMContentLoaded", () => {
     loginBtn.addEventListener("click", function () {
       window.location.href = buildLoginUrl();
     });
+  } else {
+    console.error("Login button not found in DOM.");
   }
 
   function parseOAuthCallback() {
@@ -159,12 +172,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function clearSession() {
     try { localStorage.removeItem("deriv_bot_accounts"); } catch (e) {}
-    accounts = []; activeToken = null; activeLoginid = null;
+    accounts = [];
+    activeToken = null;
+    activeLoginid = null;
     updateLoginUI();
     window.history.replaceState({}, document.title, REDIRECT_URI);
   }
 
   function buildAccountDropdown(accs) {
+    if (!accountSelector) return;
     accountSelector.innerHTML = "";
     for (var i = 0; i < accs.length; i++) {
       var acc = accs[i];
@@ -180,8 +196,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!acc) return;
     activeToken = acc.token;
     activeLoginid = acc.loginid;
-    accountDisplay.textContent = acc.loginid;
-    accountTypeEl.textContent = acc.is_virtual ? "Demo" : "Real";
+    if (accountDisplay) accountDisplay.textContent = acc.loginid;
+    if (accountTypeEl) accountTypeEl.textContent = acc.is_virtual ? "Demo" : "Real";
     if (acc.is_virtual) {
       demoBtn.classList.add("active");
       liveBtn.classList.remove("active");
@@ -194,15 +210,6 @@ document.addEventListener("DOMContentLoaded", () => {
       modeIndicator.className = "mode-indicator live";
     }
     updateLoginUI();
-  }
-
-  function log(msg, color) {
-    var row = document.createElement("div");
-    row.style.color = color || "#fff";
-    row.textContent = msg;
-    logEl.appendChild(row);
-    while (logEl.children.length > LOG_MAX) logEl.removeChild(logEl.firstChild);
-    logEl.scrollTop = logEl.scrollHeight;
   }
 
   function startTickFlush() {
@@ -519,8 +526,8 @@ document.addEventListener("DOMContentLoaded", () => {
           totalProfit += pnl;
           profitEl.textContent = totalProfit.toFixed(2);
 
-          var exitD  = (c.exit_tick !== undefined) ? lastDigit(c.exit_tick) : null;
-          var resD   = (settlementDigit !== null) ? settlementDigit : exitD;
+          var exitD = (c.exit_tick !== undefined) ? lastDigit(c.exit_tick) : null;
+          var resD = (settlementDigit !== null) ? settlementDigit : exitD;
           var nxtPair = (resD !== null) ? nextPair(resD) : null;
 
           if (pnl >= 0) {
