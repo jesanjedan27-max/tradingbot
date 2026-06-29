@@ -11,36 +11,22 @@
 <div class="container">
 
   <h1>⚙ PRO DERIV BOT</h1>
-  <div id="modeIndicator" class="mode-indicator demo">JESAN 💲 MODE - DEMO</div>
+  <div id="modeIndicator" class="mode-indicator demo">JESAN 💲 MODE - LOGIN</div>
 
-  <!-- ── LOGIN SCREEN ── -->
-  <div id="loginScreen">
-    <div class="login-box">
-      <p class="login-desc">Sign in with your Deriv account to start trading.</p>
-
-      <button id="loginBtn" class="login-btn" type="button">
-        🔐 Login with Deriv
-      </button>
-
-      <p class="login-note">
-        You will be taken to Deriv's login page and redirected back here automatically.
-      </p>
-    </div>
-  </div>
-
-  <!-- ── BOT SCREEN (shown after login) ── -->
-  <div id="botScreen" style="display:none;">
-
+  <div id="botScreen">
     <div class="account-bar">
       <div class="account-info">
         <span class="account-label">Account</span>
-        <span id="accountDisplay">—</span>
+        <span id="accountDisplay">Not logged in</span>
       </div>
       <div class="account-info">
         <span class="account-label">Type</span>
-        <span id="accountType">—</span>
+        <span id="accountType">-</span>
       </div>
-      <button id="logoutBtn" class="logout-btn">Logout</button>
+      <button id="loginBtn" class="login-btn" style="flex:none;margin-left:auto;padding:8px 14px;font-size:13px;">
+        🔐 Login
+      </button>
+      <button id="logoutBtn" class="logout-btn" style="display:none;">Logout</button>
     </div>
 
     <div id="accountSelectorWrap" style="display:none;" class="inputs">
