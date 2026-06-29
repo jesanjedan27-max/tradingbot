@@ -4,244 +4,84 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>PRO Deriv Bot</title>
-  <style>
-    body {
-      background: #020617;
-      color: #ffffff;
-      font-family: Arial, sans-serif;
-      margin: 0;
-      padding: 0;
-    }
-
-    /* ================= CONTAINER ================= */
-    .container {
-      max-width: 520px;
-      margin: 30px auto;
-      padding: 20px;
-      background: #0f172a;
-      border-radius: 12px;
-      box-shadow: 0 0 20px rgba(0, 0, 0, 0.4);
-    }
-
-    /* ================= TITLE ================= */
-    h1 {
-      text-align: center;
-      color: #38bdf8;
-      margin-bottom: 10px;
-      font-size: 20px;
-    }
-
-    /* ================= MODE INDICATOR ================= */
-    .mode-indicator {
-      text-align: center;
-      font-size: 16px;
-      font-weight: bold;
-      margin-bottom: 10px;
-      padding: 6px;
-      border-radius: 6px;
-      letter-spacing: 1px;
-    }
-
-    .mode-indicator.demo {
-      background: rgba(59, 130, 246, 0.15);
-      color: #3b82f6;
-      border: 1px solid #3b82f6;
-    }
-
-    .mode-indicator.live {
-      background: rgba(239, 68, 68, 0.15);
-      color: #ef4444;
-      border: 1px solid #ef4444;
-    }
-
-    /* ================= BUTTON ROW ================= */
-    .row {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 10px;
-    }
-
-    .buttons {
-      display: flex;
-      gap: 8px;
-      margin: 16px 0;
-      flex-wrap: wrap;
-    }
-
-    button {
-      flex: 1;
-      padding: 10px;
-      border: none;
-      border-radius: 6px;
-      font-weight: bold;
-      cursor: pointer;
-      color: white;
-      transition: 0.2s;
-    }
-
-    button:hover {
-      transform: scale(1.02);
-      opacity: 0.9;
-    }
-
-    button:active {
-      transform: scale(1);
-    }
-
-    #start { background: #22c55e; }
-    #pause { background: #facc15; color: black; }
-    #stop  { background: #ef4444; }
-    #reset { background: #60a5fa; }
-
-    #demoBtn, #liveBtn {
-      border: 1px solid transparent;
-      background: #1f2937;
-    }
-
-    #demoBtn.active {
-      background: #3b82f6;
-      border-color: #3b82f6;
-    }
-
-    #liveBtn.active {
-      background: #ef4444;
-      border-color: #ef4444;
-    }
-
-    /* ================= INPUTS ================= */
-    .inputs {
-      margin-top: 10px;
-      background: #111827;
-      padding: 10px;
-      border-radius: 8px;
-    }
-
-    .inputs label {
-      display: block;
-      font-size: 12px;
-      margin-bottom: 5px;
-      color: #94a3b8;
-    }
-
-    .inputs input {
-      width: 100%;
-      padding: 8px;
-      border-radius: 6px;
-      border: 1px solid #1f2937;
-      background: #0b1220;
-      color: white;
-      outline: none;
-    }
-
-    .inputs input:focus {
-      border-color: #3b82f6;
-      box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.12);
-    }
-
-    /* ================= STATS ================= */
-    .stats {
-      margin-top: 10px;
-      background: #111827;
-      padding: 12px;
-      border-radius: 8px;
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 6px;
-      font-size: 14px;
-    }
-
-    .stats div {
-      display: flex;
-      justify-content: space-between;
-      padding: 6px 0;
-      border-bottom: 1px solid #1f2937;
-    }
-
-    .stats div:last-child {
-      border-bottom: none;
-    }
-
-    /* ================= LOG ================= */
-    .log {
-      margin-top: 10px;
-      background: #0b1220;
-      padding: 10px;
-      font-size: 12px;
-      height: 240px;
-      overflow-y: auto;
-      border-radius: 8px;
-      border: 1px solid #1f2937;
-      line-height: 1.4;
-    }
-
-    /* ================= LIVE DATA COLORS ================= */
-    #price {
-      color: #38bdf8;
-      font-weight: bold;
-    }
-
-    #lastDigit {
-      color: #f97316;
-      font-weight: bold;
-    }
-
-    #balance {
-      color: #22c55e;
-      font-weight: bold;
-    }
-
-    #level {
-      color: #facc15;
-      font-weight: bold;
-    }
-
-    #profit {
-      color: #a78bfa;
-      font-weight: bold;
-    }
-  </style>
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
 <div class="container">
 
-  <h1 id="modeIndicator" class="mode-indicator demo">JESAN 💲 MODE - DEMO</h1>
+  <h1>⚙ PRO DERIV BOT</h1>
+  <div id="modeIndicator" class="mode-indicator demo">JESAN 💲 MODE - DEMO</div>
 
-  <div class="row">
-    <button id="demoBtn">Demo</button>
-    <button id="liveBtn">Live</button>
+  <!-- ── LOGIN SCREEN (shown when not logged in) ── -->
+  <div id="loginScreen">
+    <div class="login-box">
+      <p class="login-desc">Sign in with your Deriv account to start trading.</p>
+      <button id="loginBtn" class="login-btn">🔐 Login with Deriv</button>
+      <p class="login-note">
+        You will be redirected to Deriv's secure login page and brought back here automatically.
+      </p>
+    </div>
   </div>
 
-  <div class="buttons">
-    <button id="start">Start</button>
-    <button id="pause">Pause</button>
-    <button id="stop">Stop</button>
-    <button id="reset">Reset</button>
-  </div>
+  <!-- ── BOT SCREEN (shown after login) ── -->
+  <div id="botScreen" style="display:none;">
 
-  <div class="inputs">
-    <label>Stake</label>
-    <input id="stakeInput" type="number" value="0.35" step="0.01"/>
-  </div>
+    <!-- Account info bar -->
+    <div class="account-bar">
+      <div class="account-info">
+        <span class="account-label">Account</span>
+        <span id="accountDisplay">—</span>
+      </div>
+      <div class="account-info">
+        <span class="account-label">Type</span>
+        <span id="accountType">—</span>
+      </div>
+      <button id="logoutBtn" class="logout-btn">Logout</button>
+    </div>
 
-  <div class="inputs">
-    <label>Access Token</label>
-    <input id="tokenInput" type="text" placeholder="Paste access_token here" style="width:100%;" />
-  </div>
+    <!-- Account selector (if user has multiple accounts) -->
+    <div id="accountSelectorWrap" style="display:none;" class="inputs">
+      <label>Select Account</label>
+      <select id="accountSelector" class="account-select"></select>
+    </div>
 
-  <div class="stats">
-    <div>Price: <span id="price">-</span></div>
-    <div>Last Digit: <span id="lastDigit">-</span></div>
-    <div>Balance: <span id="balance">-</span></div>
-    <div>Level: <span id="level">0</span></div>
-    <div>Profit: <span id="profit">0.00</span></div>
-  </div>
+    <!-- Demo / Live toggle -->
+    <div class="row">
+      <button id="demoBtn" class="active">Demo</button>
+      <button id="liveBtn">Live</button>
+    </div>
 
-  <div id="log" class="log"></div>
+    <!-- Control buttons -->
+    <div class="buttons">
+      <button id="start">Start</button>
+      <button id="pause">Pause</button>
+      <button id="stop">Stop</button>
+      <button id="reset">Reset</button>
+    </div>
 
-</div>
+    <!-- Stake input -->
+    <div class="inputs">
+      <label>Stake ($)</label>
+      <input id="stakeInput" type="number" value="0.35" step="0.01" min="0.35" />
+    </div>
+
+    <!-- Stats -->
+    <div class="stats">
+      <div>Price: <span id="price">-</span></div>
+      <div>Last Digit: <span id="lastDigit">-</span></div>
+      <div>Balance: <span id="balance">-</span></div>
+      <div>Level: <span id="level">0</span></div>
+      <div>Profit: <span id="profit">0.00</span></div>
+    </div>
+
+    <!-- Log -->
+    <div id="log" class="log"></div>
+
+  </div><!-- /botScreen -->
+
+</div><!-- /container -->
 
 <script src="app.js"></script>
-
 </body>
-</html>
+                                          </html>
