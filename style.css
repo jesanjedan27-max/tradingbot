@@ -1,3 +1,6 @@
+/* ── Reset & base ── */
+*, *::before, *::after { box-sizing: border-box; }
+
 body {
   background: #020617;
   color: #ffffff;
@@ -6,52 +9,165 @@ body {
   padding: 0;
 }
 
-/* ================= CONTAINER ================= */
+/* ── Container ── */
 .container {
   max-width: 520px;
   margin: 30px auto;
   padding: 20px;
   background: #0f172a;
   border-radius: 12px;
-  box-shadow: 0 0 20px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 0 20px rgba(0,0,0,0.4);
 }
 
-/* ================= TITLE ================= */
+/* ── Title ── */
 h1 {
   text-align: center;
   color: #38bdf8;
-  margin-bottom: 10px;
+  margin: 0 0 10px;
   font-size: 20px;
+  letter-spacing: 1px;
 }
 
-/* ================= MODE INDICATOR ================= */
+/* ── Mode indicator ── */
 .mode-indicator {
   text-align: center;
-  font-size: 16px;
+  font-size: 14px;
   font-weight: bold;
-  margin-bottom: 10px;
+  margin-bottom: 14px;
   padding: 6px;
   border-radius: 6px;
   letter-spacing: 1px;
 }
 
 .mode-indicator.demo {
-  background: rgba(59, 130, 246, 0.15);
+  background: rgba(59,130,246,0.15);
   color: #3b82f6;
   border: 1px solid #3b82f6;
 }
 
 .mode-indicator.live {
-  background: rgba(239, 68, 68, 0.15);
+  background: rgba(239,68,68,0.15);
   color: #ef4444;
   border: 1px solid #ef4444;
 }
 
-/* ================= BUTTON ROW ================= */
+/* ── Login screen ── */
+.login-box {
+  text-align: center;
+  padding: 30px 20px;
+  background: #111827;
+  border-radius: 10px;
+  border: 1px solid #1f2937;
+}
+
+.login-desc {
+  color: #94a3b8;
+  font-size: 14px;
+  margin: 0 0 20px;
+}
+
+.login-btn {
+  background: linear-gradient(135deg, #e84040, #c02020);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 14px 32px;
+  font-size: 16px;
+  font-weight: bold;
+  cursor: pointer;
+  width: 100%;
+  letter-spacing: 0.5px;
+  transition: opacity 0.2s;
+}
+
+.login-btn:hover { opacity: 0.88; }
+
+.login-note {
+  margin: 14px 0 0;
+  font-size: 11px;
+  color: #475569;
+  line-height: 1.5;
+}
+
+/* ── Account bar ── */
+.account-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #111827;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border: 1px solid #1f2937;
+}
+
+.account-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.account-label {
+  font-size: 10px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+#accountDisplay {
+  font-size: 13px;
+  font-weight: bold;
+  color: #38bdf8;
+}
+
+#accountType {
+  font-size: 13px;
+  font-weight: bold;
+  color: #a78bfa;
+}
+
+.logout-btn {
+  background: #1f2937;
+  color: #94a3b8;
+  border: 1px solid #374151;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  flex: none;
+  transition: 0.2s;
+}
+
+.logout-btn:hover {
+  background: #374151;
+  color: #fff;
+}
+
+/* ── Account selector ── */
+.account-select {
+  width: 100%;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid #1f2937;
+  background: #0b1220;
+  color: #fff;
+  outline: none;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* ── Rows & buttons ── */
 .row {
   display: flex;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+.buttons {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+  flex-wrap: wrap;
 }
 
 button {
@@ -63,16 +179,11 @@ button {
   cursor: pointer;
   color: white;
   transition: 0.2s;
+  font-size: 13px;
 }
 
-button:hover {
-  transform: scale(1.02);
-  opacity: 0.9;
-}
-
-button:active {
-  transform: scale(1);
-}
+button:hover  { transform: scale(1.02); opacity: 0.9; }
+button:active { transform: scale(1); }
 
 #start { background: #22c55e; }
 #pause { background: #facc15; color: black; }
@@ -82,31 +193,28 @@ button:active {
 #demoBtn, #liveBtn {
   border: 1px solid transparent;
   background: #1f2937;
+  color: #94a3b8;
 }
 
-#demoBtn.active {
-  background: #3b82f6;
-  border-color: #3b82f6;
-}
+#demoBtn.active { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+#liveBtn.active { background: #ef4444; border-color: #ef4444; color: #fff; }
 
-#liveBtn.active {
-  background: #ef4444;
-  border-color: #ef4444;
-}
-
-/* ================= INPUTS ================= */
+/* ── Inputs ── */
 .inputs {
   margin-top: 10px;
   background: #111827;
   padding: 10px;
   border-radius: 8px;
+  border: 1px solid #1f2937;
 }
 
 .inputs label {
   display: block;
-  font-size: 12px;
+  font-size: 11px;
   margin-bottom: 5px;
   color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .inputs input {
@@ -121,18 +229,16 @@ button:active {
 
 .inputs input:focus {
   border-color: #3b82f6;
-  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.12);
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
 }
 
-/* ================= STATS ================= */
+/* ── Stats ── */
 .stats {
   margin-top: 10px;
   background: #111827;
   padding: 12px;
   border-radius: 8px;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 6px;
+  border: 1px solid #1f2937;
   font-size: 14px;
 }
 
@@ -143,11 +249,9 @@ button:active {
   border-bottom: 1px solid #1f2937;
 }
 
-.stats div:last-child {
-  border-bottom: none;
-}
+.stats div:last-child { border-bottom: none; }
 
-/* ================= LOG ================= */
+/* ── Log ── */
 .log {
   margin-top: 10px;
   background: #0b1220;
@@ -157,26 +261,13 @@ button:active {
   overflow-y: auto;
   border-radius: 8px;
   border: 1px solid #1f2937;
-  line-height: 1.4;
+  line-height: 1.5;
+  font-family: monospace;
 }
 
-/* ================= LIVE DATA COLORS ================= */
-#price {
-  color: #38bdf8;
-  font-weight: bold;
-}
-
-#balance {
-  color: #22c55e;
-  font-weight: bold;
-}
-
-#level {
-  color: #facc15;
-  font-weight: bold;
-}
-
-#profit {
-  color: #a78bfa;
-  font-weight: bold;
-}
+/* ── Value colours ── */
+#price     { color: #38bdf8; font-weight: bold; }
+#lastDigit { color: #f97316; font-weight: bold; }
+#balance   { color: #22c55e; font-weight: bold; }
+#level     { color: #facc15; font-weight: bold; }
+#profit    { color: #a78bfa; font-weight: bold; }
