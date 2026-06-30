@@ -59,6 +59,13 @@ document.addEventListener("DOMContentLoaded", () => {
   let recoveryPair = null;
   let lastTradePair = null;
 
+  // ── NEW: triple-pair recovery state ──────────────────────────────────────
+  let recoveryTripleScanMode = false;  // true while scanning for 3x pair
+  let pairCounts = {};                 // { "a,b": count }
+  let confirmedRecoveryPair = null;    // [a, b] once 3x confirmed
+  let prevRecoveryDigit = null;        // previous tick digit during triple scan
+  // ─────────────────────────────────────────────────────────────────────────
+
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
   const TICK_BATCH_LIMIT = 200;
@@ -145,10 +152,16 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalAttempt = 0;
     activeContractId = null;
 
-    if (recoveryMode && recoveryPair) {
-      targetPair = recoveryPair;
+    if (recoveryTripleScanMode) {
+      targetPair = null;
       appendLogLine(
-        `Recovery mode: looking for pair [${recoveryPair[0]},${recoveryPair[1]}]`,
+        "Recovery mode: scanning tick stream for a consecutive pair that appears 3x...",
+        "#f59e0b"
+      );
+    } else if (recoveryMode && confirmedRecoveryPair) {
+      targetPair = null;
+      appendLogLine(
+        `Recovery mode: pair [${confirmedRecoveryPair[0]},${confirmedRecoveryPair[1]}] confirmed → waiting for digit ${confirmedRecoveryPair[0]}`,
         "#f59e0b"
       );
     } else {
@@ -165,6 +178,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function fullReset() {
+    recoveryTripleScanMode = false;
+    pairCounts = {};
+    confirmedRecoveryPair = null;
+    prevRecoveryDigit = null;
     resetSequence(null);
     totalProfit = 0;
     recoveryLoss = 0;
@@ -281,6 +298,56 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (waitingProposal || activeContractId) return;
+
+    // ── NEW RECOVERY LOGIC ──────────────────────────────────────────────────
+    //
+    // Phase 1 — triple-scan: count consecutive pairs in the live tick stream.
+    // The first pair [a, a+1] that appears 3 times becomes the confirmed pair.
+    //
+    if (recoveryMode && recoveryTripleScanMode) {
+      if (prevRecoveryDigit !== null) {
+        const a = prevRecoveryDigit;
+        const b = d;
+        if (b === a + 1 && a >= 0 && a <= 8) {
+          const key = `${a},${b}`;
+          pairCounts[key] = (pairCounts[key] || 0) + 1;
+          appendLogLine(
+            `[Recovery scan] Pair [${a},${b}] seen ${pairCounts[key]}x`,
+            "#f59e0b"
+          );
+          if (pairCounts[key] >= 3) {
+            confirmedRecoveryPair = [a, b];
+            recoveryTripleScanMode = false;
+            appendLogLine(
+              `[Recovery] Pair [${a},${b}] confirmed 3x → watching for digit ${a} to trade DIGITDIFF ${b}`,
+              "#f59e0b"
+            );
+          }
+        }
+      }
+      prevRecoveryDigit = d;
+      return;
+    }
+
+    // Phase 2 — digit watch: as soon as the first digit of the confirmed pair
+    // appears, immediately place the DIGITDIFF trade on the second digit.
+    //
+    if (recoveryMode && confirmedRecoveryPair) {
+      if (d === confirmedRecoveryPair[0]) {
+        const [a, b] = confirmedRecoveryPair;
+        seqA = a;
+        seqB = b;
+        lastTradePair = [a, b];
+        confirmedRecoveryPair = null;
+        appendLogLine(
+          `[Recovery] Digit ${d} found → DIGITDIFF barrier=${b}`,
+          "#22c55e"
+        );
+        placeTrade(b);
+      }
+      return;
+    }
+    // ── END NEW RECOVERY LOGIC ──────────────────────────────────────────────
 
     if (phase === "scan_ab") {
       if (seqA === null) {
@@ -484,9 +551,14 @@ document.addEventListener("DOMContentLoaded", () => {
               const resultDigit = settlementDigit !== null ? settlementDigit : exitDigit;
 
               if (pnl >= 0) {
+                // WIN — clear all recovery state and resume normal logic
                 recoveryMode = false;
                 recoveryPair = null;
                 lastTradePair = null;
+                recoveryTripleScanMode = false;
+                pairCounts = {};
+                confirmedRecoveryPair = null;
+                prevRecoveryDigit = null;
 
                 recoveryLoss = 0;
                 currentStake = 0;
@@ -498,18 +570,22 @@ document.addEventListener("DOMContentLoaded", () => {
                 );
                 resetSequence(null);
               } else {
+                // LOSS — enter triple-pair recovery scan
                 recoveryMode = true;
-                recoveryPair = lastTradePair || (seqA !== null && seqB !== null ? [seqA, seqB] : null);
+                recoveryTripleScanMode = true;
+                pairCounts = {};
+                confirmedRecoveryPair = null;
+                prevRecoveryDigit = null;
+                recoveryPair = null;
 
                 recoveryLoss += Math.abs(pnl);
                 ladder += 1;
                 const nextStake = stake();
                 appendLogLine(
-                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)}` +
-                  (recoveryPair ? ` → retry pair [${recoveryPair[0]},${recoveryPair[1]}]` : ""),
+                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)} → scanning for triple consecutive pair`,
                   "red"
                 );
-                resetSequence(recoveryPair);
+                resetSequence(null);
               }
 
               if (levelEl) levelEl.textContent = ladder;
