@@ -21,7 +21,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const SYMBOL = "R_100";
   const DEFAULT_PAYOUT_RATIO = 11.57;
 
-  const APP_ID = "33wZZKTFZrmsZgFaAH53Z";
+  // OAuth client ID from your Deriv app registration
+  const CLIENT_ID = "33wZZKTFZrmsZgFaAH53Z";
+
+  // IMPORTANT:
+  // This must be the numeric App ID from your Deriv Applications dashboard.
+  // The value above is the client ID, not the websocket app_id.
+  const APP_ID = "YOUR_NUMERIC_DERIV_APP_ID";
+
   const REDIRECT_URI = "https://jesanjedan27-max.github.io/tradingbot/";
   const OAUTH_EXCHANGE_URL = "https://oauthexchange23.vercel.app/api/oauth-exchange";
   const OAUTH_URL =
@@ -354,7 +361,7 @@ document.addEventListener("DOMContentLoaded", () => {
       body: JSON.stringify({
         code,
         code_verifier: codeVerifier,
-        client_id: APP_ID,
+        client_id: CLIENT_ID,
         redirect_uri: REDIRECT_URI
       })
     });
