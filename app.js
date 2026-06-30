@@ -1,225 +1,641 @@
-const CLIENT_ID = "33wZZKTFZrmsZgFaAH53Z";
-const REDIRECT_URI = "https://jesanjedan27-max.github.io/tradingbot/";
-const WS_ENDPOINT = "wss://ws.derivws.com/websockets/v3?app_id=" + CLIENT_ID;
-const SYMBOL = "R_100";
+// Deriv DigitDiff bot — consecutive-pair strategy with post-result chaining
+document.addEventListener("DOMContentLoaded", () => {
+  const $ = id => document.getElementById(id);
 
-const $ = (id) => document.getElementById(id);
+  const startBtn = $("start");
+  const pauseBtn = $("pause");
+  const stopBtn = $("stop");
+  const resetBtn = $("reset");
+  const demoBtn = $("demoBtn");
+  const liveBtn = $("liveBtn");
 
-const loginBtn = $("login");
-const logoutBtn = $("logout");
-const startBtn = $("start");
-const pauseBtn = $("pause");
-const stopBtn = $("stop");
-const resetBtn = $("reset");
-const demoBtn = $("demoBtn");
-const liveBtn = $("liveBtn");
+  const priceEl = $("price");
+  const balanceEl = $("balance");
+  const profitEl = $("profit");
+  const levelEl = $("level");
+  const lastDigitEl = $("lastDigit");
+  const logEl = $("log");
+  const stakeInput = $("stakeInput");
+  const tokenInput = $("tokenInput");
 
-const statusEl = $("status");
-const balanceEl = $("balance");
-const priceEl = $("price");
-const logEl = $("log");
-const accountDisplay = $("accountDisplay");
-const accountTypeEl = $("accountType");
-
-let ws = null;
-let accessToken = null;
-let activeLoginid = null;
-let running = false;
-let paused = false;
-let isDemo = true;
-
-function log(msg, color) {
-  if (!logEl) return;
-  const row = document.createElement("div");
-  row.style.color = color || "#fff";
-  row.textContent = msg;
-  logEl.appendChild(row);
-  logEl.scrollTop = logEl.scrollHeight;
-}
-
-function setStatus(msg) {
-  if (statusEl) statusEl.textContent = msg;
-}
-
-function setLoginState(token, loginid, currency, isVirtual) {
-  accessToken = token;
-  activeLoginid = loginid;
-  if (accountDisplay) accountDisplay.textContent = loginid;
-  if (accountTypeEl) accountTypeEl.textContent = isVirtual ? "Demo" : "Real";
-  if (loginBtn) loginBtn.style.display = "none";
-  if (logoutBtn) logoutBtn.style.display = "inline-block";
-  [startBtn, pauseBtn, stopBtn, resetBtn].forEach((btn) => { if (btn) btn.disabled = false; });
-  setStatus("Logged in");
-  log(`Logged in as ${loginid} (${isVirtual ? "Demo" : "Real"})`, "lime");
-}
-
-function setLoggedOutState() {
-  accessToken = null;
-  activeLoginid = null;
-  if (accountDisplay) accountDisplay.textContent = "Not logged in";
-  if (accountTypeEl) accountTypeEl.textContent = "-";
-  if (loginBtn) loginBtn.style.display = "inline-block";
-  if (logoutBtn) logoutBtn.style.display = "none";
-  [startBtn, pauseBtn, stopBtn, resetBtn].forEach((btn) => { if (btn) btn.disabled = true; });
-  setStatus("Logged out");
-  log("Please login to start trading.", "yellow");
-}
-
-function activateMode(demo) {
-  isDemo = demo;
-  if (demoBtn) demoBtn.classList.toggle("active", demo);
-  if (liveBtn) liveBtn.classList.toggle("active", !demo);
-  log(`Mode switched to ${demo ? "Demo" : "Live"}`, demo ? "lime" : "orange");
-}
-
-function buildLoginUrl() {
-  return "https://auth.deriv.com/oauth2/auth" +
-    "?response_type=token" +
-    `&client_id=${encodeURIComponent(CLIENT_ID)}` +
+  const SYMBOL = "R_100";
+  const DEFAULT_PAYOUT_RATIO = 11.57;
+  const DERIV_APP_ID = "33wZZKTFZrmsZgFaAH53Z";
+  const REDIRECT_URI = window.location.origin + window.location.pathname;
+  const OAUTH_URL =
+    `https://oauth.deriv.com/oauth2/auth?app_id=${DERIV_APP_ID}` +
     `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-    "&scope=" + encodeURIComponent("trade") +
-    "&nonce=derivbot1";
-}
+    "&response_type=code&scope=read%20trade";
+  const OAUTH_EXCHANGE_URL = "https://oauthexchange23.vercel.app/api/oauth-exchange";
+  const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${DERIV_APP_ID}`;
 
-if (loginBtn) {
-  loginBtn.addEventListener("click", () => {
-    window.location.href = buildLoginUrl();
-  });
-}
+  const savedToken = localStorage.getItem("access_token");
+  if (tokenInput && savedToken) {
+    tokenInput.value = savedToken;
+  }
 
-if (logoutBtn) {
-  logoutBtn.addEventListener("click", () => {
-    if (ws) ws.close();
-    setLoggedOutState();
-    window.history.replaceState({}, document.title, REDIRECT_URI);
-  });
-}
+  const ACCOUNTS = {
+    demo: "DOT92927394",
+    live: "ROT91650098"
+  };
 
-if (demoBtn) {
-  demoBtn.addEventListener("click", () => activateMode(true));
-}
+  let account = "demo";
+  demoBtn.classList.add("active");
+  let ws = null;
+  let running = false;
+  let lastPayoutRatio = null;
+  let recoveryLoss = 0;
+  let currentStake = 0;
+  let lastBalance = null;
+  let paused = false;
+  let ladder = 0;
+  let totalProfit = 0;
+  let waitingProposal = false;
+  let proposalVariants = null;
+  let proposalAttempt = 0;
+  let activeContractId = null;
 
-if (liveBtn) {
-  liveBtn.addEventListener("click", () => activateMode(false));
-}
+  // ── Strategy state ──────────────────────────────────────────────────────────
+  let targetPair = null;
+  let phase = "scan_ab";
+  let seqA = null;
+  let seqB = null;
+  let settlementDigit = null;
+  let captureNextTick = false;
 
-function parseTokenFromUrl() {
-  const hash = window.location.hash.replace(/^#/, "?");
-  const params = new URLSearchParams(hash);
-  if (params.has("access_token")) {
-    return {
-      token: params.get("access_token"),
-      loginid: params.get("loginid") || "Deriv Account",
-      currency: params.get("currency") || "USD",
-      isVirtual: params.get("is_virtual") === "1" || (params.get("loginid") || "").toUpperCase().startsWith("VRT")
+  // ── Log / tick buffering ────────────────────────────────────────────────────
+  const LOG_MAX_ENTRIES = 1200;
+  const TICK_FLUSH_MS = 60;
+  const TICK_BATCH_LIMIT = 200;
+  let tickBuffer = [];
+  let tickFlushTimer = null;
+
+  function appendLogLine(message, color = "#fff") {
+    const entry = document.createElement("div");
+    entry.style.color = color;
+    entry.textContent = message;
+    logEl.appendChild(entry);
+    while (logEl.children.length > LOG_MAX_ENTRIES) {
+      logEl.removeChild(logEl.firstChild);
+    }
+    logEl.scrollTop = logEl.scrollHeight;
+    console.log(message);
+  }
+
+  function log(message, color = "#fff") {
+    appendLogLine(message, color);
+  }
+
+  function startTickFlush() {
+    if (tickFlushTimer) return;
+    tickFlushTimer = setInterval(() => {
+      if (!tickBuffer.length) return;
+      const fragment = document.createDocumentFragment();
+      const batch = tickBuffer.splice(0, TICK_BATCH_LIMIT);
+      batch.forEach(({ price, digit }) => {
+        const row = document.createElement("div");
+        row.style.color = "#7dd3fc";
+        row.textContent = `Tick ${Number(price).toFixed(2)} → ${digit === null ? "-" : digit}`;
+        fragment.appendChild(row);
+      });
+      logEl.appendChild(fragment);
+      while (logEl.children.length > LOG_MAX_ENTRIES) {
+        logEl.removeChild(logEl.firstChild);
+      }
+      logEl.scrollTop = logEl.scrollHeight;
+    }, TICK_FLUSH_MS);
+  }
+
+  function stopTickFlush() {
+    if (!tickFlushTimer) return;
+    clearInterval(tickFlushTimer);
+    tickFlushTimer = null;
+  }
+
+  function digitFromPrice(price) {
+    const value = Number(price);
+    if (Number.isNaN(value)) return null;
+    const str = value.toFixed(2);
+    return Number(str[str.length - 1]);
+  }
+
+  function updateBalance(value) {
+    if (typeof value !== "number" || Number.isNaN(value)) return;
+    lastBalance = value;
+    if (balanceEl) balanceEl.textContent = value.toFixed(2);
+  }
+
+  function stake() {
+    const baseStake = Number(stakeInput.value || 0.35);
+    const payoutRatio = lastPayoutRatio && lastPayoutRatio > 1.01
+      ? lastPayoutRatio
+      : DEFAULT_PAYOUT_RATIO;
+    if (recoveryLoss > 0 && payoutRatio > 1.01) {
+      const neededStake = recoveryLoss / (payoutRatio - 1);
+      return Number(Math.max(baseStake, neededStake).toFixed(2));
+    }
+    return Number(baseStake.toFixed(2));
+  }
+
+  // ── Strategy helpers ────────────────────────────────────────────────────────
+
+  function nextPairFromResultDigit(digit) {
+    if (digit === 9) return [0, 1];
+    if (digit >= 0 && digit <= 8) return [digit, digit + 1];
+    return null;
+  }
+
+  function resetSequence(nextTarget = null) {
+    phase = "scan_ab";
+    seqA = null;
+    seqB = null;
+    settlementDigit = null;
+    captureNextTick = false;
+    waitingProposal = false;
+    proposalVariants = null;
+    proposalAttempt = 0;
+    activeContractId = null;
+    targetPair = nextTarget;
+
+    if (nextTarget) {
+      appendLogLine(
+        `Next scan: looking for pair [${nextTarget[0]},${nextTarget[1]}]`,
+        "#a78bfa"
+      );
+    } else {
+      appendLogLine("Next scan: open (any consecutive pair)", "#a78bfa");
+    }
+  }
+
+  function fullReset() {
+    resetSequence(null);
+    totalProfit = 0;
+    recoveryLoss = 0;
+    lastPayoutRatio = null;
+    currentStake = 0;
+    lastBalance = null;
+    ladder = 0;
+    tickBuffer.length = 0;
+  }
+
+  // ── Proposal / trade plumbing ───────────────────────────────────────────────
+
+  function buildProposalVariants(barrier) {
+    const amount = stake();
+    const base = {
+      proposal: 1,
+      contract_type: "DIGITDIFF",
+      currency: "USD",
+      amount,
+      basis: "stake",
+      duration: 1,
+      duration_unit: "t",
+      barrier
     };
-  }
-  return null;
-}
-
-function connect() {
-  if (!accessToken) {
-    log("No access token. Please login.", "red");
-    return;
+    return [
+      Object.assign({}, base, { underlying_symbol: SYMBOL }),
+      Object.assign({}, base, { underlying: SYMBOL }),
+      Object.assign({}, base, { symbol: SYMBOL }),
+      Object.assign({}, base)
+    ];
   }
 
-  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  function sendMessage(data) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      appendLogLine("WS not open; cannot send.", "red");
+      return false;
+    }
+    ws.send(JSON.stringify(data));
+    return true;
+  }
 
-  if (ws) ws.close();
+  function handleValidationError(errorText) {
+    if (!waitingProposal || !proposalVariants) return false;
+    const lower = String(errorText || "").toLowerCase();
+    if (
+      lower.includes("underlying_symbol") ||
+      lower.includes("underlying") ||
+      lower.includes("properties not allowed") ||
+      lower.includes("symbol") ||
+      lower.includes("missing") ||
+      lower.includes("invalid") ||
+      lower.includes("validation failed")
+    ) {
+      appendLogLine("Proposal validation failed; retrying next variant.", "orange");
+      sendNextProposalVariant();
+      return true;
+    }
+    return false;
+  }
 
-  ws = new WebSocket(WS_ENDPOINT);
+  function sendNextProposalVariant() {
+    if (!proposalVariants) return;
+    if (proposalAttempt >= proposalVariants.length) {
+      appendLogLine("All proposal variants failed.", "red");
+      waitingProposal = false;
+      proposalVariants = null;
+      proposalAttempt = 0;
+      return;
+    }
+    const payload = proposalVariants[proposalAttempt++];
+    const symbolLabel = payload.underlying_symbol
+      ? "underlying_symbol"
+      : payload.underlying
+        ? "underlying"
+        : payload.symbol
+          ? "symbol"
+          : "none";
+    appendLogLine(`Proposal attempt ${proposalAttempt}: ${symbolLabel} mode`, "#a78bfa");
+    sendMessage(payload);
+  }
 
-  ws.onopen = () => {
-    log("Connected to Deriv WebSocket", "lime");
-    ws.send(JSON.stringify({ authorize: accessToken }));
-    ws.send(JSON.stringify({ ticks: SYMBOL, subscribe: 1 }));
-    ws.send(JSON.stringify({ balance: 1, subscribe: 1 }));
-  };
+  function placeTrade(barrier) {
+    if (waitingProposal) {
+      appendLogLine("Already waiting for a proposal.", "orange");
+      return;
+    }
+    proposalVariants = buildProposalVariants(barrier);
+    proposalAttempt = 0;
+    waitingProposal = true;
+    appendLogLine(
+      `TRADE → DIGITDIFF barrier=${barrier} stake=${proposalVariants[0].amount}`,
+      "lime"
+    );
+    sendNextProposalVariant();
+  }
 
-  ws.onmessage = (e) => {
-    let msg;
+  // ── Tick / sequence engine ──────────────────────────────────────────────────
+
+  function onTick(price) {
+    if (!running || paused) return;
+    const d = digitFromPrice(price);
+    if (d === null) return;
+
+    if (priceEl) priceEl.textContent = Number(price).toFixed(2);
+    if (lastDigitEl) lastDigitEl.textContent = d;
+    tickBuffer.push({ price, digit: d });
+    startTickFlush();
+
+    if (captureNextTick) {
+      settlementDigit = d;
+      captureNextTick = false;
+    }
+
+    if (waitingProposal || activeContractId) return;
+
+    if (phase === "scan_ab") {
+      if (seqA === null) {
+        if (targetPair) {
+          if (d === targetPair[0]) {
+            seqA = d;
+          }
+        } else {
+          if (d >= 0 && d <= 8) {
+            seqA = d;
+          }
+        }
+        return;
+      }
+
+      if (d === seqA + 1) {
+        if (targetPair && (seqA !== targetPair[0] || d !== targetPair[1])) {
+          seqA = (d >= 0 && d <= 8) ? d : null;
+          return;
+        }
+        seqB = d;
+        phase = "scan_x";
+        appendLogLine(`Pair [${seqA},${seqB}] found → waiting for x`, "#38bdf8");
+      } else {
+        if (targetPair) {
+          seqA = (d === targetPair[0]) ? d : null;
+        } else {
+          seqA = (d >= 0 && d <= 8) ? d : null;
+        }
+      }
+      return;
+    }
+
+    if (phase === "scan_x") {
+      if (d === 9) {
+        appendLogLine("x=9 is invalid; restarting pair scan.", "red");
+        resetSequence(targetPair);
+        return;
+      }
+      const x = d;
+      const barrier = x + 1;
+      appendLogLine(
+        `Pattern [${seqA},${seqB},${x} ddf ${barrier}] → BUY DIGITDIFF barrier=${barrier}`,
+        "#22c55e"
+      );
+      placeTrade(barrier);
+    }
+  }
+
+  // ── OAuth / token exchange helpers ────────────────────────────────────────
+
+  function getQueryParam(name) {
+    const params = new URLSearchParams(window.location.search);
+    return params.get(name);
+  }
+
+  function saveToken(token) {
+    if (!token) return;
+    localStorage.setItem("access_token", token);
+    if (tokenInput) tokenInput.value = token;
+  }
+
+  function clearOAuthCodeFromUrl() {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("code");
+    url.searchParams.delete("state");
+    window.history.replaceState({}, "", url.toString());
+  }
+
+  function buildOAuthUrl() {
+    return OAUTH_URL;
+  }
+
+  async function exchangeCodeForToken(code) {
+    const res = await fetch(OAUTH_EXCHANGE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        code,
+        redirectUri: REDIRECT_URI
+      })
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.access_token) {
+      throw new Error(data.error || "Token exchange failed.");
+    }
+    return data.access_token;
+  }
+
+  async function ensureAccessToken() {
+    const inputToken = tokenInput?.value?.trim();
+    if (inputToken) {
+      saveToken(inputToken);
+      return inputToken;
+    }
+
+    const storedToken = localStorage.getItem("access_token");
+    if (storedToken) {
+      return storedToken;
+    }
+
+    const code = getQueryParam("code");
+    if (code) {
+      appendLogLine("OAuth code received. Exchanging for access token...", "yellow");
+      try {
+        const token = await exchangeCodeForToken(code);
+        saveToken(token);
+        clearOAuthCodeFromUrl();
+        appendLogLine("Token received successfully.", "lime");
+        return token;
+      } catch (err) {
+        appendLogLine(`Token exchange failed: ${err.message}`, "red");
+        return null;
+      }
+    }
+
+    appendLogLine("No token found. Opening Deriv OAuth login...", "yellow");
+    window.location.href = buildOAuthUrl();
+    return null;
+  }
+
+  // ── WebSocket / connection ──────────────────────────────────────────────────
+
+  async function connect() {
+    resetSequence(null);
+
+    if (ws) {
+      try { ws.close(); } catch {}
+      ws = null;
+    }
+
+    const accessToken = await ensureAccessToken();
+    if (!accessToken) return;
+
     try {
-      msg = JSON.parse(e.data);
+      ws = new WebSocket(WS_URL);
+
+      ws.onopen = () => {
+        appendLogLine("WS connected.", "lime");
+        sendMessage({ authorize: accessToken });
+      };
+
+      ws.onmessage = e => {
+        let payload;
+        try {
+          payload = JSON.parse(e.data);
+        } catch (err) {
+          appendLogLine("Invalid JSON from WS.", "red");
+          return;
+        }
+
+        if (payload.error) {
+          const message = payload.error.message || JSON.stringify(payload.error);
+          appendLogLine(`Error: ${message}`, "red");
+          if (!handleValidationError(message)) {
+            waitingProposal = false;
+            proposalVariants = null;
+            proposalAttempt = 0;
+          }
+          return;
+        }
+
+        switch (payload.msg_type) {
+          case "authorize":
+            if (payload.authorize?.error) {
+              appendLogLine(`Authorization failed: ${payload.authorize.error.message}`, "red");
+              return;
+            }
+            appendLogLine("Deriv authorized successfully.", "lime");
+            sendMessage({ ticks: SYMBOL, subscribe: 1 });
+            sendMessage({ balance: 1 });
+            break;
+
+          case "tick":
+            onTick(payload.tick?.quote);
+            break;
+
+          case "balance":
+            if (payload.balance?.balance !== undefined) {
+              updateBalance(Number(payload.balance.balance));
+            }
+            break;
+
+          case "proposal":
+            if (!waitingProposal) break;
+            waitingProposal = false;
+            proposalVariants = null;
+            proposalAttempt = 0;
+            if (!payload.proposal) {
+              appendLogLine("Proposal response missing payload.", "red");
+              break;
+            }
+            currentStake = Number(payload.proposal.ask_price || 0);
+            if (payload.proposal.payout && currentStake > 0) {
+              lastPayoutRatio = Number(payload.proposal.payout / currentStake);
+              appendLogLine(
+                `Payout ratio set to ${lastPayoutRatio.toFixed(2)}`,
+                "#38bdf8"
+              );
+            }
+            sendMessage({
+              buy: payload.proposal.id,
+              price: payload.proposal.ask_price
+            });
+            break;
+
+          case "buy":
+            activeContractId = payload.buy?.contract_id || null;
+            settlementDigit = null;
+            captureNextTick = true;
+            if (activeContractId) {
+              sendMessage({
+                proposal_open_contract: 1,
+                contract_id: activeContractId,
+                subscribe: 1
+              });
+            }
+            break;
+
+          case "proposal_open_contract": {
+            const contract = payload.proposal_open_contract;
+            if (!contract) return;
+
+            if (profitEl) profitEl.textContent = Number(contract.profit || 0).toFixed(2);
+
+            if (
+              typeof contract.balance_after === "number" &&
+              !Number.isNaN(contract.balance_after) &&
+              contract.balance_after > 0
+            ) {
+              updateBalance(contract.balance_after);
+            }
+
+            if (contract.is_sold) {
+              const pnl = Number(contract.profit || 0);
+              totalProfit += pnl;
+              if (profitEl) profitEl.textContent = totalProfit.toFixed(2);
+
+              const exitPrice = contract.exit_tick || contract.exit_tick_display_value;
+              const exitDigit = exitPrice !== undefined ? digitFromPrice(exitPrice) : null;
+              const resultDigit = settlementDigit !== null ? settlementDigit : exitDigit;
+              const nextTarget = resultDigit !== null
+                ? nextPairFromResultDigit(resultDigit)
+                : null;
+
+              if (pnl >= 0) {
+                recoveryLoss = 0;
+                currentStake = 0;
+                ladder = 0;
+                appendLogLine(
+                  `WIN +${pnl.toFixed(2)}` +
+                  (resultDigit !== null ? ` (digit=${resultDigit})` : "") +
+                  (nextTarget ? ` → next pair [${nextTarget[0]},${nextTarget[1]}]` : ""),
+                  "lime"
+                );
+              } else {
+                recoveryLoss += Math.abs(pnl);
+                ladder += 1;
+                const nextStake = stake();
+                appendLogLine(
+                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)}` +
+                  (resultDigit !== null ? ` (digit=${resultDigit})` : "") +
+                  (nextTarget ? ` → next pair [${nextTarget[0]},${nextTarget[1]}]` : ""),
+                  "red"
+                );
+              }
+
+              if (levelEl) levelEl.textContent = ladder;
+
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                sendMessage({ balance: 1 });
+              }
+
+              resetSequence(nextTarget);
+            }
+            break;
+          }
+
+          default:
+            break;
+        }
+      };
+
+      ws.onclose = ev => {
+        appendLogLine(`WS closed (code ${ev.code}).`, "orange");
+        stopTickFlush();
+      };
+
+      ws.onerror = ev => {
+        appendLogLine("WS error.", "red");
+        console.error("WebSocket error:", ev);
+      };
     } catch (err) {
-      log("Invalid WebSocket message", "red");
-      return;
+      appendLogLine(`Connection failed: ${String(err)}`, "red");
     }
+  }
 
-    if (msg.error) {
-      log(msg.error.message, "red");
-      return;
-    }
+  // ── Button handlers ─────────────────────────────────────────────────────────
 
-    if (msg.msg_type === "authorize") {
-      log("Authorization success", "lime");
-      setStatus("Connected");
-      return;
-    }
-
-    if (msg.msg_type === "tick" && msg.tick && typeof msg.tick.quote === "number") {
-      if (priceEl) priceEl.textContent = msg.tick.quote.toFixed(2);
-      log(`Tick: ${msg.tick.quote.toFixed(2)}`);
-      return;
-    }
-
-    if (msg.msg_type === "balance" && msg.balance) {
-      if (balanceEl) balanceEl.textContent = Number(msg.balance.balance).toFixed(2);
-      log(`Balance: ${Number(msg.balance.balance).toFixed(2)}`);
-      return;
-    }
-  };
-
-  ws.onerror = () => log("WebSocket error", "red");
-  ws.onclose = () => log("WebSocket disconnected", "orange");
-}
-
-if (startBtn) {
   startBtn.onclick = () => {
     running = true;
-    paused = false;
-    setStatus("Starting");
     connect();
-    log("Bot started", "lime");
+    appendLogLine("BOT STARTED", "lime");
   };
-}
 
-if (pauseBtn) {
   pauseBtn.onclick = () => {
     paused = !paused;
-    setStatus(paused ? "Paused" : "Running");
-    log(paused ? "Paused" : "Running", "yellow");
+    appendLogLine(paused ? "PAUSED" : "RUNNING", "yellow");
   };
-}
 
-if (stopBtn) {
   stopBtn.onclick = () => {
     running = false;
-    paused = false;
     if (ws) ws.close();
-    setStatus("Stopped");
-    log("Bot stopped", "red");
+    stopTickFlush();
+    appendLogLine("STOPPED", "red");
   };
-}
 
-if (resetBtn) {
   resetBtn.onclick = () => {
-    running = false;
-    paused = false;
-    if (ws) ws.close();
-    setStatus("Reset");
-    log("Reset done", "orange");
+    fullReset();
+    if (profitEl) profitEl.textContent = "0.00";
+    if (levelEl) levelEl.textContent = "0";
+    if (balanceEl) balanceEl.textContent = "-";
+    appendLogLine("RESET DONE", "orange");
   };
-}
 
-function init() {
-  const tokenData = parseTokenFromUrl();
-  if (tokenData) {
-    setLoginState(tokenData.token, tokenData.loginid, tokenData.currency, tokenData.isVirtual);
-    window.history.replaceState({}, document.title, REDIRECT_URI);
-  } else {
-    setLoggedOutState();
-  }
-  activateMode(true);
-}
+  demoBtn.onclick = () => {
+    account = "demo";
+    demoBtn.classList.add("active");
+    liveBtn.classList.remove("active");
+    appendLogLine("DEMO MODE", "blue");
+    const mi = $("modeIndicator");
+    if (mi) {
+      mi.textContent = "JESAN 💲 MODE - DEMO";
+      mi.classList.add("demo");
+      mi.classList.remove("live");
+    }
+  };
 
-init();
+  liveBtn.onclick = () => {
+    account = "live";
+    liveBtn.classList.add("active");
+    demoBtn.classList.remove("active");
+    appendLogLine("LIVE MODE", "red");
+    const mi = $("modeIndicator");
+    if (mi) {
+      mi.textContent = "JESAN 💲 MODE - LIVE";
+      mi.classList.add("live");
+      mi.classList.remove("demo");
+    }
+  };
+
+  window.addEventListener("beforeunload", () => {
+    if (ws) ws.close();
+    stopTickFlush();
+  });
+});
