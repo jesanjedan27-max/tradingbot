@@ -1,4 +1,4 @@
-// Deriv DigitDiff bot — consecutive-pair strategy with recovery chaining
+// Deriv DigitDiff bot — consecutive-pair strategy with post-result chaining
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -19,7 +19,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const tokenInput = $("tokenInput");
 
   const SYMBOL = "R_100";
-  const SWITCH_MULTIPLIERS = [1, 4.05 / 0.35, 52.63 / 0.35];
+  const DEFAULT_PAYOUT_RATIO = 11.57;
 
   const savedToken = localStorage.getItem("access_token");
   if (tokenInput && savedToken) {
@@ -32,7 +32,7 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   let account = "demo";
-  if (demoBtn) demoBtn.classList.add("active");
+  demoBtn.classList.add("active");
 
   let ws = null;
   let running = false;
@@ -47,23 +47,17 @@ document.addEventListener("DOMContentLoaded", () => {
   let proposalVariants = null;
   let proposalAttempt = 0;
   let activeContractId = null;
-  let probing = false;
-  let pendingBarrier = null;
 
-  let stakeMode = "switch";
-  let stakeLevelIdx = 0;
-
-  // Recovery behavior
-  let targetPair = null;     // null = open scan, otherwise restrict to this pair
-  let recoveryMode = false;  // true after loss, false after win
-  let recoveryPair = null;   // the pair to retry after a loss
-  let lastTradePair = null;  // the pair that triggered the last trade
-
+  let targetPair = null;
   let phase = "scan_ab";
   let seqA = null;
   let seqB = null;
   let settlementDigit = null;
   let captureNextTick = false;
+
+  let recoveryMode = false;
+  let recoveryPair = null;
+  let lastTradePair = null;
 
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
@@ -122,104 +116,25 @@ document.addEventListener("DOMContentLoaded", () => {
     if (balanceEl) balanceEl.textContent = value.toFixed(2);
   }
 
-  function parsedStakeLevels() {
-    const base = Number(stakeInput ? stakeInput.value : 0) || 0.35;
-    return SWITCH_MULTIPLIERS.map(m => Number((base * m).toFixed(2)));
-  }
-
-  function currentSwitchStake() {
-    const levels = parsedStakeLevels();
-    return levels[Math.min(stakeLevelIdx, levels.length - 1)];
-  }
-
-  function baseStakeAmount() {
-    if (stakeMode === "switch") return currentSwitchStake();
-    return Number(stakeInput.value || 0.35);
-  }
-
-  function recoveryStake(liveRatio) {
-    if (stakeMode === "switch") {
-      return baseStakeAmount();
+  function stake() {
+    const baseStake = Number(stakeInput.value || 0.35);
+    const payoutRatio = lastPayoutRatio && lastPayoutRatio > 1.01
+      ? lastPayoutRatio
+      : DEFAULT_PAYOUT_RATIO;
+    if (recoveryLoss > 0 && payoutRatio > 1.01) {
+      const neededStake = recoveryLoss / (payoutRatio - 1);
+      return Number(Math.max(baseStake, neededStake).toFixed(2));
     }
-    const base = Number(stakeInput.value || 0.35);
-    if (recoveryLoss > 0 && liveRatio > 1.01) {
-      const needed = recoveryLoss / (liveRatio - 1);
-      return Number(Math.max(base, needed).toFixed(2));
-    }
-    return Number(base.toFixed(2));
+    return Number(baseStake.toFixed(2));
   }
 
-  function createSwitchUI() {
-    if (!stakeInput) return;
-    const container = stakeInput.parentElement;
-    if (!container) return;
-
-    const modeBtn = document.createElement("button");
-    modeBtn.id = "stakeModeBtn";
-    modeBtn.style.cssText =
-      "display:block;width:100%;margin-bottom:8px;padding:6px 10px;" +
-      "border-radius:6px;border:none;cursor:pointer;font-weight:bold;" +
-      "background:#7c3aed;color:#fff;font-size:13px;";
-    modeBtn.textContent = "⚡ MODE: STAKE SWITCH";
-
-    const levelsRow = document.createElement("div");
-    levelsRow.id = "stakeLevelsRow";
-    levelsRow.style.cssText = "margin-bottom:8px;";
-
-    const levelsLbl = document.createElement("div");
-    levelsLbl.style.cssText = "color:#94a3b8;font-size:11px;margin-bottom:4px;";
-    levelsLbl.textContent = "Auto stake ladder (base × multipliers):";
-
-    const levelsDisplay = document.createElement("div");
-    levelsDisplay.id = "levelsDisplay";
-    levelsDisplay.style.cssText =
-      "padding:5px 8px;border-radius:6px;border:1px solid #374151;" +
-      "background:#111827;color:#38bdf8;font-size:12px;font-weight:bold;" +
-      "letter-spacing:0.5px;";
-
-    function refreshLevelsDisplay() {
-      const levels = parsedStakeLevels();
-      levelsDisplay.textContent = levels
-        .map((v, i) => `Lvl ${i + 1}: $${v}`)
-        .join("  →  ");
-    }
-
-    stakeInput.addEventListener("input", () => {
-      if (stakeMode === "switch") refreshLevelsDisplay();
-    });
-
-    function refreshModeUI() {
-      if (stakeMode === "switch") {
-        modeBtn.textContent = "⚡ MODE: STAKE SWITCH";
-        modeBtn.style.background = "#7c3aed";
-        levelsRow.style.display = "";
-        if (container.style) container.style.display = "";
-        refreshLevelsDisplay();
-      } else {
-        modeBtn.textContent = "📈 MODE: MARTINGALE";
-        modeBtn.style.background = "#059669";
-        levelsRow.style.display = "none";
-        if (container.style) container.style.display = "";
-      }
-    }
-
-    modeBtn.onclick = () => {
-      stakeMode = stakeMode === "switch" ? "martingale" : "switch";
-      stakeLevelIdx = 0;
-      recoveryLoss = 0;
-      refreshModeUI();
-      appendLogLine(
-        `Stake mode → ${stakeMode === "switch" ? "STAKE SWITCH" : "MARTINGALE"}`,
-        "#a78bfa"
-      );
-    };
-
-    container.insertAdjacentElement("beforebegin", levelsRow);
-    container.insertAdjacentElement("beforebegin", modeBtn);
-    refreshModeUI();
+  function nextPairFromResultDigit(digit) {
+    if (digit === 9) return [0, 1];
+    if (digit >= 0 && digit <= 8) return [digit, digit + 1];
+    return null;
   }
 
-  function resetSequence() {
+  function resetSequence(nextTarget = null) {
     phase = "scan_ab";
     seqA = null;
     seqB = null;
@@ -229,42 +144,42 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalVariants = null;
     proposalAttempt = 0;
     activeContractId = null;
-    probing = false;
-    pendingBarrier = null;
 
-    // Open scan by default
     if (recoveryMode && recoveryPair) {
       targetPair = recoveryPair;
-    } else {
-      targetPair = null;
-    }
-
-    if (targetPair) {
       appendLogLine(
-        `Next scan: looking for pair [${targetPair[0]},${targetPair[1]}]`,
-        "#a78bfa"
+        `Recovery mode: looking for pair [${recoveryPair[0]},${recoveryPair[1]}]`,
+        "#f59e0b"
       );
     } else {
-      appendLogLine("Next scan: open (any consecutive pair)", "#a78bfa");
+      targetPair = nextTarget;
+      if (nextTarget) {
+        appendLogLine(
+          `Next scan: looking for pair [${nextTarget[0]},${nextTarget[1]}]`,
+          "#a78bfa"
+        );
+      } else {
+        appendLogLine("Next scan: open (any consecutive pair)", "#a78bfa");
+      }
     }
   }
 
   function fullReset() {
-    resetSequence();
+    resetSequence(null);
     totalProfit = 0;
-    recoveryMode = false;
-    recoveryPair = null;
-    lastTradePair = null;
     recoveryLoss = 0;
     lastPayoutRatio = null;
     currentStake = 0;
     lastBalance = null;
     ladder = 0;
-    stakeLevelIdx = 0;
     tickBuffer.length = 0;
+    recoveryMode = false;
+    recoveryPair = null;
+    lastTradePair = null;
   }
 
-  function buildProposalVariants(barrier, amount) {
+  function buildProposalVariants(barrier) {
+    const amount = stake();
     const base = {
       proposal: 1,
       contract_type: "DIGITDIFF",
@@ -338,12 +253,15 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    pendingBarrier = barrier;
-    probing = true;
-    proposalVariants = buildProposalVariants(barrier, baseStakeAmount());
+    lastTradePair = (seqA !== null && seqB !== null) ? [seqA, seqB] : null;
+
+    proposalVariants = buildProposalVariants(barrier);
     proposalAttempt = 0;
     waitingProposal = true;
-    appendLogLine(`Probing live payout ratio → DIGITDIFF barrier=${barrier}`, "#38bdf8");
+    appendLogLine(
+      `TRADE → DIGITDIFF barrier=${barrier} stake=${proposalVariants[0].amount}`,
+      "lime"
+    );
     sendNextProposalVariant();
   }
 
@@ -380,7 +298,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       if (d === seqA + 1) {
         if (targetPair && (seqA !== targetPair[0] || d !== targetPair[1])) {
-          seqA = d >= 0 && d <= 8 ? d : null;
+          seqA = (d >= 0 && d <= 8) ? d : null;
           return;
         }
         seqB = d;
@@ -388,9 +306,9 @@ document.addEventListener("DOMContentLoaded", () => {
         appendLogLine(`Pair [${seqA},${seqB}] found → waiting for x`, "#38bdf8");
       } else {
         if (targetPair) {
-          seqA = d === targetPair[0] ? d : null;
+          seqA = (d === targetPair[0]) ? d : null;
         } else {
-          seqA = d >= 0 && d <= 8 ? d : null;
+          seqA = (d >= 0 && d <= 8) ? d : null;
         }
       }
       return;
@@ -399,15 +317,11 @@ document.addEventListener("DOMContentLoaded", () => {
     if (phase === "scan_x") {
       if (d === 9) {
         appendLogLine("x=9 is invalid; restarting pair scan.", "red");
-        resetSequence();
+        resetSequence(targetPair);
         return;
       }
-
       const x = d;
       const barrier = x + 1;
-
-      lastTradePair = [seqA, seqB];
-
       appendLogLine(
         `Pattern [${seqA},${seqB},${x} ddf ${barrier}] → BUY DIGITDIFF barrier=${barrier}`,
         "#22c55e"
@@ -417,8 +331,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function connect() {
-    resetSequence();
-
+    resetSequence(null);
     if (ws) ws.close();
 
     const accountId = ACCOUNTS[account];
@@ -520,61 +433,18 @@ document.addEventListener("DOMContentLoaded", () => {
               appendLogLine("Proposal response missing payload.", "red");
               break;
             }
-            {
-              const probeAskPrice = Number(payload.proposal.ask_price || 0);
-              const probePayout = Number(payload.proposal.payout || 0);
-
-              if (probePayout > 0 && probeAskPrice > 0) {
-                lastPayoutRatio = probePayout / probeAskPrice;
-                appendLogLine(
-                  `Live payout ratio: ${lastPayoutRatio.toFixed(4)} ` +
-                  `(payout=${probePayout} / stake=${probeAskPrice})`,
-                  "#38bdf8"
-                );
-              }
-
-              if (probing) {
-                probing = false;
-
-                if (stakeMode === "switch") {
-                  const levels = parsedStakeLevels();
-                  const levelLabel = `Lvl ${stakeLevelIdx + 1}/${levels.length} ($${currentSwitchStake()})`;
-                  currentStake = probeAskPrice;
-                  appendLogLine(
-                    `TRADE → DIGITDIFF barrier=${pendingBarrier} stake=${currentStake} [${levelLabel}]`,
-                    "lime"
-                  );
-                  sendMessage({ buy: payload.proposal.id, price: payload.proposal.ask_price });
-                } else {
-                  const correctStake = recoveryStake(lastPayoutRatio);
-                  if (Math.abs(correctStake - probeAskPrice) < 0.01) {
-                    currentStake = probeAskPrice;
-                    appendLogLine(
-                      `TRADE → DIGITDIFF barrier=${pendingBarrier} stake=${currentStake}`,
-                      "lime"
-                    );
-                    sendMessage({ buy: payload.proposal.id, price: payload.proposal.ask_price });
-                  } else {
-                    appendLogLine(
-                      `Recovery stake=${correctStake} (probe was ${probeAskPrice}) → re-requesting proposal`,
-                      "orange"
-                    );
-                    currentStake = correctStake;
-                    proposalVariants = buildProposalVariants(pendingBarrier, correctStake);
-                    proposalAttempt = 0;
-                    waitingProposal = true;
-                    sendNextProposalVariant();
-                  }
-                }
-              } else {
-                currentStake = probeAskPrice;
-                appendLogLine(
-                  `TRADE → DIGITDIFF barrier=${pendingBarrier} stake=${currentStake}`,
-                  "lime"
-                );
-                sendMessage({ buy: payload.proposal.id, price: payload.proposal.ask_price });
-              }
+            currentStake = Number(payload.proposal.ask_price || 0);
+            if (payload.proposal.payout && currentStake > 0) {
+              lastPayoutRatio = Number(payload.proposal.payout / currentStake);
+              appendLogLine(
+                `Payout ratio set to ${lastPayoutRatio.toFixed(2)}`,
+                "#38bdf8"
+              );
             }
+            sendMessage({
+              buy: payload.proposal.id,
+              price: payload.proposal.ask_price
+            });
             break;
 
           case "buy":
@@ -609,58 +479,37 @@ document.addEventListener("DOMContentLoaded", () => {
               totalProfit += pnl;
               if (profitEl) profitEl.textContent = totalProfit.toFixed(2);
 
+              const exitPrice = contract.exit_tick || contract.exit_tick_display_value;
+              const exitDigit = exitPrice !== undefined ? digitFromPrice(exitPrice) : null;
+              const resultDigit = settlementDigit !== null ? settlementDigit : exitDigit;
+
               if (pnl >= 0) {
-                // Win: return to open scan
                 recoveryMode = false;
                 recoveryPair = null;
                 lastTradePair = null;
-                targetPair = null;
 
+                recoveryLoss = 0;
+                currentStake = 0;
                 ladder = 0;
-                if (stakeMode === "switch") {
-                  stakeLevelIdx = 0;
-                }
-
                 appendLogLine(
-                  `WIN +${pnl.toFixed(2)} → returning to open scan`,
+                  `WIN +${pnl.toFixed(2)}` +
+                  (resultDigit !== null ? ` (digit=${resultDigit})` : ""),
                   "lime"
                 );
+                resetSequence(null);
               } else {
-                // Loss: keep retrying the same pair
                 recoveryMode = true;
-                recoveryPair = lastTradePair || targetPair || null;
-                targetPair = recoveryPair;
+                recoveryPair = lastTradePair || (seqA !== null && seqB !== null ? [seqA, seqB] : null);
 
+                recoveryLoss += Math.abs(pnl);
                 ladder += 1;
-                if (stakeMode === "switch") {
-                  const levels = parsedStakeLevels();
-                  const prevIdx = stakeLevelIdx;
-                  stakeLevelIdx = Math.min(stakeLevelIdx + 1, levels.length - 1);
-                  const nextSwitchStake = currentSwitchStake();
-                  const atMax = stakeLevelIdx === levels.length - 1;
-
-                  appendLogLine(
-                    `LOSS ${pnl.toFixed(2)} → step Lvl ${prevIdx + 1}→${stakeLevelIdx + 1} | next stake=$${nextSwitchStake}` +
-                    (atMax ? " [MAX LEVEL]" : ""),
-                    "red"
-                  );
-                } else {
-                  recoveryLoss += Math.abs(pnl);
-                  const nextStake = recoveryStake(lastPayoutRatio);
-                  appendLogLine(
-                    `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake≈${nextStake.toFixed(2)}`,
-                    "red"
-                  );
-                }
-
-                if (recoveryPair) {
-                  appendLogLine(
-                    `Recovery active → retrying same pair [${recoveryPair[0]},${recoveryPair[1]}]`,
-                    "#f59e0b"
-                  );
-                } else {
-                  appendLogLine("Recovery active → retrying open scan", "#f59e0b");
-                }
+                const nextStake = stake();
+                appendLogLine(
+                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)}` +
+                  (recoveryPair ? ` → retry pair [${recoveryPair[0]},${recoveryPair[1]}]` : ""),
+                  "red"
+                );
+                resetSequence(recoveryPair);
               }
 
               if (levelEl) levelEl.textContent = ladder;
@@ -668,8 +517,6 @@ document.addEventListener("DOMContentLoaded", () => {
               if (ws && ws.readyState === WebSocket.OPEN) {
                 sendMessage({ balance: 1 });
               }
-
-              resetSequence();
             }
             break;
           }
@@ -693,8 +540,6 @@ document.addEventListener("DOMContentLoaded", () => {
       console.error(err);
     }
   }
-
-  createSwitchUI();
 
   startBtn.onclick = () => {
     running = true;
