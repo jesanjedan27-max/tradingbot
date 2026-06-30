@@ -23,7 +23,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const DERIV_APP_ID = "33wZZKTFZrmsZgFaAH53Z";
   const REDIRECT_URI = window.location.origin + window.location.pathname;
   const OAUTH_URL =
-    `https://oauth.deriv.com/oauth2/auth?app_id=${DERIV_APP_ID}` +
+    `https://oauth.deriv.com/oauth2/authorize?app_id=${DERIV_APP_ID}` +
     `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
     "&response_type=code&scope=read%20trade";
   const OAUTH_EXCHANGE_URL = "https://oauthexchange23.vercel.app/api/oauth-exchange";
