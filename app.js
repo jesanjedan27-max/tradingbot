@@ -1,4 +1,4 @@
-// Deriv DigitDiff bot
+// Deriv DigitDiff bot — consecutive-pair strategy with post-result chaining
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -21,24 +21,25 @@ document.addEventListener("DOMContentLoaded", () => {
   const SYMBOL = "R_100";
   const DEFAULT_PAYOUT_RATIO = 11.57;
 
-  const APP_ID = "33wZZKTFZrmsZgFaAH53Z";
-  const REDIRECT_URI = "https://jesanjedan27-max.github.io/tradingbot/";
-  const OAUTH_EXCHANGE_URL = "https://oauthexchange23.vercel.app/api/oauth-exchange";
-  const OAUTH_LOGIN_URL = "https://auth.deriv.com/oauth2/auth";
-  const OAUTH_TOKEN_URL = "https://auth.deriv.com/oauth2/token";
-  const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
-
   const savedToken = localStorage.getItem("access_token");
   if (tokenInput && savedToken) {
     tokenInput.value = savedToken;
   }
 
+  const ACCOUNTS = {
+    demo: "DOT92927394",
+    live: "ROT91650098"
+  };
+
+  let account = "demo";
+  demoBtn.classList.add("active");
   let ws = null;
   let running = false;
-  let paused = false;
   let lastPayoutRatio = null;
   let recoveryLoss = 0;
   let currentStake = 0;
+  let lastBalance = null;
+  let paused = false;
   let ladder = 0;
   let totalProfit = 0;
   let waitingProposal = false;
@@ -46,13 +47,22 @@ document.addEventListener("DOMContentLoaded", () => {
   let proposalAttempt = 0;
   let activeContractId = null;
 
-  let targetPair = null;
+  // ── Strategy state ──────────────────────────────────────────────────────────
+  // When set, the bot only looks for this specific A,B pair next.
+  // null = open scan (any valid pair).
+  let targetPair = null;    // e.g. [1, 2]
+
+  // Phase tracking within a sequence
+  // "scan_ab" → waiting to see A then B consecutively
+  // "scan_x"  → A,B seen; now waiting for x (0-8, not 9)
+  //             trade fires immediately: barrier = x+1 (that's y)
   let phase = "scan_ab";
   let seqA = null;
   let seqB = null;
-  let settlementDigit = null;
-  let captureNextTick = false;
+  let settlementDigit = null;  // digit of the first tick after buy — the true settlement digit
+  let captureNextTick = false; // when true, the next tick is the settlement tick
 
+  // ── Log / tick buffering ────────────────────────────────────────────────────
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
   const TICK_BATCH_LIMIT = 200;
@@ -64,12 +74,15 @@ document.addEventListener("DOMContentLoaded", () => {
     entry.style.color = color;
     entry.textContent = message;
     logEl.appendChild(entry);
-
     while (logEl.children.length > LOG_MAX_ENTRIES) {
       logEl.removeChild(logEl.firstChild);
     }
     logEl.scrollTop = logEl.scrollHeight;
     console.log(message);
+  }
+
+  function log(message, color = "#fff") {
+    appendLogLine(message, color);
   }
 
   function startTickFlush() {
@@ -107,6 +120,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function updateBalance(value) {
     if (typeof value !== "number" || Number.isNaN(value)) return;
+    lastBalance = value;
     if (balanceEl) balanceEl.textContent = value.toFixed(2);
   }
 
@@ -115,7 +129,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const payoutRatio = lastPayoutRatio && lastPayoutRatio > 1.01
       ? lastPayoutRatio
       : DEFAULT_PAYOUT_RATIO;
-
     if (recoveryLoss > 0 && payoutRatio > 1.01) {
       const neededStake = recoveryLoss / (payoutRatio - 1);
       return Number(Math.max(baseStake, neededStake).toFixed(2));
@@ -123,12 +136,23 @@ document.addEventListener("DOMContentLoaded", () => {
     return Number(baseStake.toFixed(2));
   }
 
+  // ── Strategy helpers ────────────────────────────────────────────────────────
+
+  /**
+   * Given a result digit (the last digit of the settled contract price),
+   * derive the next target pair.
+   * Special rule: digit 9 → next pair is [0, 1].
+   */
   function nextPairFromResultDigit(digit) {
     if (digit === 9) return [0, 1];
     if (digit >= 0 && digit <= 8) return [digit, digit + 1];
-    return null;
+    return null; // shouldn't happen
   }
 
+  /**
+   * Reset sequence scan but keep the martingale state intact.
+   * If nextTarget is provided, restrict the next scan to that pair.
+   */
   function resetSequence(nextTarget = null) {
     phase = "scan_ab";
     seqA = null;
@@ -142,7 +166,10 @@ document.addEventListener("DOMContentLoaded", () => {
     targetPair = nextTarget;
 
     if (nextTarget) {
-      appendLogLine(`Next scan: looking for pair [${nextTarget[0]},${nextTarget[1]}]`, "#a78bfa");
+      appendLogLine(
+        `Next scan: looking for pair [${nextTarget[0]},${nextTarget[1]}]`,
+        "#a78bfa"
+      );
     } else {
       appendLogLine("Next scan: open (any consecutive pair)", "#a78bfa");
     }
@@ -154,9 +181,12 @@ document.addEventListener("DOMContentLoaded", () => {
     recoveryLoss = 0;
     lastPayoutRatio = null;
     currentStake = 0;
+    lastBalance = null;
     ladder = 0;
     tickBuffer.length = 0;
   }
+
+  // ── Proposal / trade plumbing ───────────────────────────────────────────────
 
   function buildProposalVariants(barrier) {
     const amount = stake();
@@ -170,7 +200,6 @@ document.addEventListener("DOMContentLoaded", () => {
       duration_unit: "t",
       barrier
     };
-
     return [
       Object.assign({}, base, { underlying_symbol: SYMBOL }),
       Object.assign({}, base, { underlying: SYMBOL }),
@@ -216,7 +245,6 @@ document.addEventListener("DOMContentLoaded", () => {
       proposalAttempt = 0;
       return;
     }
-
     const payload = proposalVariants[proposalAttempt++];
     const symbolLabel = payload.underlying_symbol
       ? "underlying_symbol"
@@ -225,7 +253,6 @@ document.addEventListener("DOMContentLoaded", () => {
         : payload.symbol
           ? "symbol"
           : "none";
-
     appendLogLine(`Proposal attempt ${proposalAttempt}: ${symbolLabel} mode`, "#a78bfa");
     sendMessage(payload);
   }
@@ -235,14 +262,17 @@ document.addEventListener("DOMContentLoaded", () => {
       appendLogLine("Already waiting for a proposal.", "orange");
       return;
     }
-
     proposalVariants = buildProposalVariants(barrier);
     proposalAttempt = 0;
     waitingProposal = true;
-
-    appendLogLine(`TRADE → DIGITDIFF barrier=${barrier} stake=${proposalVariants[0].amount}`, "lime");
+    appendLogLine(
+      `TRADE → DIGITDIFF barrier=${barrier} stake=${proposalVariants[0].amount}`,
+      "lime"
+    );
     sendNextProposalVariant();
   }
+
+  // ── Tick / sequence engine ──────────────────────────────────────────────────
 
   function onTick(price) {
     if (!running || paused) return;
@@ -254,20 +284,27 @@ document.addEventListener("DOMContentLoaded", () => {
     tickBuffer.push({ price, digit: d });
     startTickFlush();
 
+    // Capture the very first tick after buy is confirmed — that IS the settlement tick
     if (captureNextTick) {
       settlementDigit = d;
       captureNextTick = false;
     }
 
+    // Don't process sequence logic while a trade is in flight
     if (waitingProposal || activeContractId) return;
 
+    // ── Phase: scan_ab ────────────────────────────────────────────────────────
+    // Looking for two consecutive digits (A, B) where B = A+1, A in 0-8.
+    // If targetPair is set we only accept that specific pair.
     if (phase === "scan_ab") {
       if (seqA === null) {
+        // Need the first digit of a candidate pair
         if (targetPair) {
           if (d === targetPair[0]) {
             seqA = d;
           }
         } else {
+          // Any digit 0-8 can start a pair
           if (d >= 0 && d <= 8) {
             seqA = d;
           }
@@ -275,16 +312,20 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
+      // We have seqA; check if d is seqA+1 (i.e. B = A+1)
       if (d === seqA + 1) {
+        // Valid pair!
         if (targetPair && (seqA !== targetPair[0] || d !== targetPair[1])) {
+          // Doesn't match required pair — restart candidate
           seqA = (d >= 0 && d <= 8) ? d : null;
           return;
         }
-
         seqB = d;
         phase = "scan_x";
         appendLogLine(`Pair [${seqA},${seqB}] found → waiting for x`, "#38bdf8");
       } else {
+        // Not consecutive; reset candidate
+        // d itself could be the start of a new pair
         if (targetPair) {
           seqA = (d === targetPair[0]) ? d : null;
         } else {
@@ -294,158 +335,89 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    // ── Phase: scan_x ────────────────────────────────────────────────────────
+    // Waiting for x: any digit 0-8 (digit 9 invalidates → restart from scan_ab).
+    // Once x is seen, fire trade immediately — barrier = x+1 (that's y).
     if (phase === "scan_x") {
       if (d === 9) {
         appendLogLine("x=9 is invalid; restarting pair scan.", "red");
         resetSequence(targetPair);
         return;
       }
-
       const x = d;
-      const barrier = x + 1;
-      appendLogLine(`Pattern [${seqA},${seqB},${x}] → BUY DIGITDIFF barrier=${barrier}`, "#22c55e");
+      const barrier = x + 1; // y = x+1
+      appendLogLine(
+        `Pattern [${seqA},${seqB},${x} ddf ${barrier}] → BUY DIGITDIFF barrier=${barrier}`,
+        "#22c55e"
+      );
       placeTrade(barrier);
+      // Sequence resets after contract settles (in proposal_open_contract handler)
     }
   }
 
-  function saveToken(token) {
-    if (!token) return;
-    localStorage.setItem("access_token", token);
-    if (tokenInput) tokenInput.value = token;
-  }
-
-  function clearOAuthCodeFromUrl() {
-    const url = new URL(window.location.href);
-    url.searchParams.delete("code");
-    url.searchParams.delete("state");
-    window.history.replaceState({}, "", url.toString());
-  }
-
-  function generateCodeVerifier() {
-    const array = new Uint8Array(64);
-    crypto.getRandomValues(array);
-    return btoa(String.fromCharCode(...array))
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/g, "");
-  }
-
-  async function generateCodeChallenge(verifier) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(verifier);
-    const digest = await crypto.subtle.digest("SHA-256", data);
-    return btoa(String.fromCharCode(...new Uint8Array(digest)))
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/g, "");
-  }
-
-  async function exchangeCodeForToken(code) {
-    const codeVerifier = localStorage.getItem("deriv_code_verifier");
-    const state = localStorage.getItem("deriv_state");
-
-    const res = await fetch(OAUTH_EXCHANGE_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Deriv-App-ID": APP_ID
-      },
-      body: JSON.stringify({
-        code,
-        code_verifier: codeVerifier,
-        client_id: APP_ID,
-        redirect_uri: REDIRECT_URI,
-        state
-      })
-    });
-
-    const data = await res.json();
-    if (!res.ok || !data.access_token) {
-      throw new Error(data.error || data.error_description || "Token exchange failed.");
-    }
-
-    return data.access_token;
-  }
-
-  async function ensureAccessToken() {
-    const inputToken = tokenInput?.value?.trim();
-    if (inputToken) {
-      saveToken(inputToken);
-      return inputToken;
-    }
-
-    const storedToken = localStorage.getItem("access_token");
-    if (storedToken) {
-      return storedToken;
-    }
-
-    const code = new URLSearchParams(window.location.search).get("code");
-    if (code) {
-      appendLogLine("OAuth code received. Exchanging for access token...", "yellow");
-      try {
-        const token = await exchangeCodeForToken(code);
-        saveToken(token);
-        clearOAuthCodeFromUrl();
-        appendLogLine("Token received successfully.", "lime");
-        return token;
-      } catch (err) {
-        appendLogLine(`Token exchange failed: ${err.message}`, "red");
-        return null;
-      }
-    }
-
-    appendLogLine("No token found. Opening Deriv OAuth login...", "yellow");
-
-    const state = crypto.randomUUID();
-    const verifier = generateCodeVerifier();
-    localStorage.setItem("deriv_state", state);
-    localStorage.setItem("deriv_code_verifier", verifier);
-
-    const challenge = await generateCodeChallenge(verifier);
-    localStorage.setItem("deriv_code_challenge", challenge);
-
-    const oauthUrl =
-      `${OAUTH_LOGIN_URL}?response_type=code` +
-      `&client_id=${APP_ID}` +
-      `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-      `&scope=trade` +
-      `&state=${state}` +
-      `&code_challenge=${challenge}` +
-      `&code_challenge_method=S256`;
-
-    window.location.href = oauthUrl;
-    return null;
-  }
+  // ── WebSocket / connection ──────────────────────────────────────────────────
 
   async function connect() {
     resetSequence(null);
+    if (ws) ws.close();
 
-    if (ws) {
-      try { ws.close(); } catch {}
-      ws = null;
+    const accountId = ACCOUNTS[account];
+    const inputToken = tokenInput?.value.trim();
+    const storedToken = localStorage.getItem("access_token");
+    const accessToken = inputToken || storedToken;
+
+    if (!accessToken) {
+      appendLogLine("Missing access_token. Paste it in the Access Token field.", "red");
+      return;
     }
 
-    const accessToken = await ensureAccessToken();
-    if (!accessToken) return;
+    if (inputToken) {
+      localStorage.setItem("access_token", accessToken);
+      appendLogLine("Using access_token from input field.", "yellow");
+    } else {
+      appendLogLine("Using access_token from localStorage.", "yellow");
+    }
 
     try {
-      appendLogLine("Connecting to Deriv WebSocket...", "yellow");
-
-      ws = new WebSocket(WS_URL);
-
-      const handshakeTimeout = setTimeout(() => {
-        if (ws && ws.readyState !== WebSocket.OPEN) {
-          appendLogLine("WS handshake timed out. Check your numeric Deriv App ID and redirect URI.", "red");
-          if (ws.readyState === WebSocket.CONNECTING) {
-            ws.close();
+      const response = await fetch(
+        `https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Deriv-App-ID": "33wZZKTFZrmsZgFaAH53Z"
           }
         }
-      }, 8000);
+      );
+
+      const text = await response.text();
+      if (!response.ok) {
+        appendLogLine(`OTP request failed ${response.status}.`, "red");
+        appendLogLine(text, "red");
+        return;
+      }
+
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (err) {
+        appendLogLine("OTP response is not JSON.", "red");
+        appendLogLine(text, "red");
+        return;
+      }
+
+      if (!data?.data?.url) {
+        appendLogLine("OTP response missing data.url.", "red");
+        appendLogLine(JSON.stringify(data), "red");
+        return;
+      }
+
+      ws = new WebSocket(data.data.url);
 
       ws.onopen = () => {
-        clearTimeout(handshakeTimeout);
         appendLogLine("WS connected.", "lime");
-        sendMessage({ authorize: accessToken });
+        sendMessage({ ticks: SYMBOL, subscribe: 1 });
+        sendMessage({ balance: 1 });
       };
 
       ws.onmessage = e => {
@@ -469,18 +441,8 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         switch (payload.msg_type) {
-          case "authorize":
-            if (payload.authorize?.error) {
-              appendLogLine(`Authorization failed: ${payload.authorize.error.message}`, "red");
-              return;
-            }
-            appendLogLine("Deriv authorized successfully.", "lime");
-            sendMessage({ ticks: SYMBOL, subscribe: 1 });
-            sendMessage({ balance: 1 });
-            break;
-
           case "tick":
-            onTick(payload.tick?.quote);
+            onTick(payload.tick.quote);
             break;
 
           case "balance":
@@ -494,18 +456,18 @@ document.addEventListener("DOMContentLoaded", () => {
             waitingProposal = false;
             proposalVariants = null;
             proposalAttempt = 0;
-
             if (!payload.proposal) {
               appendLogLine("Proposal response missing payload.", "red");
               break;
             }
-
             currentStake = Number(payload.proposal.ask_price || 0);
             if (payload.proposal.payout && currentStake > 0) {
               lastPayoutRatio = Number(payload.proposal.payout / currentStake);
-              appendLogLine(`Payout ratio set to ${lastPayoutRatio.toFixed(2)}`, "#38bdf8");
+              appendLogLine(
+                `Payout ratio set to ${lastPayoutRatio.toFixed(2)}`,
+                "#38bdf8"
+              );
             }
-
             sendMessage({
               buy: payload.proposal.id,
               price: payload.proposal.ask_price
@@ -515,8 +477,7 @@ document.addEventListener("DOMContentLoaded", () => {
           case "buy":
             activeContractId = payload.buy?.contract_id || null;
             settlementDigit = null;
-            captureNextTick = true;
-
+            captureNextTick = true; // next tick = settlement tick for 1-tick DIGITDIFF
             if (activeContractId) {
               sendMessage({
                 proposal_open_contract: 1,
@@ -545,10 +506,16 @@ document.addEventListener("DOMContentLoaded", () => {
               totalProfit += pnl;
               if (profitEl) profitEl.textContent = totalProfit.toFixed(2);
 
+              // Get result digit: settlementDigit = first tick after buy (the true settlement tick).
+              // Fall back to exit_tick from contract if settlementDigit wasn't captured.
               const exitPrice = contract.exit_tick || contract.exit_tick_display_value;
               const exitDigit = exitPrice !== undefined ? digitFromPrice(exitPrice) : null;
               const resultDigit = settlementDigit !== null ? settlementDigit : exitDigit;
-              const nextTarget = resultDigit !== null ? nextPairFromResultDigit(resultDigit) : null;
+
+              // Compute the next target pair from the result digit
+              const nextTarget = resultDigit !== null
+                ? nextPairFromResultDigit(resultDigit)
+                : null;
 
               if (pnl >= 0) {
                 recoveryLoss = 0;
@@ -563,8 +530,9 @@ document.addEventListener("DOMContentLoaded", () => {
               } else {
                 recoveryLoss += Math.abs(pnl);
                 ladder += 1;
+                const nextStake = stake();
                 appendLogLine(
-                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)}` +
+                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)}` +
                   (resultDigit !== null ? ` (digit=${resultDigit})` : "") +
                   (nextTarget ? ` → next pair [${nextTarget[0]},${nextTarget[1]}]` : ""),
                   "red"
@@ -577,6 +545,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 sendMessage({ balance: 1 });
               }
 
+              // Reset sequence, feeding the next target pair
               resetSequence(nextTarget);
             }
             break;
@@ -588,20 +557,21 @@ document.addEventListener("DOMContentLoaded", () => {
       };
 
       ws.onclose = ev => {
-        clearTimeout(handshakeTimeout);
         appendLogLine(`WS closed (code ${ev.code}).`, "orange");
         stopTickFlush();
       };
 
       ws.onerror = ev => {
-        clearTimeout(handshakeTimeout);
-        appendLogLine("WS error. Check your numeric Deriv App ID and HTTPS access.", "red");
+        appendLogLine("WS error.", "red");
         console.error("WebSocket error:", ev);
       };
     } catch (err) {
-      appendLogLine(`Connection failed: ${String(err)}`, "red");
+      appendLogLine(`OTP fetch failed: ${String(err)}`, "red");
+      console.error(err);
     }
   }
+
+  // ── Button handlers ─────────────────────────────────────────────────────────
 
   startBtn.onclick = () => {
     running = true;
@@ -630,6 +600,9 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   demoBtn.onclick = () => {
+    account = "demo";
+    demoBtn.classList.add("active");
+    liveBtn.classList.remove("active");
     appendLogLine("DEMO MODE", "blue");
     const mi = $("modeIndicator");
     if (mi) {
@@ -640,6 +613,9 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   liveBtn.onclick = () => {
+    account = "live";
+    liveBtn.classList.add("active");
+    demoBtn.classList.remove("active");
     appendLogLine("LIVE MODE", "red");
     const mi = $("modeIndicator");
     if (mi) {
