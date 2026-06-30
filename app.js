@@ -21,20 +21,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const SYMBOL = "R_100";
   const DEFAULT_PAYOUT_RATIO = 11.57;
 
-  // OAuth client ID from your Deriv app registration
-  const CLIENT_ID = "33wZZKTFZrmsZgFaAH53Z";
-
-  // IMPORTANT:
-  // This must be the numeric App ID from your Deriv Applications dashboard.
-  // The value above is the client ID, not the websocket app_id.
-  const APP_ID = "YOUR_NUMERIC_DERIV_APP_ID";
-
+  const APP_ID = "33wZZKTFZrmsZgFaAH53Z";
   const REDIRECT_URI = "https://jesanjedan27-max.github.io/tradingbot/";
   const OAUTH_EXCHANGE_URL = "https://oauthexchange23.vercel.app/api/oauth-exchange";
-  const OAUTH_URL =
-    `https://oauth.deriv.com/oauth2/authorize?app_id=${APP_ID}` +
-    `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-    "&response_type=code&scope=read%20trade";
+  const OAUTH_LOGIN_URL = "https://auth.deriv.com/oauth2/auth";
+  const OAUTH_TOKEN_URL = "https://auth.deriv.com/oauth2/token";
   const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
 
   const savedToken = localStorage.getItem("access_token");
@@ -351,6 +342,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function exchangeCodeForToken(code) {
     const codeVerifier = localStorage.getItem("deriv_code_verifier");
+    const state = localStorage.getItem("deriv_state");
 
     const res = await fetch(OAUTH_EXCHANGE_URL, {
       method: "POST",
@@ -361,8 +353,9 @@ document.addEventListener("DOMContentLoaded", () => {
       body: JSON.stringify({
         code,
         code_verifier: codeVerifier,
-        client_id: CLIENT_ID,
-        redirect_uri: REDIRECT_URI
+        client_id: APP_ID,
+        redirect_uri: REDIRECT_URI,
+        state
       })
     });
 
@@ -403,18 +396,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
     appendLogLine("No token found. Opening Deriv OAuth login...", "yellow");
 
+    const state = crypto.randomUUID();
     const verifier = generateCodeVerifier();
+    localStorage.setItem("deriv_state", state);
     localStorage.setItem("deriv_code_verifier", verifier);
 
     const challenge = await generateCodeChallenge(verifier);
     localStorage.setItem("deriv_code_challenge", challenge);
 
     const oauthUrl =
-      `https://oauth.deriv.com/oauth2/authorize?app_id=${APP_ID}` +
+      `${OAUTH_LOGIN_URL}?response_type=code` +
+      `&client_id=${APP_ID}` +
       `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-      "&response_type=code&scope=read%20trade" +
+      `&scope=trade` +
+      `&state=${state}` +
       `&code_challenge=${challenge}` +
-      "&code_challenge_method=S256";
+      `&code_challenge_method=S256`;
 
     window.location.href = oauthUrl;
     return null;
