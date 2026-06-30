@@ -1,4 +1,4 @@
-// Deriv DigitDiff bot — consecutive-pair strategy with post-result chaining
+// Deriv DigitDiff bot
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -21,14 +21,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const SYMBOL = "R_100";
   const DEFAULT_PAYOUT_RATIO = 11.57;
 
-  const DERIV_APP_ID = "33wZZKTFZrmsZgFaAH53Z";
+  const APP_ID = "33wZZKTFZrmsZgFaAH53Z";
   const REDIRECT_URI = "https://jesanjedan27-max.github.io/tradingbot/";
+  const OAUTH_EXCHANGE_URL = "https://oauthexchange23.vercel.app/api/oauth-exchange";
   const OAUTH_URL =
-    `https://oauth.deriv.com/oauth2/authorize?app_id=${DERIV_APP_ID}` +
+    `https://oauth.deriv.com/oauth2/authorize?app_id=${APP_ID}` +
     `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
     "&response_type=code&scope=read%20trade";
-  const OAUTH_EXCHANGE_URL = "https://oauthexchange23.vercel.app/api/oauth-exchange";
-  const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${DERIV_APP_ID}`;
+  const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
 
   const savedToken = localStorage.getItem("access_token");
   if (tokenInput && savedToken) {
@@ -37,11 +37,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let ws = null;
   let running = false;
+  let paused = false;
   let lastPayoutRatio = null;
   let recoveryLoss = 0;
   let currentStake = 0;
-  let lastBalance = null;
-  let paused = false;
   let ladder = 0;
   let totalProfit = 0;
   let waitingProposal = false;
@@ -71,7 +70,6 @@ document.addEventListener("DOMContentLoaded", () => {
     while (logEl.children.length > LOG_MAX_ENTRIES) {
       logEl.removeChild(logEl.firstChild);
     }
-
     logEl.scrollTop = logEl.scrollHeight;
     console.log(message);
   }
@@ -111,7 +109,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function updateBalance(value) {
     if (typeof value !== "number" || Number.isNaN(value)) return;
-    lastBalance = value;
     if (balanceEl) balanceEl.textContent = value.toFixed(2);
   }
 
@@ -120,6 +117,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const payoutRatio = lastPayoutRatio && lastPayoutRatio > 1.01
       ? lastPayoutRatio
       : DEFAULT_PAYOUT_RATIO;
+
     if (recoveryLoss > 0 && payoutRatio > 1.01) {
       const neededStake = recoveryLoss / (payoutRatio - 1);
       return Number(Math.max(baseStake, neededStake).toFixed(2));
@@ -158,7 +156,6 @@ document.addEventListener("DOMContentLoaded", () => {
     recoveryLoss = 0;
     lastPayoutRatio = null;
     currentStake = 0;
-    lastBalance = null;
     ladder = 0;
     tickBuffer.length = 0;
   }
@@ -221,6 +218,7 @@ document.addEventListener("DOMContentLoaded", () => {
       proposalAttempt = 0;
       return;
     }
+
     const payload = proposalVariants[proposalAttempt++];
     const symbolLabel = payload.underlying_symbol
       ? "underlying_symbol"
@@ -244,11 +242,7 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalAttempt = 0;
     waitingProposal = true;
 
-    appendLogLine(
-      `TRADE → DIGITDIFF barrier=${barrier} stake=${proposalVariants[0].amount}`,
-      "lime"
-    );
-
+    appendLogLine(`TRADE → DIGITDIFF barrier=${barrier} stake=${proposalVariants[0].amount}`, "lime");
     sendNextProposalVariant();
   }
 
@@ -329,22 +323,43 @@ document.addEventListener("DOMContentLoaded", () => {
     window.history.replaceState({}, "", url.toString());
   }
 
+  function generateCodeVerifier() {
+    const array = new Uint8Array(64);
+    crypto.getRandomValues(array);
+    return btoa(String.fromCharCode(...array))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+  }
+
+  async function generateCodeChallenge(verifier) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(verifier);
+    const digest = await crypto.subtle.digest("SHA-256", data);
+    return btoa(String.fromCharCode(...new Uint8Array(digest)))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+  }
+
   async function exchangeCodeForToken(code) {
     const codeVerifier = localStorage.getItem("deriv_code_verifier");
 
     const res = await fetch(OAUTH_EXCHANGE_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Deriv-App-ID": APP_ID
+      },
       body: JSON.stringify({
         code,
         code_verifier: codeVerifier,
-        client_id: DERIV_APP_ID,
+        client_id: APP_ID,
         redirect_uri: REDIRECT_URI
       })
     });
 
     const data = await res.json();
-
     if (!res.ok || !data.access_token) {
       throw new Error(data.error || data.error_description || "Token exchange failed.");
     }
@@ -388,7 +403,7 @@ document.addEventListener("DOMContentLoaded", () => {
     localStorage.setItem("deriv_code_challenge", challenge);
 
     const oauthUrl =
-      `https://oauth.deriv.com/oauth2/authorize?app_id=${DERIV_APP_ID}` +
+      `https://oauth.deriv.com/oauth2/authorize?app_id=${APP_ID}` +
       `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
       "&response_type=code&scope=read%20trade" +
       `&code_challenge=${challenge}` +
@@ -396,25 +411,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     window.location.href = oauthUrl;
     return null;
-  }
-
-  function generateCodeVerifier() {
-    const array = new Uint8Array(64);
-    crypto.getRandomValues(array);
-    return btoa(String.fromCharCode(...array))
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/g, "");
-  }
-
-  async function generateCodeChallenge(verifier) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(verifier);
-    const digest = await crypto.subtle.digest("SHA-256", data);
-    return btoa(String.fromCharCode(...new Uint8Array(digest)))
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/g, "");
   }
 
   async function connect() {
@@ -435,7 +431,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const handshakeTimeout = setTimeout(() => {
         if (ws && ws.readyState !== WebSocket.OPEN) {
-          appendLogLine("WS handshake timed out. Check your app ID and redirect URI.", "red");
+          appendLogLine("WS handshake timed out. Check your numeric Deriv App ID and redirect URI.", "red");
           if (ws.readyState === WebSocket.CONNECTING) {
             ws.close();
           }
@@ -563,9 +559,8 @@ document.addEventListener("DOMContentLoaded", () => {
               } else {
                 recoveryLoss += Math.abs(pnl);
                 ladder += 1;
-                const nextStake = stake();
                 appendLogLine(
-                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)}` +
+                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)}` +
                   (resultDigit !== null ? ` (digit=${resultDigit})` : "") +
                   (nextTarget ? ` → next pair [${nextTarget[0]},${nextTarget[1]}]` : ""),
                   "red"
@@ -591,15 +586,12 @@ document.addEventListener("DOMContentLoaded", () => {
       ws.onclose = ev => {
         clearTimeout(handshakeTimeout);
         appendLogLine(`WS closed (code ${ev.code}).`, "orange");
-        if (ev.code === 1006) {
-          appendLogLine("This usually means the handshake failed. Verify your app ID and redirect URI.", "red");
-        }
         stopTickFlush();
       };
 
       ws.onerror = ev => {
         clearTimeout(handshakeTimeout);
-        appendLogLine("WS error. Check your app ID and HTTPS access.", "red");
+        appendLogLine("WS error. Check your numeric Deriv App ID and HTTPS access.", "red");
         console.error("WebSocket error:", ev);
       };
     } catch (err) {
