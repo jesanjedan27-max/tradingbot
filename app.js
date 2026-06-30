@@ -21,19 +21,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const SYMBOL = "R_100";
   const DEFAULT_PAYOUT_RATIO = 11.57;
 
-  // IMPORTANT:
-  // Use your real numeric Deriv app ID here.
-  // Do not use a non-numeric or placeholder value.
-  const DERIV_APP_ID = "YOUR_NUMERIC_DERIV_APP_ID";
-
-  function getRedirectUri() {
-    const url = new URL(window.location.href);
-    url.search = "";
-    url.hash = "";
-    return url.toString();
-  }
-
-  const REDIRECT_URI = getRedirectUri();
+  const DERIV_APP_ID = "33wZZKTFZrmsZgFaAH53Z";
+  const REDIRECT_URI = "https://jesanjedan27-max.github.io/tradingbot/";
   const OAUTH_URL =
     `https://oauth.deriv.com/oauth2/authorize?app_id=${DERIV_APP_ID}` +
     `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
@@ -46,13 +35,6 @@ document.addEventListener("DOMContentLoaded", () => {
     tokenInput.value = savedToken;
   }
 
-  const ACCOUNTS = {
-    demo: "DOT92927394",
-    live: "ROT91650098"
-  };
-
-  let account = "demo";
-  demoBtn.classList.add("active");
   let ws = null;
   let running = false;
   let lastPayoutRatio = null;
@@ -67,7 +49,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let proposalAttempt = 0;
   let activeContractId = null;
 
-  // Strategy state
   let targetPair = null;
   let phase = "scan_ab";
   let seqA = null;
@@ -75,7 +56,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let settlementDigit = null;
   let captureNextTick = false;
 
-  // Log / tick buffering
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
   const TICK_BATCH_LIMIT = 200;
@@ -87,9 +67,11 @@ document.addEventListener("DOMContentLoaded", () => {
     entry.style.color = color;
     entry.textContent = message;
     logEl.appendChild(entry);
+
     while (logEl.children.length > LOG_MAX_ENTRIES) {
       logEl.removeChild(logEl.firstChild);
     }
+
     logEl.scrollTop = logEl.scrollHeight;
     console.log(message);
   }
@@ -145,7 +127,6 @@ document.addEventListener("DOMContentLoaded", () => {
     return Number(baseStake.toFixed(2));
   }
 
-  // Strategy helpers
   function nextPairFromResultDigit(digit) {
     if (digit === 9) return [0, 1];
     if (digit >= 0 && digit <= 8) return [digit, digit + 1];
@@ -182,7 +163,6 @@ document.addEventListener("DOMContentLoaded", () => {
     tickBuffer.length = 0;
   }
 
-  // Proposal / trade plumbing
   function buildProposalVariants(barrier) {
     const amount = stake();
     const base = {
@@ -195,6 +175,7 @@ document.addEventListener("DOMContentLoaded", () => {
       duration_unit: "t",
       barrier
     };
+
     return [
       Object.assign({}, base, { underlying_symbol: SYMBOL }),
       Object.assign({}, base, { underlying: SYMBOL }),
@@ -248,6 +229,7 @@ document.addEventListener("DOMContentLoaded", () => {
         : payload.symbol
           ? "symbol"
           : "none";
+
     appendLogLine(`Proposal attempt ${proposalAttempt}: ${symbolLabel} mode`, "#a78bfa");
     sendMessage(payload);
   }
@@ -257,14 +239,19 @@ document.addEventListener("DOMContentLoaded", () => {
       appendLogLine("Already waiting for a proposal.", "orange");
       return;
     }
+
     proposalVariants = buildProposalVariants(barrier);
     proposalAttempt = 0;
     waitingProposal = true;
-    appendLogLine(`TRADE → DIGITDIFF barrier=${barrier} stake=${proposalVariants[0].amount}`, "lime");
+
+    appendLogLine(
+      `TRADE → DIGITDIFF barrier=${barrier} stake=${proposalVariants[0].amount}`,
+      "lime"
+    );
+
     sendNextProposalVariant();
   }
 
-  // Tick / sequence engine
   function onTick(price) {
     if (!running || paused) return;
     const d = digitFromPrice(price);
@@ -301,6 +288,7 @@ document.addEventListener("DOMContentLoaded", () => {
           seqA = (d >= 0 && d <= 8) ? d : null;
           return;
         }
+
         seqB = d;
         phase = "scan_x";
         appendLogLine(`Pair [${seqA},${seqB}] found → waiting for x`, "#38bdf8");
@@ -320,31 +308,12 @@ document.addEventListener("DOMContentLoaded", () => {
         resetSequence(targetPair);
         return;
       }
+
       const x = d;
       const barrier = x + 1;
       appendLogLine(`Pattern [${seqA},${seqB},${x}] → BUY DIGITDIFF barrier=${barrier}`, "#22c55e");
       placeTrade(barrier);
     }
-  }
-
-  // OAuth / PKCE helpers
-  function generateCodeVerifier() {
-    const array = new Uint8Array(64);
-    crypto.getRandomValues(array);
-    return btoa(String.fromCharCode(...array))
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/g, "");
-  }
-
-  async function generateCodeChallenge(verifier) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(verifier);
-    const digest = await crypto.subtle.digest("SHA-256", data);
-    return btoa(String.fromCharCode(...new Uint8Array(digest)))
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/g, "");
   }
 
   function saveToken(token) {
@@ -362,6 +331,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function exchangeCodeForToken(code) {
     const codeVerifier = localStorage.getItem("deriv_code_verifier");
+
     const res = await fetch(OAUTH_EXCHANGE_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -374,9 +344,11 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     const data = await res.json();
+
     if (!res.ok || !data.access_token) {
       throw new Error(data.error || data.error_description || "Token exchange failed.");
     }
+
     return data.access_token;
   }
 
@@ -409,26 +381,42 @@ document.addEventListener("DOMContentLoaded", () => {
 
     appendLogLine("No token found. Opening Deriv OAuth login...", "yellow");
 
-    (async () => {
-      const verifier = generateCodeVerifier();
-      const challenge = await generateCodeChallenge(verifier);
-      localStorage.setItem("deriv_code_verifier", verifier);
-      localStorage.setItem("deriv_code_challenge", challenge);
+    const verifier = generateCodeVerifier();
+    localStorage.setItem("deriv_code_verifier", verifier);
 
-      const oauthUrl =
-        `https://oauth.deriv.com/oauth2/authorize?app_id=${DERIV_APP_ID}` +
-        `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-        "&response_type=code&scope=read%20trade" +
-        `&code_challenge=${challenge}` +
-        "&code_challenge_method=S256";
+    const challenge = await generateCodeChallenge(verifier);
+    localStorage.setItem("deriv_code_challenge", challenge);
 
-      window.location.href = oauthUrl;
-    })();
+    const oauthUrl =
+      `https://oauth.deriv.com/oauth2/authorize?app_id=${DERIV_APP_ID}` +
+      `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
+      "&response_type=code&scope=read%20trade" +
+      `&code_challenge=${challenge}` +
+      "&code_challenge_method=S256";
 
+    window.location.href = oauthUrl;
     return null;
   }
 
-  // WebSocket / connection
+  function generateCodeVerifier() {
+    const array = new Uint8Array(64);
+    crypto.getRandomValues(array);
+    return btoa(String.fromCharCode(...array))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+  }
+
+  async function generateCodeChallenge(verifier) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(verifier);
+    const digest = await crypto.subtle.digest("SHA-256", data);
+    return btoa(String.fromCharCode(...new Uint8Array(digest)))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+  }
+
   async function connect() {
     resetSequence(null);
 
@@ -447,7 +435,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const handshakeTimeout = setTimeout(() => {
         if (ws && ws.readyState !== WebSocket.OPEN) {
-          appendLogLine("WS handshake timed out. Check your app ID, redirect URI, and HTTPS access.", "red");
+          appendLogLine("WS handshake timed out. Check your app ID and redirect URI.", "red");
           if (ws.readyState === WebSocket.CONNECTING) {
             ws.close();
           }
@@ -506,15 +494,18 @@ document.addEventListener("DOMContentLoaded", () => {
             waitingProposal = false;
             proposalVariants = null;
             proposalAttempt = 0;
+
             if (!payload.proposal) {
               appendLogLine("Proposal response missing payload.", "red");
               break;
             }
+
             currentStake = Number(payload.proposal.ask_price || 0);
             if (payload.proposal.payout && currentStake > 0) {
               lastPayoutRatio = Number(payload.proposal.payout / currentStake);
               appendLogLine(`Payout ratio set to ${lastPayoutRatio.toFixed(2)}`, "#38bdf8");
             }
+
             sendMessage({
               buy: payload.proposal.id,
               price: payload.proposal.ask_price
@@ -525,6 +516,7 @@ document.addEventListener("DOMContentLoaded", () => {
             activeContractId = payload.buy?.contract_id || null;
             settlementDigit = null;
             captureNextTick = true;
+
             if (activeContractId) {
               sendMessage({
                 proposal_open_contract: 1,
@@ -615,7 +607,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Button handlers
   startBtn.onclick = () => {
     running = true;
     connect();
@@ -643,9 +634,6 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   demoBtn.onclick = () => {
-    account = "demo";
-    demoBtn.classList.add("active");
-    liveBtn.classList.remove("active");
     appendLogLine("DEMO MODE", "blue");
     const mi = $("modeIndicator");
     if (mi) {
@@ -656,9 +644,6 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   liveBtn.onclick = () => {
-    account = "live";
-    liveBtn.classList.add("active");
-    demoBtn.classList.remove("active");
     appendLogLine("LIVE MODE", "red");
     const mi = $("modeIndicator");
     if (mi) {
