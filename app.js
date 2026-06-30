@@ -59,11 +59,16 @@ document.addEventListener("DOMContentLoaded", () => {
   let recoveryPair = null;
   let lastTradePair = null;
 
-  // ── NEW: triple-pair recovery state ──────────────────────────────────────
-  let recoveryTripleScanMode = false;  // true while scanning for 3x pair
-  let pairCounts = {};                 // { "a,b": count }
-  let confirmedRecoveryPair = null;    // [a, b] once 3x confirmed
-  let prevRecoveryDigit = null;        // previous tick digit during triple scan
+  // ── NEW: chained-pair recovery state ─────────────────────────────────────
+  // Recovery logic:
+  //   Phase 1 — scan for two consecutive pairs that chain: [a,b] then [b,c]
+  //             e.g. [6,7]→[7,8]  or  [2,3]→[3,4]  or  [7,8]→[8,9]
+  //   Phase 2 — wait for digit c to appear, then trade DIGITDIFF barrier=(c+1)%10
+  //
+  let recoveryChainScanMode = false; // true while scanning for the chained pair
+  let lastSeenConsPair = null;       // [a, b] — last consecutive pair seen in ticks
+  let confirmedChain = null;         // { trigger, barrier } once chain is confirmed
+  let prevChainDigit = null;         // previous tick digit, used for pair detection
   // ─────────────────────────────────────────────────────────────────────────
 
   const LOG_MAX_ENTRIES = 1200;
@@ -152,16 +157,16 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalAttempt = 0;
     activeContractId = null;
 
-    if (recoveryTripleScanMode) {
+    if (recoveryChainScanMode) {
       targetPair = null;
       appendLogLine(
-        "Recovery mode: scanning tick stream for a consecutive pair that appears 3x...",
+        "Recovery mode: scanning for chained consecutive pair pattern [a,b]→[b,c]...",
         "#f59e0b"
       );
-    } else if (recoveryMode && confirmedRecoveryPair) {
+    } else if (recoveryMode && confirmedChain) {
       targetPair = null;
       appendLogLine(
-        `Recovery mode: pair [${confirmedRecoveryPair[0]},${confirmedRecoveryPair[1]}] confirmed → waiting for digit ${confirmedRecoveryPair[0]}`,
+        `Recovery mode: chain confirmed → waiting for digit ${confirmedChain.trigger} to trade DIGITDIFF ${confirmedChain.barrier}`,
         "#f59e0b"
       );
     } else {
@@ -178,10 +183,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function fullReset() {
-    recoveryTripleScanMode = false;
-    pairCounts = {};
-    confirmedRecoveryPair = null;
-    prevRecoveryDigit = null;
+    recoveryChainScanMode = false;
+    lastSeenConsPair = null;
+    confirmedChain = null;
+    prevChainDigit = null;
     resetSequence(null);
     totalProfit = 0;
     recoveryLoss = 0;
@@ -301,49 +306,59 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // ── NEW RECOVERY LOGIC ──────────────────────────────────────────────────
     //
-    // Phase 1 — triple-scan: count consecutive pairs in the live tick stream.
-    // The first pair [a, a+1] that appears 3 times becomes the confirmed pair.
+    // Phase 1 — chain scan:
+    //   Watch every consecutive tick pair. When a new consecutive pair [a,b]
+    //   is seen and lastSeenConsPair[1] == a, the chain [lastSeenConsPair] →
+    //   [a,b] is confirmed. Always update lastSeenConsPair when any new
+    //   consecutive pair appears (so the most recent pair is always tracked).
     //
-    if (recoveryMode && recoveryTripleScanMode) {
-      if (prevRecoveryDigit !== null) {
-        const a = prevRecoveryDigit;
+    if (recoveryMode && recoveryChainScanMode) {
+      if (prevChainDigit !== null) {
+        const a = prevChainDigit;
         const b = d;
-        if (b === a + 1 && a >= 0 && a <= 8) {
-          const key = `${a},${b}`;
-          pairCounts[key] = (pairCounts[key] || 0) + 1;
-          appendLogLine(
-            `[Recovery scan] Pair [${a},${b}] seen ${pairCounts[key]}x`,
-            "#f59e0b"
-          );
-          if (pairCounts[key] >= 3) {
-            confirmedRecoveryPair = [a, b];
-            recoveryTripleScanMode = false;
+        const isConsPair = (b === (a + 1) % 10);
+
+        if (isConsPair) {
+          if (lastSeenConsPair !== null && lastSeenConsPair[1] === a) {
+            // Chain confirmed: [lastSeenConsPair[0], a] → [a, b]
+            const trigger = b;
+            const barrier = (b + 1) % 10;
+            confirmedChain = { trigger, barrier };
+            recoveryChainScanMode = false;
             appendLogLine(
-              `[Recovery] Pair [${a},${b}] confirmed 3x → watching for digit ${a} to trade DIGITDIFF ${b}`,
+              `[Recovery] Chain [${lastSeenConsPair[0]},${a}]→[${a},${b}] confirmed` +
+              ` → watching for digit ${trigger}, will trade DIGITDIFF barrier=${barrier}`,
+              "#f59e0b"
+            );
+          } else {
+            // Store this pair and keep scanning for the chain
+            lastSeenConsPair = [a, b];
+            appendLogLine(
+              `[Recovery scan] Pair [${a},${b}] stored, awaiting chain...`,
               "#f59e0b"
             );
           }
         }
       }
-      prevRecoveryDigit = d;
+      prevChainDigit = d;
       return;
     }
 
-    // Phase 2 — digit watch: as soon as the first digit of the confirmed pair
-    // appears, immediately place the DIGITDIFF trade on the second digit.
+    // Phase 2 — trigger watch:
+    //   As soon as the confirmed trigger digit appears, immediately trade.
     //
-    if (recoveryMode && confirmedRecoveryPair) {
-      if (d === confirmedRecoveryPair[0]) {
-        const [a, b] = confirmedRecoveryPair;
-        seqA = a;
-        seqB = b;
-        lastTradePair = [a, b];
-        confirmedRecoveryPair = null;
+    if (recoveryMode && confirmedChain) {
+      if (d === confirmedChain.trigger) {
+        const { trigger, barrier } = confirmedChain;
+        seqA = trigger;
+        seqB = barrier;
+        lastTradePair = [seqA, seqB];
+        confirmedChain = null;
         appendLogLine(
-          `[Recovery] Digit ${d} found → DIGITDIFF barrier=${b}`,
+          `[Recovery] Digit ${d} found → DIGITDIFF barrier=${barrier}`,
           "#22c55e"
         );
-        placeTrade(b);
+        placeTrade(barrier);
       }
       return;
     }
@@ -555,10 +570,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 recoveryMode = false;
                 recoveryPair = null;
                 lastTradePair = null;
-                recoveryTripleScanMode = false;
-                pairCounts = {};
-                confirmedRecoveryPair = null;
-                prevRecoveryDigit = null;
+                recoveryChainScanMode = false;
+                lastSeenConsPair = null;
+                confirmedChain = null;
+                prevChainDigit = null;
 
                 recoveryLoss = 0;
                 currentStake = 0;
@@ -570,19 +585,19 @@ document.addEventListener("DOMContentLoaded", () => {
                 );
                 resetSequence(null);
               } else {
-                // LOSS — enter triple-pair recovery scan
+                // LOSS — enter chained-pair recovery scan
                 recoveryMode = true;
-                recoveryTripleScanMode = true;
-                pairCounts = {};
-                confirmedRecoveryPair = null;
-                prevRecoveryDigit = null;
+                recoveryChainScanMode = true;
+                lastSeenConsPair = null;
+                confirmedChain = null;
+                prevChainDigit = null;
                 recoveryPair = null;
 
                 recoveryLoss += Math.abs(pnl);
                 ladder += 1;
                 const nextStake = stake();
                 appendLogLine(
-                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)} → scanning for triple consecutive pair`,
+                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)} → scanning for chain pair pattern`,
                   "red"
                 );
                 resetSequence(null);
