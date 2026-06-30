@@ -62,7 +62,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // ── NEW: chained-pair recovery state ─────────────────────────────────────
   // Recovery logic:
   //   Phase 1 — scan for two consecutive pairs that chain: [a,b] then [b,c]
-  //             e.g. [6,7]→[7,8]  or  [2,3]→[3,4]  or  [7,8]→[8,9]
+  //             e.g. [6,7] → [7,8]  or  [2,3] → [3,4]  or  [7,8] → [8,9]
   //   Phase 2 — wait for digit c to appear, then trade DIGITDIFF barrier=(c+1)%10
   //
   let recoveryChainScanMode = false; // true while scanning for the chained pair
@@ -331,12 +331,17 @@ document.addEventListener("DOMContentLoaded", () => {
               "#f59e0b"
             );
           } else {
-            // Store this pair and keep scanning for the chain
+            // Store this pair and keep scanning for the chain.
+            // Reset prevChainDigit so digit b cannot immediately become
+            // the start of the next pair (prevents 1,2,3 being read as
+            // [1,2]→[2,3] — the two pairs must be distinct tick events).
             lastSeenConsPair = [a, b];
+            prevChainDigit = null;
             appendLogLine(
               `[Recovery scan] Pair [${a},${b}] stored, awaiting chain...`,
               "#f59e0b"
             );
+            return;
           }
         }
       }
