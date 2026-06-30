@@ -33,6 +33,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let account = "demo";
   demoBtn.classList.add("active");
+
   let ws = null;
   let running = false;
   let lastPayoutRatio = null;
@@ -47,22 +48,17 @@ document.addEventListener("DOMContentLoaded", () => {
   let proposalAttempt = 0;
   let activeContractId = null;
 
-  // ── Strategy state ──────────────────────────────────────────────────────────
-  // When set, the bot only looks for this specific A,B pair next.
-  // null = open scan (any valid pair).
-  let targetPair = null;    // e.g. [1, 2]
-
-  // Phase tracking within a sequence
-  // "scan_ab" → waiting to see A then B consecutively
-  // "scan_x"  → A,B seen; now waiting for x (0-8, not 9)
-  //             trade fires immediately: barrier = x+1 (that's y)
+  let targetPair = null;
   let phase = "scan_ab";
   let seqA = null;
   let seqB = null;
-  let settlementDigit = null;  // digit of the first tick after buy — the true settlement digit
-  let captureNextTick = false; // when true, the next tick is the settlement tick
+  let settlementDigit = null;
+  let captureNextTick = false;
 
-  // ── Log / tick buffering ────────────────────────────────────────────────────
+  let recoveryMode = false;
+  let recoveryPair = null;
+  let lastTradePair = null;
+
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
   const TICK_BATCH_LIMIT = 200;
@@ -79,10 +75,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     logEl.scrollTop = logEl.scrollHeight;
     console.log(message);
-  }
-
-  function log(message, color = "#fff") {
-    appendLogLine(message, color);
   }
 
   function startTickFlush() {
@@ -136,23 +128,12 @@ document.addEventListener("DOMContentLoaded", () => {
     return Number(baseStake.toFixed(2));
   }
 
-  // ── Strategy helpers ────────────────────────────────────────────────────────
-
-  /**
-   * Given a result digit (the last digit of the settled contract price),
-   * derive the next target pair.
-   * Special rule: digit 9 → next pair is [0, 1].
-   */
   function nextPairFromResultDigit(digit) {
     if (digit === 9) return [0, 1];
     if (digit >= 0 && digit <= 8) return [digit, digit + 1];
-    return null; // shouldn't happen
+    return null;
   }
 
-  /**
-   * Reset sequence scan but keep the martingale state intact.
-   * If nextTarget is provided, restrict the next scan to that pair.
-   */
   function resetSequence(nextTarget = null) {
     phase = "scan_ab";
     seqA = null;
@@ -163,15 +144,23 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalVariants = null;
     proposalAttempt = 0;
     activeContractId = null;
-    targetPair = nextTarget;
 
-    if (nextTarget) {
+    if (recoveryMode && recoveryPair) {
+      targetPair = recoveryPair;
       appendLogLine(
-        `Next scan: looking for pair [${nextTarget[0]},${nextTarget[1]}]`,
-        "#a78bfa"
+        `Recovery mode: looking for pair [${recoveryPair[0]},${recoveryPair[1]}]`,
+        "#f59e0b"
       );
     } else {
-      appendLogLine("Next scan: open (any consecutive pair)", "#a78bfa");
+      targetPair = nextTarget;
+      if (nextTarget) {
+        appendLogLine(
+          `Next scan: looking for pair [${nextTarget[0]},${nextTarget[1]}]`,
+          "#a78bfa"
+        );
+      } else {
+        appendLogLine("Next scan: open (any consecutive pair)", "#a78bfa");
+      }
     }
   }
 
@@ -184,9 +173,10 @@ document.addEventListener("DOMContentLoaded", () => {
     lastBalance = null;
     ladder = 0;
     tickBuffer.length = 0;
+    recoveryMode = false;
+    recoveryPair = null;
+    lastTradePair = null;
   }
-
-  // ── Proposal / trade plumbing ───────────────────────────────────────────────
 
   function buildProposalVariants(barrier) {
     const amount = stake();
@@ -262,6 +252,9 @@ document.addEventListener("DOMContentLoaded", () => {
       appendLogLine("Already waiting for a proposal.", "orange");
       return;
     }
+
+    lastTradePair = (seqA !== null && seqB !== null) ? [seqA, seqB] : null;
+
     proposalVariants = buildProposalVariants(barrier);
     proposalAttempt = 0;
     waitingProposal = true;
@@ -271,8 +264,6 @@ document.addEventListener("DOMContentLoaded", () => {
     );
     sendNextProposalVariant();
   }
-
-  // ── Tick / sequence engine ──────────────────────────────────────────────────
 
   function onTick(price) {
     if (!running || paused) return;
@@ -284,27 +275,20 @@ document.addEventListener("DOMContentLoaded", () => {
     tickBuffer.push({ price, digit: d });
     startTickFlush();
 
-    // Capture the very first tick after buy is confirmed — that IS the settlement tick
     if (captureNextTick) {
       settlementDigit = d;
       captureNextTick = false;
     }
 
-    // Don't process sequence logic while a trade is in flight
     if (waitingProposal || activeContractId) return;
 
-    // ── Phase: scan_ab ────────────────────────────────────────────────────────
-    // Looking for two consecutive digits (A, B) where B = A+1, A in 0-8.
-    // If targetPair is set we only accept that specific pair.
     if (phase === "scan_ab") {
       if (seqA === null) {
-        // Need the first digit of a candidate pair
         if (targetPair) {
           if (d === targetPair[0]) {
             seqA = d;
           }
         } else {
-          // Any digit 0-8 can start a pair
           if (d >= 0 && d <= 8) {
             seqA = d;
           }
@@ -312,11 +296,8 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
-      // We have seqA; check if d is seqA+1 (i.e. B = A+1)
       if (d === seqA + 1) {
-        // Valid pair!
         if (targetPair && (seqA !== targetPair[0] || d !== targetPair[1])) {
-          // Doesn't match required pair — restart candidate
           seqA = (d >= 0 && d <= 8) ? d : null;
           return;
         }
@@ -324,8 +305,6 @@ document.addEventListener("DOMContentLoaded", () => {
         phase = "scan_x";
         appendLogLine(`Pair [${seqA},${seqB}] found → waiting for x`, "#38bdf8");
       } else {
-        // Not consecutive; reset candidate
-        // d itself could be the start of a new pair
         if (targetPair) {
           seqA = (d === targetPair[0]) ? d : null;
         } else {
@@ -335,9 +314,6 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // ── Phase: scan_x ────────────────────────────────────────────────────────
-    // Waiting for x: any digit 0-8 (digit 9 invalidates → restart from scan_ab).
-    // Once x is seen, fire trade immediately — barrier = x+1 (that's y).
     if (phase === "scan_x") {
       if (d === 9) {
         appendLogLine("x=9 is invalid; restarting pair scan.", "red");
@@ -345,17 +321,14 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
       const x = d;
-      const barrier = x + 1; // y = x+1
+      const barrier = x + 1;
       appendLogLine(
         `Pattern [${seqA},${seqB},${x} ddf ${barrier}] → BUY DIGITDIFF barrier=${barrier}`,
         "#22c55e"
       );
       placeTrade(barrier);
-      // Sequence resets after contract settles (in proposal_open_contract handler)
     }
   }
-
-  // ── WebSocket / connection ──────────────────────────────────────────────────
 
   async function connect() {
     resetSequence(null);
@@ -477,7 +450,7 @@ document.addEventListener("DOMContentLoaded", () => {
           case "buy":
             activeContractId = payload.buy?.contract_id || null;
             settlementDigit = null;
-            captureNextTick = true; // next tick = settlement tick for 1-tick DIGITDIFF
+            captureNextTick = true;
             if (activeContractId) {
               sendMessage({
                 proposal_open_contract: 1,
@@ -506,37 +479,37 @@ document.addEventListener("DOMContentLoaded", () => {
               totalProfit += pnl;
               if (profitEl) profitEl.textContent = totalProfit.toFixed(2);
 
-              // Get result digit: settlementDigit = first tick after buy (the true settlement tick).
-              // Fall back to exit_tick from contract if settlementDigit wasn't captured.
               const exitPrice = contract.exit_tick || contract.exit_tick_display_value;
               const exitDigit = exitPrice !== undefined ? digitFromPrice(exitPrice) : null;
               const resultDigit = settlementDigit !== null ? settlementDigit : exitDigit;
 
-              // Compute the next target pair from the result digit
-              const nextTarget = resultDigit !== null
-                ? nextPairFromResultDigit(resultDigit)
-                : null;
-
               if (pnl >= 0) {
+                recoveryMode = false;
+                recoveryPair = null;
+                lastTradePair = null;
+
                 recoveryLoss = 0;
                 currentStake = 0;
                 ladder = 0;
                 appendLogLine(
                   `WIN +${pnl.toFixed(2)}` +
-                  (resultDigit !== null ? ` (digit=${resultDigit})` : "") +
-                  (nextTarget ? ` → next pair [${nextTarget[0]},${nextTarget[1]}]` : ""),
+                  (resultDigit !== null ? ` (digit=${resultDigit})` : ""),
                   "lime"
                 );
+                resetSequence(null);
               } else {
+                recoveryMode = true;
+                recoveryPair = lastTradePair || (seqA !== null && seqB !== null ? [seqA, seqB] : null);
+
                 recoveryLoss += Math.abs(pnl);
                 ladder += 1;
                 const nextStake = stake();
                 appendLogLine(
                   `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)}` +
-                  (resultDigit !== null ? ` (digit=${resultDigit})` : "") +
-                  (nextTarget ? ` → next pair [${nextTarget[0]},${nextTarget[1]}]` : ""),
+                  (recoveryPair ? ` → retry pair [${recoveryPair[0]},${recoveryPair[1]}]` : ""),
                   "red"
                 );
+                resetSequence(recoveryPair);
               }
 
               if (levelEl) levelEl.textContent = ladder;
@@ -544,9 +517,6 @@ document.addEventListener("DOMContentLoaded", () => {
               if (ws && ws.readyState === WebSocket.OPEN) {
                 sendMessage({ balance: 1 });
               }
-
-              // Reset sequence, feeding the next target pair
-              resetSequence(nextTarget);
             }
             break;
           }
@@ -570,8 +540,6 @@ document.addEventListener("DOMContentLoaded", () => {
       console.error(err);
     }
   }
-
-  // ── Button handlers ─────────────────────────────────────────────────────────
 
   startBtn.onclick = () => {
     running = true;
