@@ -19,7 +19,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const tokenInput = $("tokenInput");
 
   const SYMBOL = "R_100";
-  const DEFAULT_PAYOUT_RATIO = 11.57;
+  // Fixed stake-switch multipliers derived from 0.35 → 4.05 → 52.63
+  const SWITCH_MULTIPLIERS = [1, 4.05 / 0.35, 52.63 / 0.35]; // [1, ~11.57, ~150.37]
 
   const savedToken = localStorage.getItem("access_token");
   if (tokenInput && savedToken) {
@@ -33,7 +34,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let account = "demo";
   demoBtn.classList.add("active");
-
   let ws = null;
   let running = false;
   let lastPayoutRatio = null;
@@ -47,18 +47,32 @@ document.addEventListener("DOMContentLoaded", () => {
   let proposalVariants = null;
   let proposalAttempt = 0;
   let activeContractId = null;
+  let probing = false;       // true while waiting for the live-payout probe proposal
+  let pendingBarrier = null; // barrier saved during probe, used for real proposal
 
-  let targetPair = null;
+  // ── Stake-switch mode ───────────────────────────────────────────────────────
+  // "switch" → step through preset stake levels on each loss, reset to 0 on win
+  // "martingale" → calculate exact recovery stake from payout ratio
+  let stakeMode = "switch";
+  let stakeLevelIdx = 0;
+  let stakeLevelsInput = null;  // DOM ref, created by createSwitchUI()
+
+  // ── Strategy state ──────────────────────────────────────────────────────────
+  // When set, the bot only looks for this specific A,B pair next.
+  // null = open scan (any valid pair).
+  let targetPair = null;    // e.g. [1, 2]
+
+  // Phase tracking within a sequence
+  // "scan_ab" → waiting to see A then B consecutively
+  // "scan_x"  → A,B seen; now waiting for x (0-8, not 9)
+  //             trade fires immediately: barrier = x+1 (that's y)
   let phase = "scan_ab";
   let seqA = null;
   let seqB = null;
-  let settlementDigit = null;
-  let captureNextTick = false;
+  let settlementDigit = null;  // digit of the first tick after buy — the true settlement digit
+  let captureNextTick = false; // when true, the next tick is the settlement tick
 
-  let recoveryMode = false;
-  let recoveryPair = null;
-  let lastTradePair = null;
-
+  // ── Log / tick buffering ────────────────────────────────────────────────────
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
   const TICK_BATCH_LIMIT = 200;
@@ -75,6 +89,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     logEl.scrollTop = logEl.scrollHeight;
     console.log(message);
+  }
+
+  function log(message, color = "#fff") {
+    appendLogLine(message, color);
   }
 
   function startTickFlush() {
@@ -116,24 +134,130 @@ document.addEventListener("DOMContentLoaded", () => {
     if (balanceEl) balanceEl.textContent = value.toFixed(2);
   }
 
-  function stake() {
-    const baseStake = Number(stakeInput.value || 0.35);
-    const payoutRatio = lastPayoutRatio && lastPayoutRatio > 1.01
-      ? lastPayoutRatio
-      : DEFAULT_PAYOUT_RATIO;
-    if (recoveryLoss > 0 && payoutRatio > 1.01) {
-      const neededStake = recoveryLoss / (payoutRatio - 1);
-      return Number(Math.max(baseStake, neededStake).toFixed(2));
-    }
-    return Number(baseStake.toFixed(2));
+  function parsedStakeLevels() {
+    // Auto-scale the fixed multipliers from the user's base stake input
+    const base = Number(stakeInput ? stakeInput.value : 0) || 0.35;
+    return SWITCH_MULTIPLIERS.map(m => Number((base * m).toFixed(2)));
   }
 
+  function currentSwitchStake() {
+    const levels = parsedStakeLevels();
+    return levels[Math.min(stakeLevelIdx, levels.length - 1)];
+  }
+
+  function baseStakeAmount() {
+    if (stakeMode === "switch") return currentSwitchStake();
+    return Number(stakeInput.value || 0.35);
+  }
+
+  function recoveryStake(liveRatio) {
+    if (stakeMode === "switch") {
+      // No martingale math — just the next preset stake level
+      return baseStakeAmount();
+    }
+    const base = Number(stakeInput.value || 0.35);
+    if (recoveryLoss > 0 && liveRatio > 1.01) {
+      const needed = recoveryLoss / (liveRatio - 1);
+      return Number(Math.max(base, needed).toFixed(2));
+    }
+    return Number(base.toFixed(2));
+  }
+
+  // ── Switch-mode UI (injected dynamically) ───────────────────────────────────
+  function createSwitchUI() {
+    if (!stakeInput) return;
+    const container = stakeInput.parentElement;
+    if (!container) return;
+
+    // ── Mode toggle button ──
+    const modeBtn = document.createElement("button");
+    modeBtn.id = "stakeModeBtn";
+    modeBtn.style.cssText =
+      "display:block;width:100%;margin-bottom:8px;padding:6px 10px;" +
+      "border-radius:6px;border:none;cursor:pointer;font-weight:bold;" +
+      "background:#7c3aed;color:#fff;font-size:13px;";
+    modeBtn.textContent = "⚡ MODE: STAKE SWITCH";
+
+    // ── Auto-levels preview (read-only, shown in switch mode) ──
+    const levelsRow = document.createElement("div");
+    levelsRow.id = "stakeLevelsRow";
+    levelsRow.style.cssText = "margin-bottom:8px;";
+
+    const levelsLbl = document.createElement("div");
+    levelsLbl.style.cssText = "color:#94a3b8;font-size:11px;margin-bottom:4px;";
+    levelsLbl.textContent = "Auto stake ladder (base × multipliers):";
+
+    const levelsDisplay = document.createElement("div");
+    levelsDisplay.id = "levelsDisplay";
+    levelsDisplay.style.cssText =
+      "padding:5px 8px;border-radius:6px;border:1px solid #374151;" +
+      "background:#111827;color:#38bdf8;font-size:12px;font-weight:bold;" +
+      "letter-spacing:0.5px;";
+
+    function refreshLevelsDisplay() {
+      const levels = parsedStakeLevels();
+      levelsDisplay.textContent = levels
+        .map((v, i) => `Lvl ${i + 1}: $${v}`)
+        .join("  →  ");
+    }
+
+    levelsRow.appendChild(levelsLbl);
+    levelsRow.appendChild(levelsDisplay);
+
+    // Re-render preview whenever the base stake input changes
+    stakeInput.addEventListener("input", () => {
+      if (stakeMode === "switch") refreshLevelsDisplay();
+    });
+
+    // hide/show elements based on mode
+    function refreshModeUI() {
+      if (stakeMode === "switch") {
+        modeBtn.textContent = "⚡ MODE: STAKE SWITCH";
+        modeBtn.style.background = "#7c3aed";
+        levelsRow.style.display = "";
+        if (container.style) container.style.display = ""; // keep base stake visible
+        refreshLevelsDisplay();
+      } else {
+        modeBtn.textContent = "📈 MODE: MARTINGALE";
+        modeBtn.style.background = "#059669";
+        levelsRow.style.display = "none";
+        if (container.style) container.style.display = "";
+      }
+    }
+
+    modeBtn.onclick = () => {
+      stakeMode = stakeMode === "switch" ? "martingale" : "switch";
+      stakeLevelIdx = 0;
+      recoveryLoss = 0;
+      refreshModeUI();
+      appendLogLine(
+        `Stake mode → ${stakeMode === "switch" ? "STAKE SWITCH" : "MARTINGALE"}`,
+        "#a78bfa"
+      );
+    };
+
+    container.insertAdjacentElement("beforebegin", levelsRow);
+    container.insertAdjacentElement("beforebegin", modeBtn);
+    refreshModeUI();
+  }
+
+  // ── Strategy helpers ────────────────────────────────────────────────────────
+
+  /**
+   * Given a result digit (the last digit of the settled contract price),
+   * derive the next target pair.
+   * Special rule: digit 9 → next pair is [0, 1].
+   */
   function nextPairFromResultDigit(digit) {
     if (digit === 9) return [0, 1];
     if (digit >= 0 && digit <= 8) return [digit, digit + 1];
-    return null;
+    return null; // shouldn't happen
   }
 
+  /**
+   * Reset sequence scan but keep the martingale state intact.
+   * If nextTarget is provided, restrict the next scan to that pair.
+   */
   function resetSequence(nextTarget = null) {
     phase = "scan_ab";
     seqA = null;
@@ -144,23 +268,17 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalVariants = null;
     proposalAttempt = 0;
     activeContractId = null;
+    probing = false;
+    pendingBarrier = null;
+    targetPair = nextTarget;
 
-    if (recoveryMode && recoveryPair) {
-      targetPair = recoveryPair;
+    if (nextTarget) {
       appendLogLine(
-        `Recovery mode: looking for pair [${recoveryPair[0]},${recoveryPair[1]}]`,
-        "#f59e0b"
+        `Next scan: looking for pair [${nextTarget[0]},${nextTarget[1]}]`,
+        "#a78bfa"
       );
     } else {
-      targetPair = nextTarget;
-      if (nextTarget) {
-        appendLogLine(
-          `Next scan: looking for pair [${nextTarget[0]},${nextTarget[1]}]`,
-          "#a78bfa"
-        );
-      } else {
-        appendLogLine("Next scan: open (any consecutive pair)", "#a78bfa");
-      }
+      appendLogLine("Next scan: open (any consecutive pair)", "#a78bfa");
     }
   }
 
@@ -172,14 +290,13 @@ document.addEventListener("DOMContentLoaded", () => {
     currentStake = 0;
     lastBalance = null;
     ladder = 0;
+    stakeLevelIdx = 0;
     tickBuffer.length = 0;
-    recoveryMode = false;
-    recoveryPair = null;
-    lastTradePair = null;
   }
 
-  function buildProposalVariants(barrier) {
-    const amount = stake();
+  // ── Proposal / trade plumbing ───────────────────────────────────────────────
+
+  function buildProposalVariants(barrier, amount) {
     const base = {
       proposal: 1,
       contract_type: "DIGITDIFF",
@@ -252,18 +369,18 @@ document.addEventListener("DOMContentLoaded", () => {
       appendLogLine("Already waiting for a proposal.", "orange");
       return;
     }
-
-    lastTradePair = (seqA !== null && seqB !== null) ? [seqA, seqB] : null;
-
-    proposalVariants = buildProposalVariants(barrier);
+    // Always probe with base stake first to get the live payout ratio.
+    // The proposal handler uses it to calculate the correct recovery stake.
+    pendingBarrier = barrier;
+    probing = true;
+    proposalVariants = buildProposalVariants(barrier, baseStakeAmount());
     proposalAttempt = 0;
     waitingProposal = true;
-    appendLogLine(
-      `TRADE → DIGITDIFF barrier=${barrier} stake=${proposalVariants[0].amount}`,
-      "lime"
-    );
+    appendLogLine(`Probing live payout ratio → DIGITDIFF barrier=${barrier}`, "#38bdf8");
     sendNextProposalVariant();
   }
+
+  // ── Tick / sequence engine ──────────────────────────────────────────────────
 
   function onTick(price) {
     if (!running || paused) return;
@@ -275,20 +392,27 @@ document.addEventListener("DOMContentLoaded", () => {
     tickBuffer.push({ price, digit: d });
     startTickFlush();
 
+    // Capture the very first tick after buy is confirmed — that IS the settlement tick
     if (captureNextTick) {
       settlementDigit = d;
       captureNextTick = false;
     }
 
+    // Don't process sequence logic while a trade is in flight
     if (waitingProposal || activeContractId) return;
 
+    // ── Phase: scan_ab ────────────────────────────────────────────────────────
+    // Looking for two consecutive digits (A, B) where B = A+1, A in 0-8.
+    // If targetPair is set we only accept that specific pair.
     if (phase === "scan_ab") {
       if (seqA === null) {
+        // Need the first digit of a candidate pair
         if (targetPair) {
           if (d === targetPair[0]) {
             seqA = d;
           }
         } else {
+          // Any digit 0-8 can start a pair
           if (d >= 0 && d <= 8) {
             seqA = d;
           }
@@ -296,8 +420,11 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
+      // We have seqA; check if d is seqA+1 (i.e. B = A+1)
       if (d === seqA + 1) {
+        // Valid pair!
         if (targetPair && (seqA !== targetPair[0] || d !== targetPair[1])) {
+          // Doesn't match required pair — restart candidate
           seqA = (d >= 0 && d <= 8) ? d : null;
           return;
         }
@@ -305,6 +432,8 @@ document.addEventListener("DOMContentLoaded", () => {
         phase = "scan_x";
         appendLogLine(`Pair [${seqA},${seqB}] found → waiting for x`, "#38bdf8");
       } else {
+        // Not consecutive; reset candidate
+        // d itself could be the start of a new pair
         if (targetPair) {
           seqA = (d === targetPair[0]) ? d : null;
         } else {
@@ -314,6 +443,9 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    // ── Phase: scan_x ────────────────────────────────────────────────────────
+    // Waiting for x: any digit 0-8 (digit 9 invalidates → restart from scan_ab).
+    // Once x is seen, fire trade immediately — barrier = x+1 (that's y).
     if (phase === "scan_x") {
       if (d === 9) {
         appendLogLine("x=9 is invalid; restarting pair scan.", "red");
@@ -321,14 +453,17 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
       const x = d;
-      const barrier = x + 1;
+      const barrier = x + 1; // y = x+1
       appendLogLine(
         `Pattern [${seqA},${seqB},${x} ddf ${barrier}] → BUY DIGITDIFF barrier=${barrier}`,
         "#22c55e"
       );
       placeTrade(barrier);
+      // Sequence resets after contract settles (in proposal_open_contract handler)
     }
   }
+
+  // ── WebSocket / connection ──────────────────────────────────────────────────
 
   async function connect() {
     resetSequence(null);
@@ -433,24 +568,71 @@ document.addEventListener("DOMContentLoaded", () => {
               appendLogLine("Proposal response missing payload.", "red");
               break;
             }
-            currentStake = Number(payload.proposal.ask_price || 0);
-            if (payload.proposal.payout && currentStake > 0) {
-              lastPayoutRatio = Number(payload.proposal.payout / currentStake);
-              appendLogLine(
-                `Payout ratio set to ${lastPayoutRatio.toFixed(2)}`,
-                "#38bdf8"
-              );
+            {
+              const probeAskPrice = Number(payload.proposal.ask_price || 0);
+              const probePayout   = Number(payload.proposal.payout   || 0);
+
+              // Always update live payout ratio from this proposal
+              if (probePayout > 0 && probeAskPrice > 0) {
+                lastPayoutRatio = probePayout / probeAskPrice;
+                appendLogLine(
+                  `Live payout ratio: ${lastPayoutRatio.toFixed(4)} ` +
+                  `(payout=${probePayout} / stake=${probeAskPrice})`,
+                  "#38bdf8"
+                );
+              }
+
+              if (probing) {
+                probing = false;
+
+                if (stakeMode === "switch") {
+                  // Stake-switch mode: probe stake IS the trade stake — buy directly
+                  const levels = parsedStakeLevels();
+                  const levelLabel = `Lvl ${stakeLevelIdx + 1}/${levels.length} ($${currentSwitchStake()})`;
+                  currentStake = probeAskPrice;
+                  appendLogLine(
+                    `TRADE → DIGITDIFF barrier=${pendingBarrier} stake=${currentStake} [${levelLabel}]`,
+                    "lime"
+                  );
+                  sendMessage({ buy: payload.proposal.id, price: payload.proposal.ask_price });
+                } else {
+                  // Martingale mode: calculate correct recovery stake from live ratio
+                  const correctStake = recoveryStake(lastPayoutRatio);
+                  if (Math.abs(correctStake - probeAskPrice) < 0.01) {
+                    currentStake = probeAskPrice;
+                    appendLogLine(
+                      `TRADE → DIGITDIFF barrier=${pendingBarrier} stake=${currentStake}`,
+                      "lime"
+                    );
+                    sendMessage({ buy: payload.proposal.id, price: payload.proposal.ask_price });
+                  } else {
+                    appendLogLine(
+                      `Recovery stake=${correctStake} (probe was ${probeAskPrice}) → re-requesting proposal`,
+                      "orange"
+                    );
+                    currentStake = correctStake;
+                    proposalVariants = buildProposalVariants(pendingBarrier, correctStake);
+                    proposalAttempt = 0;
+                    waitingProposal = true;
+                    sendNextProposalVariant();
+                  }
+                }
+              } else {
+                // Real (non-probe) proposal in martingale mode — buy it
+                currentStake = probeAskPrice;
+                appendLogLine(
+                  `TRADE → DIGITDIFF barrier=${pendingBarrier} stake=${currentStake}`,
+                  "lime"
+                );
+                sendMessage({ buy: payload.proposal.id, price: payload.proposal.ask_price });
+              }
             }
-            sendMessage({
-              buy: payload.proposal.id,
-              price: payload.proposal.ask_price
-            });
             break;
 
           case "buy":
             activeContractId = payload.buy?.contract_id || null;
             settlementDigit = null;
-            captureNextTick = true;
+            captureNextTick = true; // next tick = settlement tick for 1-tick DIGITDIFF
             if (activeContractId) {
               sendMessage({
                 proposal_open_contract: 1,
@@ -479,37 +661,58 @@ document.addEventListener("DOMContentLoaded", () => {
               totalProfit += pnl;
               if (profitEl) profitEl.textContent = totalProfit.toFixed(2);
 
+              // Get result digit: settlementDigit = first tick after buy (the true settlement tick).
+              // Fall back to exit_tick from contract if settlementDigit wasn't captured.
               const exitPrice = contract.exit_tick || contract.exit_tick_display_value;
               const exitDigit = exitPrice !== undefined ? digitFromPrice(exitPrice) : null;
               const resultDigit = settlementDigit !== null ? settlementDigit : exitDigit;
 
-              if (pnl >= 0) {
-                recoveryMode = false;
-                recoveryPair = null;
-                lastTradePair = null;
+              // Compute the next target pair from the result digit
+              const nextTarget = resultDigit !== null
+                ? nextPairFromResultDigit(resultDigit)
+                : null;
 
+              if (pnl >= 0) {
+                // ── WIN ──
                 recoveryLoss = 0;
                 currentStake = 0;
                 ladder = 0;
+                if (stakeMode === "switch") {
+                  stakeLevelIdx = 0; // reset to first level
+                }
                 appendLogLine(
                   `WIN +${pnl.toFixed(2)}` +
-                  (resultDigit !== null ? ` (digit=${resultDigit})` : ""),
+                  (stakeMode === "switch" ? " → stake reset to Lvl 1" : "") +
+                  (resultDigit !== null ? ` (digit=${resultDigit})` : "") +
+                  (nextTarget ? ` → next pair [${nextTarget[0]},${nextTarget[1]}]` : ""),
                   "lime"
                 );
-                resetSequence(null);
               } else {
-                recoveryMode = true;
-                recoveryPair = lastTradePair || (seqA !== null && seqB !== null ? [seqA, seqB] : null);
-
-                recoveryLoss += Math.abs(pnl);
+                // ── LOSS ──
                 ladder += 1;
-                const nextStake = stake();
-                appendLogLine(
-                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)}` +
-                  (recoveryPair ? ` → retry pair [${recoveryPair[0]},${recoveryPair[1]}]` : ""),
-                  "red"
-                );
-                resetSequence(recoveryPair);
+                if (stakeMode === "switch") {
+                  const levels = parsedStakeLevels();
+                  const prevIdx = stakeLevelIdx;
+                  stakeLevelIdx = Math.min(stakeLevelIdx + 1, levels.length - 1);
+                  const nextSwitchStake = currentSwitchStake();
+                  const atMax = stakeLevelIdx === levels.length - 1;
+                  appendLogLine(
+                    `LOSS ${pnl.toFixed(2)} → step Lvl ${prevIdx + 1}→${stakeLevelIdx + 1} | next stake=$${nextSwitchStake}` +
+                    (atMax ? " [MAX LEVEL]" : "") +
+                    (resultDigit !== null ? ` (digit=${resultDigit})` : "") +
+                    (nextTarget ? ` → next pair [${nextTarget[0]},${nextTarget[1]}]` : ""),
+                    "red"
+                  );
+                } else {
+                  recoveryLoss += Math.abs(pnl);
+                  const nextStake = recoveryStake(lastPayoutRatio);
+                  appendLogLine(
+                    `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake≈${nextStake.toFixed(2)} (live ratio will be re-probed)` +
+                    (resultDigit !== null ? ` (digit=${resultDigit})` : "") +
+                    (nextTarget ? ` → next pair [${nextTarget[0]},${nextTarget[1]}]` : ""),
+                    "red"
+                  );
+                }
               }
 
               if (levelEl) levelEl.textContent = ladder;
@@ -517,6 +720,9 @@ document.addEventListener("DOMContentLoaded", () => {
               if (ws && ws.readyState === WebSocket.OPEN) {
                 sendMessage({ balance: 1 });
               }
+
+              // Reset sequence, feeding the next target pair
+              resetSequence(nextTarget);
             }
             break;
           }
@@ -540,6 +746,11 @@ document.addEventListener("DOMContentLoaded", () => {
       console.error(err);
     }
   }
+
+  // ── Initialise switch UI ────────────────────────────────────────────────────
+  createSwitchUI();
+
+  // ── Button handlers ─────────────────────────────────────────────────────────
 
   startBtn.onclick = () => {
     running = true;
