@@ -52,13 +52,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let stakeMode = "switch";
   let stakeLevelIdx = 0;
-  let stakeLevelsInput = null;
 
   // Recovery behavior
-  let targetPair = null;
-  let recoveryMode = false;
-  let recoveryPair = null;
-  let lastTradePair = null;
+  let targetPair = null;     // null = open scan, otherwise restrict to this pair
+  let recoveryMode = false;  // true after loss, false after win
+  let recoveryPair = null;   // the pair to retry after a loss
+  let lastTradePair = null;  // the pair that triggered the last trade
 
   let phase = "scan_ab";
   let seqA = null;
@@ -82,10 +81,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     logEl.scrollTop = logEl.scrollHeight;
     console.log(message);
-  }
-
-  function log(message, color = "#fff") {
-    appendLogLine(message, color);
   }
 
   function startTickFlush() {
@@ -224,13 +219,7 @@ document.addEventListener("DOMContentLoaded", () => {
     refreshModeUI();
   }
 
-  function nextPairFromResultDigit(digit) {
-    if (digit === 9) return [0, 1];
-    if (digit >= 0 && digit <= 8) return [digit, digit + 1];
-    return null;
-  }
-
-  function resetSequence(nextTarget = null) {
+  function resetSequence() {
     phase = "scan_ab";
     seqA = null;
     seqB = null;
@@ -243,10 +232,11 @@ document.addEventListener("DOMContentLoaded", () => {
     probing = false;
     pendingBarrier = null;
 
+    // Open scan by default
     if (recoveryMode && recoveryPair) {
       targetPair = recoveryPair;
     } else {
-      targetPair = nextTarget;
+      targetPair = null;
     }
 
     if (targetPair) {
@@ -260,7 +250,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function fullReset() {
-    resetSequence(null);
+    resetSequence();
     totalProfit = 0;
     recoveryMode = false;
     recoveryPair = null;
@@ -409,7 +399,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (phase === "scan_x") {
       if (d === 9) {
         appendLogLine("x=9 is invalid; restarting pair scan.", "red");
-        resetSequence(targetPair);
+        resetSequence();
         return;
       }
 
@@ -427,7 +417,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function connect() {
-    resetSequence(null);
+    resetSequence();
 
     if (ws) ws.close();
 
@@ -619,26 +609,24 @@ document.addEventListener("DOMContentLoaded", () => {
               totalProfit += pnl;
               if (profitEl) profitEl.textContent = totalProfit.toFixed(2);
 
-              const exitPrice = contract.exit_tick || contract.exit_tick_display_value;
-              const exitDigit = exitPrice !== undefined ? digitFromPrice(exitPrice) : null;
-              const resultDigit = settlementDigit !== null ? settlementDigit : exitDigit;
-              const nextTarget = resultDigit !== null ? nextPairFromResultDigit(resultDigit) : null;
-
               if (pnl >= 0) {
+                // Win: return to open scan
                 recoveryMode = false;
                 recoveryPair = null;
                 lastTradePair = null;
-                recoveryLoss = 0;
-                currentStake = 0;
+                targetPair = null;
+
                 ladder = 0;
                 if (stakeMode === "switch") {
                   stakeLevelIdx = 0;
                 }
+
                 appendLogLine(
                   `WIN +${pnl.toFixed(2)} → returning to open scan`,
                   "lime"
                 );
               } else {
+                // Loss: keep retrying the same pair
                 recoveryMode = true;
                 recoveryPair = lastTradePair || targetPair || null;
                 targetPair = recoveryPair;
@@ -650,6 +638,7 @@ document.addEventListener("DOMContentLoaded", () => {
                   stakeLevelIdx = Math.min(stakeLevelIdx + 1, levels.length - 1);
                   const nextSwitchStake = currentSwitchStake();
                   const atMax = stakeLevelIdx === levels.length - 1;
+
                   appendLogLine(
                     `LOSS ${pnl.toFixed(2)} → step Lvl ${prevIdx + 1}→${stakeLevelIdx + 1} | next stake=$${nextSwitchStake}` +
                     (atMax ? " [MAX LEVEL]" : ""),
@@ -680,7 +669,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 sendMessage({ balance: 1 });
               }
 
-              resetSequence(null);
+              resetSequence();
             }
             break;
           }
