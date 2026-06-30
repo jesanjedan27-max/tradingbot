@@ -418,9 +418,21 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!accessToken) return;
 
     try {
+      appendLogLine("Connecting to Deriv WebSocket...", "yellow");
+
       ws = new WebSocket(WS_URL);
 
+      const handshakeTimeout = setTimeout(() => {
+        if (ws && ws.readyState !== WebSocket.OPEN) {
+          appendLogLine("WS handshake timed out. Check app_id, endpoint, and network.", "red");
+          if (ws.readyState === WebSocket.CONNECTING) {
+            ws.close();
+          }
+        }
+      }, 8000);
+
       ws.onopen = () => {
+        clearTimeout(handshakeTimeout);
         appendLogLine("WS connected.", "lime");
         sendMessage({ authorize: accessToken });
       };
@@ -567,12 +579,17 @@ document.addEventListener("DOMContentLoaded", () => {
       };
 
       ws.onclose = ev => {
+        clearTimeout(handshakeTimeout);
         appendLogLine(`WS closed (code ${ev.code}).`, "orange");
+        if (ev.code === 1006) {
+          appendLogLine("This usually means the handshake failed. Verify the app_id and endpoint.", "red");
+        }
         stopTickFlush();
       };
 
       ws.onerror = ev => {
-        appendLogLine("WS error.", "red");
+        clearTimeout(handshakeTimeout);
+        appendLogLine("WS error. Check app_id, endpoint, and HTTPS access.", "red");
         console.error("WebSocket error:", ev);
       };
     } catch (err) {
