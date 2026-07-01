@@ -59,16 +59,11 @@ document.addEventListener("DOMContentLoaded", () => {
   let recoveryPair = null;
   let lastTradePair = null;
 
-  // ── NEW: chained-pair recovery state ─────────────────────────────────────
-  // Recovery logic:
-  //   Phase 1 — scan for two consecutive pairs that chain: [a,b] then [b,c]
-  //             e.g. [6,7] → [7,8]  or  [2,3] → [3,4]  or  [7,8] → [8,9]
-  //   Phase 2 — wait for digit c to appear, then trade DIGITDIFF barrier=(c+1)%10
-  //
-  let recoveryChainScanMode = false; // true while scanning for the chained pair
-  let lastSeenConsPair = null;       // [a, b] — last consecutive pair seen in ticks
-  let confirmedChain = null;         // { trigger, barrier } once chain is confirmed
-  let prevChainDigit = null;         // previous tick digit, used for pair detection
+  // ── chained-pair recovery state ───────────────────────────────────────────
+  let recoveryChainScanMode = false;
+  let lastSeenConsPair = null;
+  let confirmedChain = null;
+  let prevChainDigit = null;
   // ─────────────────────────────────────────────────────────────────────────
 
   const LOG_MAX_ENTRIES = 1200;
@@ -304,14 +299,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (waitingProposal || activeContractId) return;
 
-    // ── NEW RECOVERY LOGIC ──────────────────────────────────────────────────
-    //
-    // Phase 1 — chain scan:
-    //   Watch every consecutive tick pair. When a new consecutive pair [a,b]
-    //   is seen and lastSeenConsPair[1] == a, the chain [lastSeenConsPair] →
-    //   [a,b] is confirmed. Always update lastSeenConsPair when any new
-    //   consecutive pair appears (so the most recent pair is always tracked).
-    //
+    // ── RECOVERY LOGIC ──────────────────────────────────────────────────────
     if (recoveryMode && recoveryChainScanMode) {
       if (prevChainDigit !== null) {
         const a = prevChainDigit;
@@ -320,7 +308,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (isConsPair) {
           if (lastSeenConsPair !== null && lastSeenConsPair[1] === a) {
-            // Chain confirmed: [lastSeenConsPair[0], a] → [a, b]
             const trigger = b;
             const barrier = (b + 1) % 10;
             confirmedChain = { trigger, barrier };
@@ -331,10 +318,6 @@ document.addEventListener("DOMContentLoaded", () => {
               "#f59e0b"
             );
           } else {
-            // Store this pair and keep scanning for the chain.
-            // Reset prevChainDigit so digit b cannot immediately become
-            // the start of the next pair (prevents 1,2,3 being read as
-            // [1,2]→[2,3] — the two pairs must be distinct tick events).
             lastSeenConsPair = [a, b];
             prevChainDigit = null;
             appendLogLine(
@@ -349,9 +332,6 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // Phase 2 — trigger watch:
-    //   As soon as the confirmed trigger digit appears, immediately trade.
-    //
     if (recoveryMode && confirmedChain) {
       if (d === confirmedChain.trigger) {
         const { trigger, barrier } = confirmedChain;
@@ -367,7 +347,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       return;
     }
-    // ── END NEW RECOVERY LOGIC ──────────────────────────────────────────────
+    // ── END RECOVERY LOGIC ──────────────────────────────────────────────────
 
     if (phase === "scan_ab") {
       if (seqA === null) {
@@ -551,7 +531,9 @@ document.addEventListener("DOMContentLoaded", () => {
             const contract = payload.proposal_open_contract;
             if (!contract) return;
 
-            if (profitEl) profitEl.textContent = Number(contract.profit || 0).toFixed(2);
+            // Do NOT update profitEl here — the intermediate contract.profit
+            // value before settlement is negative (shows -stake), which makes
+            // a winning trade look like a loss. Only update after is_sold.
 
             if (
               typeof contract.balance_after === "number" &&
@@ -562,6 +544,11 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             if (contract.is_sold) {
+              // CRITICAL: clear activeContractId so onTick unblocks.
+              // Without this the bot gets permanently stuck after the first
+              // trade because onTick returns early on activeContractId.
+              activeContractId = null;
+
               const pnl = Number(contract.profit || 0);
               totalProfit += pnl;
               if (profitEl) profitEl.textContent = totalProfit.toFixed(2);
