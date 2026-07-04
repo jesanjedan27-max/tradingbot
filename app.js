@@ -1,4 +1,4 @@
-// Deriv DigitDiff bot — consecutive-pair strategy with post-result chaining
+// Deriv DigitDiff bot — unified chained-pair strategy (used for both normal trading and recovery)
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -48,8 +48,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let proposalAttempt = 0;
   let activeContractId = null;
 
-  let targetPair = null;
-  let phase = "scan_ab";
   let seqA = null;
   let seqB = null;
   let settlementDigit = null;
@@ -59,12 +57,11 @@ document.addEventListener("DOMContentLoaded", () => {
   let recoveryPair = null;
   let lastTradePair = null;
 
-  // ── 3-pair chain recovery state ───────────────────────────────────────────
-  let recoveryChainScanMode = false;
+  // ── chained-pair scan state (used for BOTH normal trading and recovery) ───
+  let chainScanMode = true;
+  let lastSeenConsPair = null;
   let confirmedChain = null;
   let prevChainDigit = null;
-  let recoveryChainPairsFound = 0;  // 0 = none, 1 = pair1 found, 2 = pair2 found
-  let recoveryChainEnd = null;      // end digit of the last confirmed pair
   // ─────────────────────────────────────────────────────────────────────────
 
   const LOG_MAX_ENTRIES = 1200;
@@ -136,16 +133,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return Number(baseStake.toFixed(2));
   }
 
-  function nextPairFromResultDigit(digit) {
-    if (digit === 9) return [0, 1];
-    if (digit >= 0 && digit <= 8) return [digit, digit + 1];
-    return null;
-  }
-
-  function resetSequence(nextTarget = null) {
-    phase = "scan_ab";
-    seqA = null;
-    seqB = null;
+  function resetSequence() {
     settlementDigit = null;
     captureNextTick = false;
     waitingProposal = false;
@@ -153,38 +141,19 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalAttempt = 0;
     activeContractId = null;
 
-    if (recoveryChainScanMode) {
-      targetPair = null;
-      appendLogLine(
-        "Recovery mode: scanning for 3-pair chain pattern [a,b]→[b,c]→[c,d]...",
-        "#f59e0b"
-      );
-    } else if (recoveryMode && confirmedChain) {
-      targetPair = null;
-      appendLogLine(
-        `Recovery mode: chain confirmed → waiting for digit ${confirmedChain.trigger} to trade DIGITDIFF ${confirmedChain.barrier}`,
-        "#f59e0b"
-      );
-    } else {
-      targetPair = nextTarget;
-      if (nextTarget) {
-        appendLogLine(
-          `Next scan: looking for pair [${nextTarget[0]},${nextTarget[1]}]`,
-          "#a78bfa"
-        );
-      } else {
-        appendLogLine("Next scan: open (any consecutive pair)", "#a78bfa");
-      }
-    }
+    chainScanMode = true;
+    appendLogLine(
+      "Scanning for chained consecutive pair pattern [a,b]→[b,c]...",
+      "#a78bfa"
+    );
   }
 
   function fullReset() {
-    recoveryChainScanMode = false;
-    recoveryChainPairsFound = 0;
-    recoveryChainEnd = null;
+    chainScanMode = true;
+    lastSeenConsPair = null;
     confirmedChain = null;
     prevChainDigit = null;
-    resetSequence(null);
+    resetSequence();
     totalProfit = 0;
     recoveryLoss = 0;
     lastPayoutRatio = null;
@@ -301,53 +270,30 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (waitingProposal || activeContractId) return;
 
-    // ── 3-PAIR CHAIN RECOVERY SCAN ─────────────────────────────────────────
-    if (recoveryMode && recoveryChainScanMode) {
+    // ── CHAINED-PAIR SCAN (normal trading AND recovery both use this) ──────
+    if (chainScanMode) {
       if (prevChainDigit !== null) {
         const a = prevChainDigit;
         const b = d;
         const isConsPair = (b === (a + 1) % 10);
 
         if (isConsPair) {
-          if (recoveryChainPairsFound === 0) {
-            // Found pair 1
-            recoveryChainPairsFound = 1;
-            recoveryChainEnd = b;
-            prevChainDigit = null;
-            appendLogLine(
-              `[Recovery scan] Pair 1 [${a},${b}] stored → awaiting pair 2 [${b},${(b + 1) % 10}]...`,
-              "#f59e0b"
-            );
-            return;
-          } else if (recoveryChainPairsFound === 1 && a === recoveryChainEnd) {
-            // Found pair 2 chaining from pair 1
-            recoveryChainPairsFound = 2;
-            recoveryChainEnd = b;
-            prevChainDigit = null;
-            appendLogLine(
-              `[Recovery scan] Pair 2 [${a},${b}] stored → awaiting pair 3 [${b},${(b + 1) % 10}]...`,
-              "#f59e0b"
-            );
-            return;
-          } else if (recoveryChainPairsFound === 2 && a === recoveryChainEnd) {
-            // Found pair 3 — 3-pair chain confirmed!
+          if (lastSeenConsPair !== null && lastSeenConsPair[1] === a) {
             const trigger = b;
             const barrier = (b + 1) % 10;
             confirmedChain = { trigger, barrier };
-            recoveryChainScanMode = false;
+            chainScanMode = false;
             appendLogLine(
-              `[Recovery] 3-pair chain confirmed → watching for digit ${trigger}, will trade DIGITDIFF barrier=${barrier}`,
+              `Chain [${lastSeenConsPair[0]},${a}]→[${a},${b}] confirmed` +
+              ` → watching for digit ${trigger}, will trade DIGITDIFF barrier=${barrier}`,
               "#f59e0b"
             );
-            // fall through to set prevChainDigit and return
           } else {
-            // Consecutive pair found but doesn't extend the chain — restart as new pair 1
-            recoveryChainPairsFound = 1;
-            recoveryChainEnd = b;
+            lastSeenConsPair = [a, b];
             prevChainDigit = null;
             appendLogLine(
-              `[Recovery scan] Chain broken. New pair 1 [${a},${b}] → awaiting pair 2 [${b},${(b + 1) % 10}]...`,
-              "#f59e0b"
+              `Pair [${a},${b}] found, awaiting chain...`,
+              "#38bdf8"
             );
             return;
           }
@@ -356,9 +302,9 @@ document.addEventListener("DOMContentLoaded", () => {
       prevChainDigit = d;
       return;
     }
-    // ── END 3-PAIR CHAIN RECOVERY SCAN ────────────────────────────────────
+    // ── END CHAINED-PAIR SCAN ────────────────────────────────────────────────
 
-    if (recoveryMode && confirmedChain) {
+    if (confirmedChain) {
       if (d === confirmedChain.trigger) {
         const { trigger, barrier } = confirmedChain;
         seqA = trigger;
@@ -366,64 +312,17 @@ document.addEventListener("DOMContentLoaded", () => {
         lastTradePair = [seqA, seqB];
         confirmedChain = null;
         appendLogLine(
-          `[Recovery] Digit ${d} found → DIGITDIFF barrier=${barrier}`,
+          `Digit ${d} found → DIGITDIFF barrier=${barrier}`,
           "#22c55e"
         );
         placeTrade(barrier);
       }
       return;
     }
-
-    if (phase === "scan_ab") {
-      if (seqA === null) {
-        if (targetPair) {
-          if (d === targetPair[0]) {
-            seqA = d;
-          }
-        } else {
-          if (d >= 0 && d <= 8) {
-            seqA = d;
-          }
-        }
-        return;
-      }
-
-      if (d === seqA + 1) {
-        if (targetPair && (seqA !== targetPair[0] || d !== targetPair[1])) {
-          seqA = (d >= 0 && d <= 8) ? d : null;
-          return;
-        }
-        seqB = d;
-        phase = "scan_x";
-        appendLogLine(`Pair [${seqA},${seqB}] found → waiting for x`, "#38bdf8");
-      } else {
-        if (targetPair) {
-          seqA = (d === targetPair[0]) ? d : null;
-        } else {
-          seqA = (d >= 0 && d <= 8) ? d : null;
-        }
-      }
-      return;
-    }
-
-    if (phase === "scan_x") {
-      if (d === 9) {
-        appendLogLine("x=9 is invalid; restarting pair scan.", "red");
-        resetSequence(targetPair);
-        return;
-      }
-      const x = d;
-      const barrier = x + 1;
-      appendLogLine(
-        `Pattern [${seqA},${seqB},${x} ddf ${barrier}] → BUY DIGITDIFF barrier=${barrier}`,
-        "#22c55e"
-      );
-      placeTrade(barrier);
-    }
   }
 
   async function connect() {
-    resetSequence(null);
+    resetSequence();
     if (ws) ws.close();
 
     const accountId = ACCOUNTS[account];
@@ -570,6 +469,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
             if (contract.is_sold) {
               // CRITICAL: clear activeContractId so onTick unblocks.
+              // Without this the bot gets permanently stuck after the first
+              // trade because onTick returns early on activeContractId.
               activeContractId = null;
 
               const pnl = Number(contract.profit || 0);
@@ -581,13 +482,11 @@ document.addEventListener("DOMContentLoaded", () => {
               const resultDigit = settlementDigit !== null ? settlementDigit : exitDigit;
 
               if (pnl >= 0) {
-                // WIN — clear all recovery state and resume normal logic
+                // WIN — clear all recovery state and resume scanning
                 recoveryMode = false;
                 recoveryPair = null;
                 lastTradePair = null;
-                recoveryChainScanMode = false;
-                recoveryChainPairsFound = 0;
-                recoveryChainEnd = null;
+                lastSeenConsPair = null;
                 confirmedChain = null;
                 prevChainDigit = null;
 
@@ -599,13 +498,12 @@ document.addEventListener("DOMContentLoaded", () => {
                   (resultDigit !== null ? ` (digit=${resultDigit})` : ""),
                   "lime"
                 );
-                resetSequence(null);
+                resetSequence();
               } else {
-                // LOSS — enter 3-pair chain recovery scan
+                // LOSS — same chained-pair scan restarts, but stake() will now
+                // size up using recoveryLoss (this is the "recovery" behavior)
                 recoveryMode = true;
-                recoveryChainScanMode = true;
-                recoveryChainPairsFound = 0;
-                recoveryChainEnd = null;
+                lastSeenConsPair = null;
                 confirmedChain = null;
                 prevChainDigit = null;
                 recoveryPair = null;
@@ -614,10 +512,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 ladder += 1;
                 const nextStake = stake();
                 appendLogLine(
-                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)} → scanning for 3-pair chain`,
+                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)} → scanning for chain pair pattern`,
                   "red"
                 );
-                resetSequence(null);
+                resetSequence();
               }
 
               if (levelEl) levelEl.textContent = ladder;
