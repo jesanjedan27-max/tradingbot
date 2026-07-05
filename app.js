@@ -18,8 +18,42 @@ document.addEventListener("DOMContentLoaded", () => {
   const stakeInput = $("stakeInput");
   const tokenInput = $("tokenInput");
 
-  const SYMBOL = "R_100";
+  const MARKETS = [
+    { symbol: "R_10", label: "Volatility 10 Index" },
+    { symbol: "R_25", label: "Volatility 25 Index" },
+    { symbol: "R_50", label: "Volatility 50 Index" },
+    { symbol: "R_75", label: "Volatility 75 Index" },
+    { symbol: "R_100", label: "Volatility 100 Index" },
+    { symbol: "1HZ10V", label: "Volatility 10 (1s) Index" },
+    { symbol: "1HZ25V", label: "Volatility 25 (1s) Index" },
+    { symbol: "1HZ50V", label: "Volatility 50 (1s) Index" },
+    { symbol: "1HZ75V", label: "Volatility 75 (1s) Index" },
+    { symbol: "1HZ100V", label: "Volatility 100 (1s) Index" }
+  ];
+
+  // Fallback decimal places (used only until the live pip size arrives from
+  // Deriv's own active_symbols response — see fetchActiveSymbols()).
+  const FALLBACK_DECIMALS = {
+    R_10: 3,
+    R_25: 3,
+    R_50: 4,
+    R_75: 4,
+    R_100: 2,
+    "1HZ10V": 2,
+    "1HZ25V": 3,
+    "1HZ50V": 2,
+    "1HZ75V": 3,
+    "1HZ100V": 2
+  };
+
   const DEFAULT_PAYOUT_RATIO = 11.57;
+
+  let symbol = "R_100";
+  const symbolDecimals = {};
+
+  function decimalsForSymbol(sym) {
+    return symbolDecimals[sym] ?? FALLBACK_DECIMALS[sym] ?? 2;
+  }
 
   const savedToken = localStorage.getItem("access_token");
   if (tokenInput && savedToken) {
@@ -33,6 +67,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let account = "demo";
   demoBtn.classList.add("active");
+
+  // ── market selector ─────────────────────────────────────────────────────
+  const marketSelect = $("marketSelect");
+  marketSelect.innerHTML = "";
+  MARKETS.forEach(m => {
+    const opt = document.createElement("option");
+    opt.value = m.symbol;
+    opt.textContent = m.label;
+    marketSelect.appendChild(opt);
+  });
+  marketSelect.value = symbol;
+  marketSelect.addEventListener("change", () => {
+    switchMarket(marketSelect.value);
+  });
+  // ─────────────────────────────────────────────────────────────────────────
 
   let ws = null;
   let running = false;
@@ -111,7 +160,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function digitFromPrice(price) {
     const value = Number(price);
     if (Number.isNaN(value)) return null;
-    const str = value.toFixed(2);
+    const str = value.toFixed(decimalsForSymbol(symbol));
     return Number(str[str.length - 1]);
   }
 
@@ -166,6 +215,47 @@ document.addEventListener("DOMContentLoaded", () => {
     lastTradePair = null;
   }
 
+  function fetchActiveSymbols() {
+    if (!sendMessage({ active_symbols: "brief", product_type: "basic" })) return;
+  }
+
+  function switchMarket(newSymbol) {
+    if (newSymbol === symbol) return;
+    const marketMeta = MARKETS.find(m => m.symbol === newSymbol);
+    const wasRunning = running;
+
+    // Stop mid-scan state — a chain detected on one index means nothing on another.
+    lastSeenConsPair = null;
+    confirmedChain = null;
+    prevChainDigit = null;
+    chainScanMode = true;
+    settlementDigit = null;
+    captureNextTick = false;
+    waitingProposal = false;
+    proposalVariants = null;
+    proposalAttempt = 0;
+    tickBuffer.length = 0;
+    lastPayoutRatio = null; // payout ratio differs per index; re-learn from next proposal
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      sendMessage({ forget_all: "ticks" });
+      symbol = newSymbol;
+      sendMessage({ ticks: symbol, subscribe: 1 });
+    } else {
+      symbol = newSymbol;
+    }
+
+    appendLogLine(
+      `Market switched to ${marketMeta ? marketMeta.label : symbol} (${symbol}), ` +
+      `using ${decimalsForSymbol(symbol)} decimal place(s) for last-digit extraction.`,
+      "#f59e0b"
+    );
+
+    if (wasRunning) {
+      appendLogLine("Scanning for chained consecutive pair pattern [a,b]→[b,c]...", "#a78bfa");
+    }
+  }
+
   function buildProposalVariants(barrier) {
     const amount = stake();
     const base = {
@@ -179,9 +269,9 @@ document.addEventListener("DOMContentLoaded", () => {
       barrier
     };
     return [
-      Object.assign({}, base, { underlying_symbol: SYMBOL }),
-      Object.assign({}, base, { underlying: SYMBOL }),
-      Object.assign({}, base, { symbol: SYMBOL }),
+      Object.assign({}, base, { underlying_symbol: symbol }),
+      Object.assign({}, base, { underlying: symbol }),
+      Object.assign({}, base, { symbol: symbol }),
       Object.assign({}, base)
     ];
   }
@@ -380,7 +470,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
       ws.onopen = () => {
         appendLogLine("WS connected.", "lime");
-        sendMessage({ ticks: SYMBOL, subscribe: 1 });
+        fetchActiveSymbols();
+        sendMessage({ ticks: symbol, subscribe: 1 });
         sendMessage({ balance: 1 });
       };
 
@@ -414,6 +505,28 @@ document.addEventListener("DOMContentLoaded", () => {
               updateBalance(Number(payload.balance.balance));
             }
             break;
+
+          case "active_symbols": {
+            const list = payload.active_symbols;
+            if (Array.isArray(list)) {
+              const wantedSymbols = new Set(MARKETS.map(m => m.symbol));
+              list.forEach(entry => {
+                if (!entry || !wantedSymbols.has(entry.symbol)) return;
+                const pip = Number(entry.pip);
+                if (!pip || Number.isNaN(pip)) return;
+                const decimals = Math.round(-Math.log10(pip));
+                if (decimals >= 0 && decimals <= 6) {
+                  symbolDecimals[entry.symbol] = decimals;
+                }
+              });
+              appendLogLine(
+                `Live pip precision loaded for ${Object.keys(symbolDecimals).length} market(s). ` +
+                `Current market ${symbol} → ${decimalsForSymbol(symbol)} decimal place(s).`,
+                "#38bdf8"
+              );
+            }
+            break;
+          }
 
           case "proposal":
             if (!waitingProposal) break;
