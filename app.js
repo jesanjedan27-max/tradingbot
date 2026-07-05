@@ -113,20 +113,11 @@ document.addEventListener("DOMContentLoaded", () => {
   let recoveryPair = null;
   let lastTradePair = null;
 
-  // ── ascending-subsequence scan state (used for BOTH normal trading and recovery) ──
-  // Watches for 5 consecutive integers (e.g. 2,3,4,5,6) appearing IN ORDER
-  // anywhere in the tick stream — not necessarily back-to-back ticks. For
-  // each incoming digit d, digitRunLen[d] holds the length of the longest
-  // "ascending by exactly 1" chain that ends with the most recent occurrence
-  // of digit d. It's computed as digitRunLen[d-1] + 1, so a chain quietly
-  // keeps extending across gaps/other ticks until it either completes (hits
-  // RUN_TARGET_LEN) or a competing/unrelated run overtakes it.
-  // Once any digit's chain reaches RUN_TARGET_LEN (5), we immediately trade
-  // DIGITDIFF barrier = that digit + 1. If that digit is 9 (barrier would
-  // need to be 10, which doesn't exist), it's invalid — skip the trade and
-  // keep scanning. No wraparound is ever used.
-  const RUN_TARGET_LEN = 5;
-  let digitRunLen = new Array(10).fill(0);
+  // ── chained-pair scan state (used for BOTH normal trading and recovery) ───
+  let chainScanMode = true;
+  let lastSeenConsPair = null;
+  let confirmedChain = null;
+  let prevChainDigit = null;
   // ─────────────────────────────────────────────────────────────────────────
 
   const LOG_MAX_ENTRIES = 1200;
@@ -206,15 +197,18 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalAttempt = 0;
     activeContractId = null;
 
-    digitRunLen.fill(0);
+    chainScanMode = true;
     appendLogLine(
-      "Scanning for a 5-digit ascending sequence (e.g. 2,3,4,5,6 → ddf 7)...",
+      "Scanning for chained consecutive pair pattern [a,b]→[b,c]...",
       "#a78bfa"
     );
   }
 
   function fullReset() {
-    digitRunLen.fill(0);
+    chainScanMode = true;
+    lastSeenConsPair = null;
+    confirmedChain = null;
+    prevChainDigit = null;
     resetSequence();
     totalProfit = 0;
     recoveryLoss = 0;
@@ -278,8 +272,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const marketMeta = MARKETS.find(m => m.symbol === newSymbol);
     const wasRunning = running;
 
-    // Stop mid-scan state — a run detected on one index means nothing on another.
-    digitRunLen.fill(0);
+    // Stop mid-scan state — a chain detected on one index means nothing on another.
+    lastSeenConsPair = null;
+    confirmedChain = null;
+    prevChainDigit = null;
+    chainScanMode = true;
     settlementDigit = null;
     captureNextTick = false;
     waitingProposal = false;
@@ -303,7 +300,7 @@ document.addEventListener("DOMContentLoaded", () => {
     );
 
     if (wasRunning) {
-      appendLogLine("Scanning for a 5-digit ascending sequence (e.g. 2,3,4,5,6 → ddf 7)...", "#a78bfa");
+      appendLogLine("Scanning for chained consecutive pair pattern [a,b]→[b,c]...", "#a78bfa");
     }
   }
 
@@ -411,52 +408,55 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (waitingProposal || activeContractId) return;
 
-    // ── ASCENDING-SUBSEQUENCE SCAN (normal trading AND recovery both use this) ──
-    // digitRunLen[d] = length of the longest "ascending by exactly 1" chain
-    // that ends at the most recent occurrence of digit d, e.g. after seeing
-    // ...2,3,4,5... digitRunLen[5] === 4. Ticks between chain members don't
-    // break it — the chain silently keeps extending across gaps. The moment
-    // any digit's chain reaches RUN_TARGET_LEN (5), trade immediately.
-    const prevLen = d > 0 ? digitRunLen[d - 1] : 0;
-    const newLen = prevLen + 1;
-    digitRunLen[d] = newLen;
+    // ── CHAINED-PAIR SCAN (normal trading AND recovery both use this) ──────
+    if (chainScanMode) {
+      if (prevChainDigit !== null) {
+        const a = prevChainDigit;
+        const b = d;
+        const isConsPair = (b === (a + 1) % 10);
 
-    if (newLen < RUN_TARGET_LEN) {
-      if (newLen > 1) {
-        const start = d - newLen + 1;
+        if (isConsPair) {
+          if (lastSeenConsPair !== null && lastSeenConsPair[1] === a) {
+            const trigger = b;
+            const barrier = (b + 1) % 10;
+            confirmedChain = { trigger, barrier };
+            chainScanMode = false;
+            appendLogLine(
+              `Chain [${lastSeenConsPair[0]},${a}]→[${a},${b}] confirmed` +
+              ` → watching for digit ${trigger}, will trade DIGITDIFF barrier=${barrier}`,
+              "#f59e0b"
+            );
+          } else {
+            lastSeenConsPair = [a, b];
+            prevChainDigit = null;
+            appendLogLine(
+              `Pair [${a},${b}] found, awaiting chain...`,
+              "#38bdf8"
+            );
+            return;
+          }
+        }
+      }
+      prevChainDigit = d;
+      return;
+    }
+    // ── END CHAINED-PAIR SCAN ────────────────────────────────────────────────
+
+    if (confirmedChain) {
+      if (d === confirmedChain.trigger) {
+        const { trigger, barrier } = confirmedChain;
+        seqA = trigger;
+        seqB = barrier;
+        lastTradePair = [seqA, seqB];
+        confirmedChain = null;
         appendLogLine(
-          `Ascending progress: ${start}..${d} (${newLen}/${RUN_TARGET_LEN})`,
-          "#38bdf8"
+          `Digit ${d} found → DIGITDIFF barrier=${barrier}`,
+          "#22c55e"
         );
+        placeTrade(barrier);
       }
       return;
     }
-
-    // newLen === RUN_TARGET_LEN: a fresh run of 5 consecutive integers just
-    // completed, ending at digit d.
-    const start = d - newLen + 1;
-    const trigger = d;
-    const barrier = trigger + 1;
-
-    // Any run reaching target length ends the scan — start fresh either way.
-    digitRunLen.fill(0);
-
-    if (barrier > 9) {
-      appendLogLine(
-        `Run ${start}..${trigger} completed but barrier ${barrier} is invalid (no digit 10) — skipping, resuming scan.`,
-        "orange"
-      );
-      return;
-    }
-
-    seqA = start;
-    seqB = barrier;
-    lastTradePair = [seqA, seqB];
-    appendLogLine(
-      `Run ${start}..${trigger} confirmed → DIGITDIFF barrier=${barrier}`,
-      "#22c55e"
-    );
-    placeTrade(barrier);
   }
 
   async function connect() {
@@ -650,7 +650,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 recoveryMode = false;
                 recoveryPair = null;
                 lastTradePair = null;
-                digitRunLen.fill(0);
+                lastSeenConsPair = null;
+                confirmedChain = null;
+                prevChainDigit = null;
 
                 recoveryLoss = 0;
                 currentStake = 0;
@@ -662,17 +664,19 @@ document.addEventListener("DOMContentLoaded", () => {
                 );
                 resetSequence();
               } else {
-                // LOSS — same ascending-run scan restarts, but stake() will now
-                // size up using recoveryLoss (this is the "recovery"/martingale behavior)
+                // LOSS — same chained-pair scan restarts, but stake() will now
+                // size up using recoveryLoss (this is the "recovery" behavior)
                 recoveryMode = true;
-                digitRunLen.fill(0);
+                lastSeenConsPair = null;
+                confirmedChain = null;
+                prevChainDigit = null;
                 recoveryPair = null;
 
                 recoveryLoss += Math.abs(pnl);
                 ladder += 1;
                 const nextStake = stake();
                 appendLogLine(
-                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)} → scanning for next ascending run`,
+                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)} → scanning for chain pair pattern`,
                   "red"
                 );
                 resetSequence();
