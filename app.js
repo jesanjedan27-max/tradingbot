@@ -85,6 +85,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let ws = null;
   let running = false;
+  let manualStop = false;
+  let heartbeatTimer = null;
+  let reconnectTimer = null;
+  let reconnectAttempts = 0;
+  const HEARTBEAT_MS = 20000;
+  const RECONNECT_BASE_MS = 2000;
+  const RECONNECT_MAX_MS = 30000;
   let lastPayoutRatio = null;
   let recoveryLoss = 0;
   let currentStake = 0;
@@ -217,6 +224,47 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function fetchActiveSymbols() {
     if (!sendMessage({ active_symbols: "brief" })) return;
+  }
+
+  function startHeartbeat() {
+    stopHeartbeat();
+    heartbeatTimer = setInterval(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ ping: 1 }));
+      }
+    }, HEARTBEAT_MS);
+  }
+
+  function stopHeartbeat() {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  }
+
+  function cancelReconnect() {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  }
+
+  function scheduleReconnect() {
+    if (manualStop || !running) return;
+    cancelReconnect();
+    reconnectAttempts += 1;
+    const delay = Math.min(
+      RECONNECT_BASE_MS * Math.pow(1.5, reconnectAttempts - 1),
+      RECONNECT_MAX_MS
+    );
+    appendLogLine(
+      `Reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempts})...`,
+      "orange"
+    );
+    reconnectTimer = setTimeout(() => {
+      if (manualStop || !running) return;
+      connect();
+    }, delay);
   }
 
   function switchMarket(newSymbol) {
@@ -470,6 +518,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
       ws.onopen = () => {
         appendLogLine("WS connected.", "lime");
+        reconnectAttempts = 0;
+        cancelReconnect();
+        startHeartbeat();
         fetchActiveSymbols();
         sendMessage({ ticks: symbol, subscribe: 1 });
         sendMessage({ balance: 1 });
@@ -648,6 +699,10 @@ document.addEventListener("DOMContentLoaded", () => {
       ws.onclose = ev => {
         appendLogLine(`WS closed (code ${ev.code}).`, "orange");
         stopTickFlush();
+        stopHeartbeat();
+        if (!manualStop && running) {
+          scheduleReconnect();
+        }
       };
 
       ws.onerror = ev => {
@@ -657,11 +712,17 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (err) {
       appendLogLine(`OTP fetch failed: ${String(err)}`, "red");
       console.error(err);
+      if (!manualStop && running) {
+        scheduleReconnect();
+      }
     }
   }
 
   startBtn.onclick = () => {
     running = true;
+    manualStop = false;
+    reconnectAttempts = 0;
+    cancelReconnect();
     connect();
     appendLogLine("BOT STARTED", "lime");
   };
@@ -673,6 +734,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   stopBtn.onclick = () => {
     running = false;
+    manualStop = true;
+    cancelReconnect();
+    stopHeartbeat();
     if (ws) ws.close();
     stopTickFlush();
     appendLogLine("STOPPED", "red");
@@ -713,6 +777,9 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   window.addEventListener("beforeunload", () => {
+    manualStop = true;
+    cancelReconnect();
+    stopHeartbeat();
     if (ws) ws.close();
     stopTickFlush();
   });
