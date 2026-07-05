@@ -140,7 +140,7 @@ document.addEventListener("DOMContentLoaded", () => {
       batch.forEach(({ price, digit }) => {
         const row = document.createElement("div");
         row.style.color = "#7dd3fc";
-        row.textContent = `Tick ${Number(price).toFixed(2)} → ${digit === null ? "-" : digit}`;
+        row.textContent = `Tick ${Number(price).toFixed(decimalsForSymbol(symbol))} → ${digit === null ? "-" : digit}`;
         fragment.appendChild(row);
       });
       logEl.appendChild(fragment);
@@ -216,7 +216,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function fetchActiveSymbols() {
-    if (!sendMessage({ active_symbols: "brief", product_type: "basic" })) return;
+    if (!sendMessage({ active_symbols: "brief" })) return;
   }
 
   function switchMarket(newSymbol) {
@@ -348,7 +348,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const d = digitFromPrice(price);
     if (d === null) return;
 
-    if (priceEl) priceEl.textContent = Number(price).toFixed(2);
+    if (priceEl) priceEl.textContent = Number(price).toFixed(decimalsForSymbol(symbol));
     if (lastDigitEl) lastDigitEl.textContent = d;
     tickBuffer.push({ price, digit: d });
     startTickFlush();
