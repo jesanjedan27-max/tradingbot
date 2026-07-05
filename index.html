@@ -108,6 +108,23 @@
       border-color: #ef4444;
     }
 
+    /* ================= MARKET SELECT ================= */
+    #marketSelect {
+      width: 100%;
+      padding: 8px;
+      border-radius: 6px;
+      border: 1px solid #1f2937;
+      background: #0b1220;
+      color: white;
+      outline: none;
+      font-weight: bold;
+    }
+
+    #marketSelect:focus {
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.12);
+    }
+
     /* ================= INPUTS ================= */
     .inputs {
       margin-top: 10px;
@@ -217,6 +234,11 @@
     <button id="pause">Pause</button>
     <button id="stop">Stop</button>
     <button id="reset">Reset</button>
+  </div>
+
+  <div class="inputs">
+    <label>Market / Volatility Index</label>
+    <select id="marketSelect"></select>
   </div>
 
   <div class="inputs">
