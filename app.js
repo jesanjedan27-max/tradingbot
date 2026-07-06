@@ -117,6 +117,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let confirmedFirstChainPair = null;  // second pair [b, c] — 1st chain confirmed
   let confirmedChain = null;           // {trigger, barrier} — full 3-pair chain confirmed
   let prevChainDigit = null;
+  let chainPairTailSkip = null;       // after a pair [a,b] is found, skip first echo of b
   // ─────────────────────────────────────────────────────────────────────────
 
   const LOG_MAX_ENTRIES = 1200;
@@ -198,6 +199,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     chainScanMode = true;
     confirmedFirstChainPair = null;
+    chainPairTailSkip = null;
     appendLogLine(
       "Scanning for 3-pair chain pattern [a,b]→[b,c]→[c,d]...",
       "#a78bfa"
@@ -210,6 +212,7 @@ document.addEventListener("DOMContentLoaded", () => {
     confirmedFirstChainPair = null;
     confirmedChain = null;
     prevChainDigit = null;
+    chainPairTailSkip = null;
     resetSequence();
     totalProfit = 0;
     recoveryLoss = 0;
@@ -273,10 +276,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const marketMeta = MARKETS.find(m => m.symbol === newSymbol);
     const wasRunning = running;
 
+    // Stop mid-scan state — a chain detected on one index means nothing on another.
     lastSeenConsPair = null;
     confirmedFirstChainPair = null;
     confirmedChain = null;
     prevChainDigit = null;
+    chainPairTailSkip = null;
     chainScanMode = true;
     settlementDigit = null;
     captureNextTick = false;
@@ -411,11 +416,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // ── 3-PAIR CHAINED SCAN (normal trading AND recovery both use this) ─────
     // Pattern: [a,b]→[b,c]→[c,d]  where each digit = previous + 1 (mod 10)
-    // Each pair must be detected as a fresh event in the tick stream.
-    // prevChainDigit is reset to null after each pair so that consecutive
-    // digits (e.g. 8,9,0,1) do NOT wrongly trigger a chain — only pairs
-    // that appear with other ticks in between are valid.
-    // When the 3rd pair [c,d] is confirmed, d is the trigger — trade immediately.
+    // After each pair [a,b] is found, the first echo of digit b is skipped
+    // (chainPairTailSkip) so that consecutive runs like 6,7,7,8 cannot
+    // immediately form the next pair. The 3rd pair trades immediately.
     if (chainScanMode) {
       if (prevChainDigit !== null) {
         const a = prevChainDigit;
@@ -442,9 +445,9 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
           } else if (lastSeenConsPair !== null && lastSeenConsPair[1] === a) {
             // Second consecutive pair — 1st chain confirmed, need one more
-            // Reset prevChainDigit so the 3rd pair must appear as a fresh event
             confirmedFirstChainPair = [a, b];
             prevChainDigit = null;
+            chainPairTailSkip = b; // skip echo of b so 3rd pair starts fresh
             appendLogLine(
               `Chain [${lastSeenConsPair[0]},${lastSeenConsPair[1]}]→[${a},${b}] confirmed (1 of 2), awaiting 3rd pair...`,
               "#38bdf8"
@@ -452,10 +455,10 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
           } else {
             // First consecutive pair — start of potential chain
-            // Reset prevChainDigit so the 2nd pair must appear as a fresh event
             lastSeenConsPair = [a, b];
             confirmedFirstChainPair = null;
             prevChainDigit = null;
+            chainPairTailSkip = b; // skip echo of b so 2nd pair starts fresh
             appendLogLine(
               `Pair [${a},${b}] found, awaiting chain...`,
               "#38bdf8"
@@ -463,6 +466,16 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
           }
         }
+      }
+      // prevChainDigit was null (fresh-start state after a pair was found).
+      // If this digit is the echo of the previous pair's tail, skip it so the
+      // next pair cannot immediately piggyback on the same run of digits.
+      if (chainPairTailSkip !== null) {
+        if (d === chainPairTailSkip) {
+          chainPairTailSkip = null; // consume the skip — stay in fresh-start
+          return;                   // prevChainDigit remains null
+        }
+        chainPairTailSkip = null;   // non-matching digit — clear skip, store normally
       }
       prevChainDigit = d;
       return;
@@ -673,6 +686,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 confirmedFirstChainPair = null;
                 confirmedChain = null;
                 prevChainDigit = null;
+                chainPairTailSkip = null;
 
                 recoveryLoss = 0;
                 currentStake = 0;
@@ -689,6 +703,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 confirmedFirstChainPair = null;
                 confirmedChain = null;
                 prevChainDigit = null;
+                chainPairTailSkip = null;
                 recoveryPair = null;
 
                 recoveryLoss += Math.abs(pnl);
