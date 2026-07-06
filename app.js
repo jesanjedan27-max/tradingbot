@@ -115,8 +115,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ── chained-pair scan state (used for BOTH normal trading and recovery) ───
   let chainScanMode = true;
-  let lastSeenConsPair = null;
-  let confirmedChain = null;
+  let lastSeenConsPair = null;        // first pair  [a, b]
+  let confirmedFirstChainPair = null;  // second pair [b, c] — 1st chain confirmed
+  let confirmedChain = null;           // {trigger, barrier} — full 3-pair chain confirmed
   let prevChainDigit = null;
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -198,8 +199,9 @@ document.addEventListener("DOMContentLoaded", () => {
     activeContractId = null;
 
     chainScanMode = true;
+    confirmedFirstChainPair = null;
     appendLogLine(
-      "Scanning for chained consecutive pair pattern [a,b]→[b,c]...",
+      "Scanning for 3-pair chain pattern [a,b]→[b,c]→[c,d]...",
       "#a78bfa"
     );
   }
@@ -207,6 +209,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function fullReset() {
     chainScanMode = true;
     lastSeenConsPair = null;
+    confirmedFirstChainPair = null;
     confirmedChain = null;
     prevChainDigit = null;
     resetSequence();
@@ -274,6 +277,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Stop mid-scan state — a chain detected on one index means nothing on another.
     lastSeenConsPair = null;
+    confirmedFirstChainPair = null;
     confirmedChain = null;
     prevChainDigit = null;
     chainScanMode = true;
@@ -300,7 +304,7 @@ document.addEventListener("DOMContentLoaded", () => {
     );
 
     if (wasRunning) {
-      appendLogLine("Scanning for chained consecutive pair pattern [a,b]→[b,c]...", "#a78bfa");
+      appendLogLine("Scanning for 3-pair chain pattern [a,b]→[b,c]→[c,d]...", "#a78bfa");
     }
   }
 
@@ -408,7 +412,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (waitingProposal || activeContractId) return;
 
-    // ── CHAINED-PAIR SCAN (normal trading AND recovery both use this) ──────
+    // ── 3-PAIR CHAINED SCAN (normal trading AND recovery both use this) ─────
+    // Pattern: [a,b]→[b,c]→[c,d]  where each digit = previous + 1 (mod 10)
+    // Trigger = d, Barrier = d+1 (mod 10)
     if (chainScanMode) {
       if (prevChainDigit !== null) {
         const a = prevChainDigit;
@@ -416,18 +422,30 @@ document.addEventListener("DOMContentLoaded", () => {
         const isConsPair = (b === (a + 1) % 10);
 
         if (isConsPair) {
-          if (lastSeenConsPair !== null && lastSeenConsPair[1] === a) {
+          if (confirmedFirstChainPair !== null && confirmedFirstChainPair[1] === a) {
+            // Third consecutive pair — full 3-pair chain confirmed
             const trigger = b;
             const barrier = (b + 1) % 10;
             confirmedChain = { trigger, barrier };
             chainScanMode = false;
             appendLogLine(
-              `Chain [${lastSeenConsPair[0]},${a}]→[${a},${b}] confirmed` +
+              `Chain [${lastSeenConsPair[0]},${lastSeenConsPair[1]}]→[${confirmedFirstChainPair[0]},${confirmedFirstChainPair[1]}]→[${a},${b}] confirmed` +
               ` → watching for digit ${trigger}, will trade DIGITDIFF barrier=${barrier}`,
               "#f59e0b"
             );
+          } else if (lastSeenConsPair !== null && lastSeenConsPair[1] === a) {
+            // Second consecutive pair — 1st chain confirmed, need one more
+            confirmedFirstChainPair = [a, b];
+            prevChainDigit = null;
+            appendLogLine(
+              `Chain [${lastSeenConsPair[0]},${lastSeenConsPair[1]}]→[${a},${b}] confirmed (1 of 2), awaiting 3rd pair...`,
+              "#38bdf8"
+            );
+            return;
           } else {
+            // First consecutive pair — start of potential chain
             lastSeenConsPair = [a, b];
+            confirmedFirstChainPair = null;
             prevChainDigit = null;
             appendLogLine(
               `Pair [${a},${b}] found, awaiting chain...`,
@@ -440,7 +458,7 @@ document.addEventListener("DOMContentLoaded", () => {
       prevChainDigit = d;
       return;
     }
-    // ── END CHAINED-PAIR SCAN ────────────────────────────────────────────────
+    // ── END 3-PAIR CHAINED SCAN ─────────────────────────────────────────────
 
     if (confirmedChain) {
       if (d === confirmedChain.trigger) {
@@ -651,6 +669,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 recoveryPair = null;
                 lastTradePair = null;
                 lastSeenConsPair = null;
+                confirmedFirstChainPair = null;
                 confirmedChain = null;
                 prevChainDigit = null;
 
@@ -668,6 +687,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 // size up using recoveryLoss (this is the "recovery" behavior)
                 recoveryMode = true;
                 lastSeenConsPair = null;
+                confirmedFirstChainPair = null;
                 confirmedChain = null;
                 prevChainDigit = null;
                 recoveryPair = null;
