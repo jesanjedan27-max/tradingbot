@@ -112,10 +112,12 @@ document.addEventListener("DOMContentLoaded", () => {
   let lastTradePair = null;
 
   // ── 2-pair ascending scan state (used for BOTH normal trading and recovery) ───
-  let firstPairBase = null;       // first pair [a, a+1]
-  let secondPairBase = null;      // second pair [a+2, a+3]
-  let triggerDigit = null;        // trigger = a+4
-  let lastTickDigit = null;
+  let chainScanMode = true;
+  let firstPairBase = null;          // first ascending pair [a, a+1]
+  let secondPairBase = null;         // second ascending pair [a+2, a+3]
+  let triggerDigit = null;           // trigger = a+4
+  let prevChainDigit = null;
+  let chainPairTailSkip = null;      // skip an immediate repeat of the first pair tail
   // ─────────────────────────────────────────────────────────────────────────
 
   const LOG_MAX_ENTRIES = 1200;
@@ -195,11 +197,12 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalAttempt = 0;
     activeContractId = null;
 
+    chainScanMode = true;
     firstPairBase = null;
     secondPairBase = null;
     triggerDigit = null;
-    lastTickDigit = null;
-
+    prevChainDigit = null;
+    chainPairTailSkip = null;
     appendLogLine(
       "Scanning for 2-pair ascending pattern [a,a+1]→[a+2,a+3] then trigger a+4...",
       "#a78bfa"
@@ -207,10 +210,12 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function fullReset() {
+    chainScanMode = true;
     firstPairBase = null;
     secondPairBase = null;
     triggerDigit = null;
-    lastTickDigit = null;
+    prevChainDigit = null;
+    chainPairTailSkip = null;
     resetSequence();
     totalProfit = 0;
     recoveryLoss = 0;
@@ -277,7 +282,9 @@ document.addEventListener("DOMContentLoaded", () => {
     firstPairBase = null;
     secondPairBase = null;
     triggerDigit = null;
-    lastTickDigit = null;
+    prevChainDigit = null;
+    chainPairTailSkip = null;
+    chainScanMode = true;
     settlementDigit = null;
     captureNextTick = false;
     waitingProposal = false;
@@ -301,10 +308,7 @@ document.addEventListener("DOMContentLoaded", () => {
     );
 
     if (wasRunning) {
-      appendLogLine(
-        "Scanning for 2-pair ascending pattern [a,a+1]→[a+2,a+3] then trigger a+4...",
-        "#a78bfa"
-      );
+      appendLogLine("Scanning for 2-pair ascending pattern [a,a+1]→[a+2,a+3] then trigger a+4...", "#a78bfa");
     }
   }
 
@@ -412,118 +416,139 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (waitingProposal || activeContractId) return;
 
-    if (triggerDigit !== null) {
-      if (d === triggerDigit) {
-        const barrier = triggerDigit + 1;
-        seqA = triggerDigit;
-        seqB = barrier;
-        lastTradePair = [seqA, seqB];
-        appendLogLine(
-          `Trigger ${triggerDigit} found after [${firstPairBase},${firstPairBase + 1}]→[${secondPairBase},${secondPairBase + 1}] → trading DIGITDIFF barrier=${barrier}`,
-          "#f59e0b"
-        );
-        placeTrade(barrier);
+    if (chainScanMode) {
+      if (triggerDigit !== null) {
+        if (d === triggerDigit) {
+          const barrier = triggerDigit + 1;
+          seqA = triggerDigit;
+          seqB = barrier;
+          lastTradePair = [seqA, seqB];
+          appendLogLine(
+            `Trigger ${triggerDigit} found after [${firstPairBase},${firstPairBase + 1}]→[${secondPairBase},${secondPairBase + 1}] → trading DIGITDIFF barrier=${barrier}`,
+            "#f59e0b"
+          );
+          placeTrade(barrier);
+          return;
+        }
+
+        if (prevChainDigit !== null && d === prevChainDigit + 1) {
+          firstPairBase = prevChainDigit;
+          secondPairBase = null;
+          triggerDigit = null;
+          chainPairTailSkip = d;
+          appendLogLine(
+            `Trigger missed; restarting first pair at [${firstPairBase},${d}]`,
+            "#38bdf8"
+          );
+        }
+
+        prevChainDigit = d;
         return;
       }
 
-      if (lastTickDigit !== null && d === lastTickDigit + 1) {
-        firstPairBase = lastTickDigit;
+      const isAscending = prevChainDigit !== null && d === prevChainDigit + 1;
+
+      if (firstPairBase === null) {
+        if (isAscending) {
+          firstPairBase = prevChainDigit;
+          chainPairTailSkip = d;
+          appendLogLine(
+            `First pair [${firstPairBase},${d}] found, searching for [${firstPairBase + 2},${firstPairBase + 3}]...`,
+            "#38bdf8"
+          );
+        }
+        prevChainDigit = d;
+        return;
+      }
+
+      if (secondPairBase === null) {
+        if (chainPairTailSkip !== null && d === chainPairTailSkip) {
+          chainPairTailSkip = null;
+          prevChainDigit = d;
+          return;
+        }
+
+        if (d === firstPairBase + 2) {
+          secondPairBase = d;
+          appendLogLine(
+            `Second pair candidate [${secondPairBase},${secondPairBase + 1}] started`,
+            "#38bdf8"
+          );
+          prevChainDigit = d;
+          return;
+        }
+
+        if (isAscending) {
+          firstPairBase = prevChainDigit;
+          chainPairTailSkip = d;
+          appendLogLine(`First pair restarted at [${firstPairBase},${d}]`, "#38bdf8");
+        }
+
+        prevChainDigit = d;
+        return;
+      }
+
+      if (d === secondPairBase + 1) {
+        const trigger = firstPairBase + 4;
+        if (trigger >= 10) {
+          appendLogLine(
+            `Invalid 2-pair pattern [${firstPairBase},${firstPairBase + 1}]→[${secondPairBase},${d}] ; trigger ${trigger} invalid.`,
+            "red"
+          );
+          resetSequence();
+          prevChainDigit = d;
+          return;
+        }
+        triggerDigit = trigger;
+        appendLogLine(
+          `Second pair [${secondPairBase},${d}] confirmed, awaiting trigger ${triggerDigit}.`,
+          "#22c55e"
+        );
+        prevChainDigit = d;
+        return;
+      }
+
+      if (d === secondPairBase) {
+        prevChainDigit = d;
+        return;
+      }
+
+      if (isAscending) {
+        firstPairBase = prevChainDigit;
         secondPairBase = null;
         triggerDigit = null;
+        chainPairTailSkip = d;
         appendLogLine(
-          `Trigger missed; restarting first pair at [${firstPairBase},${d}]`,
+          `Second pair failed; restarting first pair at [${firstPairBase},${d}]`,
           "#38bdf8"
         );
-      }
-
-      lastTickDigit = d;
-      return;
-    }
-
-    const isAscending = lastTickDigit !== null && d === lastTickDigit + 1;
-
-    if (firstPairBase === null) {
-      if (isAscending) {
-        firstPairBase = lastTickDigit;
-        appendLogLine(
-          `First pair [${firstPairBase},${d}] found, searching for [${firstPairBase + 2},${firstPairBase + 3}]...`,
-          "#38bdf8"
-        );
-      }
-      lastTickDigit = d;
-      return;
-    }
-
-    if (secondPairBase === null) {
-      const expectedSecondStart = firstPairBase + 2;
-      if (d === expectedSecondStart) {
-        secondPairBase = d;
-        appendLogLine(
-          `Second pair candidate [${secondPairBase},${secondPairBase + 1}] started`,
-          "#38bdf8"
-        );
-        lastTickDigit = d;
-        return;
-      }
-
-      if (isAscending) {
-        firstPairBase = lastTickDigit;
-        appendLogLine(
-          `First pair restarted at [${firstPairBase},${d}]`,
-          "#38bdf8"
-        );
-      }
-
-      lastTickDigit = d;
-      return;
-    }
-
-    if (d === secondPairBase + 1) {
-      const trigger = firstPairBase + 4;
-      const barrier = trigger + 1;
-      if (barrier > 9) {
-        appendLogLine(
-          `Invalid 2-pair pattern [${firstPairBase},${firstPairBase + 1}]→[${secondPairBase},${d}] ; no valid barrier.`,
-          "red"
-        );
-        resetSequence();
-        lastTickDigit = d;
-        return;
-      }
-      triggerDigit = trigger;
-      appendLogLine(
-        `Second pair [${secondPairBase},${d}] confirmed, awaiting trigger ${triggerDigit}.`,
-        "#22c55e"
-      );
-      lastTickDigit = d;
-      return;
-    }
-
-    if (d === secondPairBase) {
-      lastTickDigit = d;
-      return;
-    }
-
-    if (isAscending) {
-      firstPairBase = lastTickDigit;
-      secondPairBase = null;
-      triggerDigit = null;
-      appendLogLine(
-        `Second pair failed; restarting first pair at [${firstPairBase},${d}]`,
-        "#38bdf8"
-      );
-    } else {
-      const expectedSecondStart = firstPairBase + 2;
-      if (d === expectedSecondStart) {
+      } else if (d === firstPairBase + 2) {
         secondPairBase = d;
         appendLogLine(
           `Second pair candidate restarted at [${secondPairBase},${secondPairBase + 1}]`,
           "#38bdf8"
         );
       }
+
+      prevChainDigit = d;
+      return;
     }
 
-    lastTickDigit = d;
+    if (confirmedChain) {
+      if (d === confirmedChain.trigger) {
+        const { trigger, barrier } = confirmedChain;
+        seqA = trigger;
+        seqB = barrier;
+        lastTradePair = [seqA, seqB];
+        confirmedChain = null;
+        appendLogLine(
+          `Digit ${d} found → DIGITDIFF barrier=${barrier}`,
+          "#22c55e"
+        );
+        placeTrade(barrier);
+      }
+      return;
+    }
   }
 
   async function connect() {
@@ -712,7 +737,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 firstPairBase = null;
                 secondPairBase = null;
                 triggerDigit = null;
-                lastTickDigit = null;
+                prevChainDigit = null;
+                chainPairTailSkip = null;
 
                 recoveryLoss = 0;
                 currentStake = 0;
@@ -728,7 +754,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 firstPairBase = null;
                 secondPairBase = null;
                 triggerDigit = null;
-                lastTickDigit = null;
+                prevChainDigit = null;
+                chainPairTailSkip = null;
                 recoveryPair = null;
 
                 recoveryLoss += Math.abs(pnl);
