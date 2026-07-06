@@ -1,4 +1,4 @@
-// Deriv DigitDiff bot — unified chained-pair strategy (used for both normal trading and recovery)
+// Deriv DigitDiff bot — unified 2-pair ascending strategy (used for both normal trading and recovery)
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -111,13 +111,16 @@ document.addEventListener("DOMContentLoaded", () => {
   let recoveryPair = null;
   let lastTradePair = null;
 
-  // ── 2-pair ascending scan state (used for BOTH normal trading and recovery) ───
+  // ── 2-pair ascending scan state ──────────────────────────────────────────
+  // Pattern: [a, a+1] → [a+2, a+3] → trigger=(a+4) → barrier=(a+5)
+  // pair2_head = pair1_tail + 1  (ascending, non-chained)
+  // Invalid if barrier would wrap to 0 (i.e. trigger digit = 9)
   let chainScanMode = true;
-  let firstPairBase = null;          // first pair [a, a+1]
-  let secondPairStart = null;        // second pair start digit a+2
-  let secondPairPending = false;     // waiting for a+3 immediately after a+2
-  let triggerDigit = null;           // trigger = a+4
+  let lastSeenConsPair = null;
+  let confirmedFirstChainPair = null;
+  let confirmedChain = null;
   let prevChainDigit = null;
+  let chainPairTailSkip = null;
   // ─────────────────────────────────────────────────────────────────────────
 
   const LOG_MAX_ENTRIES = 1200;
@@ -196,26 +199,22 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalVariants = null;
     proposalAttempt = 0;
     activeContractId = null;
-
     chainScanMode = true;
-    firstPairBase = null;
-    secondPairStart = null;
-    secondPairPending = false;
-    triggerDigit = null;
-    prevChainDigit = null;
+    confirmedFirstChainPair = null;
+    chainPairTailSkip = null;
     appendLogLine(
-      "Scanning for 2-pair ascending pattern [a,a+1]→[a+2,a+3] then trigger a+4...",
+      "Scanning for 2-pair ascending pattern [a,a+1]→[a+2,a+3]→trigger→barrier...",
       "#a78bfa"
     );
   }
 
   function fullReset() {
     chainScanMode = true;
-    firstPairBase = null;
-    secondPairStart = null;
-    secondPairPending = false;
-    triggerDigit = null;
+    lastSeenConsPair = null;
+    confirmedFirstChainPair = null;
+    confirmedChain = null;
     prevChainDigit = null;
+    chainPairTailSkip = null;
     resetSequence();
     totalProfit = 0;
     recoveryLoss = 0;
@@ -279,12 +278,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const marketMeta = MARKETS.find(m => m.symbol === newSymbol);
     const wasRunning = running;
 
-    // Stop mid-scan state — a chain detected on one index means nothing on another.
-    firstPairBase = null;
-    secondPairStart = null;
-    secondPairPending = false;
-    triggerDigit = null;
+    lastSeenConsPair = null;
+    confirmedFirstChainPair = null;
+    confirmedChain = null;
     prevChainDigit = null;
+    chainPairTailSkip = null;
     chainScanMode = true;
     settlementDigit = null;
     captureNextTick = false;
@@ -310,7 +308,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (wasRunning) {
       appendLogLine(
-        "Scanning for 2-pair ascending pattern [a,a+1]→[a+2,a+3] then trigger a+4...",
+        "Scanning for 2-pair ascending pattern [a,a+1]→[a+2,a+3]→trigger→barrier...",
         "#a78bfa"
       );
     }
@@ -420,115 +418,111 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (waitingProposal || activeContractId) return;
 
-    const isAscending = prevChainDigit !== null && d === prevChainDigit + 1;
+    // ── 2-PAIR ASCENDING SCAN ────────────────────────────────────────────────
+    // Pattern: [a, a+1] → [a+2, a+3] → trigger=(a+4) → DIGITDIFF barrier=(a+5)
+    // pair2_head = pair1_tail + 1 (non-chained, ascending gap)
+    // INVALID if barrier would be 0 (trigger digit = 9)
+    //
+    // Examples:
+    //   0,1 ... 2,3 ... 4  → barrier=5  ✓
+    //   2,3 ... 4,5 ... 6  → barrier=7  ✓
+    //   5,6 ... 7,8 ... 9  → barrier=0, INVALID ✗
+    if (chainScanMode) {
+      // Phase 2: both pairs confirmed — waiting for trigger digit
+      if (confirmedFirstChainPair !== null) {
+        const expectedTrigger = (confirmedFirstChainPair[1] + 1) % 10;
+        if (d === expectedTrigger) {
+          const barrier = (d + 1) % 10;
+          if (barrier === 0) {
+            appendLogLine(
+              `[${lastSeenConsPair[0]},${lastSeenConsPair[1]}]→[${confirmedFirstChainPair[0]},${confirmedFirstChainPair[1]}]→trigger=${d} INVALID (barrier=0) — resetting...`,
+              "orange"
+            );
+            lastSeenConsPair = null;
+            confirmedFirstChainPair = null;
+            prevChainDigit = null;
+            chainPairTailSkip = null;
+            appendLogLine(
+              "Scanning for 2-pair ascending pattern [a,a+1]→[a+2,a+3]→trigger→barrier...",
+              "#a78bfa"
+            );
+            return;
+          }
+          chainScanMode = false;
+          confirmedChain = null;
+          seqA = d;
+          seqB = barrier;
+          lastTradePair = [seqA, seqB];
+          appendLogLine(
+            `Chain [${lastSeenConsPair[0]},${lastSeenConsPair[1]}]→[${confirmedFirstChainPair[0]},${confirmedFirstChainPair[1]}]→trigger=${d} → DIGITDIFF barrier=${barrier}`,
+            "#f59e0b"
+          );
+          placeTrade(barrier);
+          return;
+        }
+        // Not the trigger yet — keep waiting
+        return;
+      }
 
-    if (triggerDigit !== null) {
-      if (d === triggerDigit) {
-        const barrier = triggerDigit + 1;
-        seqA = triggerDigit;
+      // Phase 0 & 1: scanning for pair1, then pair2
+      if (prevChainDigit !== null) {
+        const a = prevChainDigit;
+        const b = d;
+
+        if (b === (a + 1) % 10) {
+          if (lastSeenConsPair !== null && a === (lastSeenConsPair[1] + 1) % 10) {
+            // Valid pair2: head = pair1_tail + 1
+            confirmedFirstChainPair = [a, b];
+            prevChainDigit = null;
+            chainPairTailSkip = b;
+            appendLogLine(
+              `Pair2 [${a},${b}] confirmed — awaiting trigger ${(b + 1) % 10}...`,
+              "#38bdf8"
+            );
+            return;
+          } else {
+            // New pair1
+            lastSeenConsPair = [a, b];
+            confirmedFirstChainPair = null;
+            prevChainDigit = null;
+            chainPairTailSkip = b;
+            appendLogLine(`Pair [${a},${b}] found, awaiting pair2...`, "#38bdf8");
+            return;
+          }
+        }
+      }
+
+      if (chainPairTailSkip !== null) {
+        if (d === chainPairTailSkip) {
+          chainPairTailSkip = null;
+          return;
+        }
+        chainPairTailSkip = null;
+      }
+      prevChainDigit = d;
+      return;
+    }
+    // ── END 2-PAIR ASCENDING SCAN ─────────────────────────────────────────────
+
+    if (confirmedChain) {
+      if (d === confirmedChain.trigger) {
+        const { trigger, barrier } = confirmedChain;
+        seqA = trigger;
         seqB = barrier;
         lastTradePair = [seqA, seqB];
+        confirmedChain = null;
         appendLogLine(
-          `Trigger ${triggerDigit} found after [${firstPairBase},${firstPairBase + 1}]→[${secondPairStart},${secondPairStart + 1}] → trading DIGITDIFF barrier=${barrier}`,
-          "#f59e0b"
+          `Digit ${d} found → DIGITDIFF barrier=${barrier}`,
+          "#22c55e"
         );
         placeTrade(barrier);
-        prevChainDigit = d;
-        return;
       }
-
-      if (isAscending) {
-        firstPairBase = prevChainDigit;
-        secondPairStart = null;
-        secondPairPending = false;
-        triggerDigit = null;
-        appendLogLine(
-          `Trigger missed; restarting first pair at [${firstPairBase},${d}]`,
-          "#38bdf8"
-        );
-      }
-      prevChainDigit = d;
       return;
     }
-
-    if (firstPairBase === null) {
-      if (isAscending) {
-        firstPairBase = prevChainDigit;
-        secondPairStart = null;
-        secondPairPending = false;
-        appendLogLine(
-          `First pair [${firstPairBase},${d}] found, searching for [${firstPairBase + 2},${firstPairBase + 3}]`,
-          "#38bdf8"
-        );
-      }
-      prevChainDigit = d;
-      return;
-    }
-
-    if (!secondPairPending) {
-      if (d === firstPairBase + 2) {
-        secondPairStart = d;
-        secondPairPending = true;
-        appendLogLine(
-          `Second pair start ${secondPairStart} found, waiting for ${secondPairStart + 1}`,
-          "#38bdf8"
-        );
-        prevChainDigit = d;
-        return;
-      }
-
-      if (isAscending) {
-        firstPairBase = prevChainDigit;
-        secondPairStart = null;
-        secondPairPending = false;
-        appendLogLine(
-          `First pair restarted at [${firstPairBase},${d}]`,
-          "#38bdf8"
-        );
-      }
-
-      prevChainDigit = d;
-      return;
-    }
-
-    if (d === secondPairStart + 1) {
-      const trigger = firstPairBase + 4;
-      if (trigger >= 10) {
-        appendLogLine(
-          `Invalid 2-pair pattern [${firstPairBase},${firstPairBase + 1}]→[${secondPairStart},${d}] ; trigger ${trigger} invalid.`,
-          "red"
-        );
-        firstPairBase = null;
-        secondPairStart = null;
-        secondPairPending = false;
-        prevChainDigit = d;
-        return;
-      }
-      triggerDigit = trigger;
-      secondPairPending = false;
-      appendLogLine(
-        `Second pair [${secondPairStart},${d}] confirmed, awaiting trigger ${triggerDigit}.`,
-        "#22c55e"
-      );
-      prevChainDigit = d;
-      return;
-    }
-
-    if (isAscending) {
-      firstPairBase = prevChainDigit;
-      secondPairStart = null;
-      secondPairPending = false;
-      appendLogLine(
-        `Second pair failed; restarting first pair at [${firstPairBase},${d}]`,
-        "#38bdf8"
-      );
-    }
-
-    prevChainDigit = d;
   }
 
   async function connect() {
-    resetStrategy();
+    resetSequence();
     if (ws) ws.close();
 
     const accountId = ACCOUNTS[account];
@@ -549,13 +543,16 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     try {
-      const response = await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Deriv-App-ID": "33wZZKTFZrmsZgFaAH53Z"
+      const response = await fetch(
+        `https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Deriv-App-ID": "33wZZKTFZrmsZgFaAH53Z"
+          }
         }
-      });
+      );
 
       const text = await response.text();
       if (!response.ok) {
@@ -583,7 +580,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
       ws.onopen = () => {
         appendLogLine("WS connected.", "lime");
-        sendMessage({ ticks: SYMBOL, subscribe: 1 });
+        reconnectAttempts = 0;
+        cancelReconnect();
+        startHeartbeat();
+        fetchActiveSymbols();
+        sendMessage({ ticks: symbol, subscribe: 1 });
         sendMessage({ balance: 1 });
       };
 
@@ -617,6 +618,28 @@ document.addEventListener("DOMContentLoaded", () => {
               updateBalance(Number(payload.balance.balance));
             }
             break;
+
+          case "active_symbols": {
+            const list = payload.active_symbols;
+            if (Array.isArray(list)) {
+              const wantedSymbols = new Set(MARKETS.map(m => m.symbol));
+              list.forEach(entry => {
+                if (!entry || !wantedSymbols.has(entry.symbol)) return;
+                const pip = Number(entry.pip);
+                if (!pip || Number.isNaN(pip)) return;
+                const decimals = Math.round(-Math.log10(pip));
+                if (decimals >= 0 && decimals <= 6) {
+                  symbolDecimals[entry.symbol] = decimals;
+                }
+              });
+              appendLogLine(
+                `Live pip precision loaded for ${Object.keys(symbolDecimals).length} market(s). ` +
+                `Current market ${symbol} → ${decimalsForSymbol(symbol)} decimal place(s).`,
+                "#38bdf8"
+              );
+            }
+            break;
+          }
 
           case "proposal":
             if (!waitingProposal) break;
@@ -681,12 +704,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 recoveryMode = false;
                 recoveryPair = null;
                 lastTradePair = null;
-                firstPairBase = null;
-                secondPairStart = null;
-                secondPairPending = false;
-                triggerDigit = null;
+                lastSeenConsPair = null;
+                confirmedFirstChainPair = null;
+                confirmedChain = null;
                 prevChainDigit = null;
-
+                chainPairTailSkip = null;
                 recoveryLoss = 0;
                 currentStake = 0;
                 ladder = 0;
@@ -698,13 +720,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 resetSequence();
               } else {
                 recoveryMode = true;
-                firstPairBase = null;
-                secondPairStart = null;
-                secondPairPending = false;
-                triggerDigit = null;
+                lastSeenConsPair = null;
+                confirmedFirstChainPair = null;
+                confirmedChain = null;
                 prevChainDigit = null;
+                chainPairTailSkip = null;
                 recoveryPair = null;
-
                 recoveryLoss += Math.abs(pnl);
                 ladder += 1;
                 const nextStake = stake();
@@ -732,6 +753,10 @@ document.addEventListener("DOMContentLoaded", () => {
       ws.onclose = ev => {
         appendLogLine(`WS closed (code ${ev.code}).`, "orange");
         stopTickFlush();
+        stopHeartbeat();
+        if (!manualStop && running) {
+          scheduleReconnect();
+        }
       };
 
       ws.onerror = ev => {
@@ -741,11 +766,17 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (err) {
       appendLogLine(`OTP fetch failed: ${String(err)}`, "red");
       console.error(err);
+      if (!manualStop && running) {
+        scheduleReconnect();
+      }
     }
   }
 
   startBtn.onclick = () => {
     running = true;
+    manualStop = false;
+    reconnectAttempts = 0;
+    cancelReconnect();
     connect();
     appendLogLine("BOT STARTED", "lime");
   };
@@ -757,19 +788,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
   stopBtn.onclick = () => {
     running = false;
+    manualStop = true;
+    cancelReconnect();
+    stopHeartbeat();
     if (ws) ws.close();
     stopTickFlush();
     appendLogLine("STOPPED", "red");
   };
 
   resetBtn.onclick = () => {
-    resetStrategy();
-    totalProfit = 0;
-    recoveryLoss = 0;
-    lastPayoutRatio = null;
-    currentStake = 0;
-    lastBalance = null;
-    ladder = 0;
+    fullReset();
     if (profitEl) profitEl.textContent = "0.00";
     if (levelEl) levelEl.textContent = "0";
     if (balanceEl) balanceEl.textContent = "-";
@@ -803,6 +831,9 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   window.addEventListener("beforeunload", () => {
+    manualStop = true;
+    cancelReconnect();
+    stopHeartbeat();
     if (ws) ws.close();
     stopTickFlush();
   });
