@@ -31,8 +31,6 @@ document.addEventListener("DOMContentLoaded", () => {
     { symbol: "1HZ100V", label: "Volatility 100 (1s) Index" }
   ];
 
-  // Fallback decimal places (used only until the live pip size arrives from
-  // Deriv's own active_symbols response — see fetchActiveSymbols()).
   const FALLBACK_DECIMALS = {
     R_10: 3,
     R_25: 3,
@@ -275,7 +273,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const marketMeta = MARKETS.find(m => m.symbol === newSymbol);
     const wasRunning = running;
 
-    // Stop mid-scan state — a chain detected on one index means nothing on another.
     lastSeenConsPair = null;
     confirmedFirstChainPair = null;
     confirmedChain = null;
@@ -287,7 +284,7 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalVariants = null;
     proposalAttempt = 0;
     tickBuffer.length = 0;
-    lastPayoutRatio = null; // payout ratio differs per index; re-learn from next proposal
+    lastPayoutRatio = null;
 
     if (ws && ws.readyState === WebSocket.OPEN) {
       sendMessage({ forget_all: "ticks" });
@@ -436,7 +433,7 @@ document.addEventListener("DOMContentLoaded", () => {
           } else if (lastSeenConsPair !== null && lastSeenConsPair[1] === a) {
             // Second consecutive pair — 1st chain confirmed, need one more
             confirmedFirstChainPair = [a, b];
-            prevChainDigit = null;
+            prevChainDigit = b;
             appendLogLine(
               `Chain [${lastSeenConsPair[0]},${lastSeenConsPair[1]}]→[${a},${b}] confirmed (1 of 2), awaiting 3rd pair...`,
               "#38bdf8"
@@ -446,7 +443,7 @@ document.addEventListener("DOMContentLoaded", () => {
             // First consecutive pair — start of potential chain
             lastSeenConsPair = [a, b];
             confirmedFirstChainPair = null;
-            prevChainDigit = null;
+            prevChainDigit = b;
             appendLogLine(
               `Pair [${a},${b}] found, awaiting chain...`,
               "#38bdf8"
@@ -637,10 +634,6 @@ document.addEventListener("DOMContentLoaded", () => {
             const contract = payload.proposal_open_contract;
             if (!contract) return;
 
-            // Do NOT update profitEl here — the intermediate contract.profit
-            // value before settlement is negative (shows -stake), which makes
-            // a winning trade look like a loss. Only update after is_sold.
-
             if (
               typeof contract.balance_after === "number" &&
               !Number.isNaN(contract.balance_after) &&
@@ -650,9 +643,6 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             if (contract.is_sold) {
-              // CRITICAL: clear activeContractId so onTick unblocks.
-              // Without this the bot gets permanently stuck after the first
-              // trade because onTick returns early on activeContractId.
               activeContractId = null;
 
               const pnl = Number(contract.profit || 0);
@@ -664,7 +654,6 @@ document.addEventListener("DOMContentLoaded", () => {
               const resultDigit = settlementDigit !== null ? settlementDigit : exitDigit;
 
               if (pnl >= 0) {
-                // WIN — clear all recovery state and resume scanning
                 recoveryMode = false;
                 recoveryPair = null;
                 lastTradePair = null;
@@ -683,8 +672,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 );
                 resetSequence();
               } else {
-                // LOSS — same chained-pair scan restarts, but stake() will now
-                // size up using recoveryLoss (this is the "recovery" behavior)
                 recoveryMode = true;
                 lastSeenConsPair = null;
                 confirmedFirstChainPair = null;
