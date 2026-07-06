@@ -411,7 +411,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // ── 3-PAIR CHAINED SCAN (normal trading AND recovery both use this) ─────
     // Pattern: [a,b]→[b,c]→[c,d]  where each digit = previous + 1 (mod 10)
-    // Trigger = d, Barrier = d+1 (mod 10)
+    // Each pair must be detected as a fresh event in the tick stream.
+    // prevChainDigit is reset to null after each pair so that consecutive
+    // digits (e.g. 8,9,0,1) do NOT wrongly trigger a chain — only pairs
+    // that appear with other ticks in between are valid.
+    // When the 3rd pair [c,d] is confirmed, d is the trigger — trade immediately.
     if (chainScanMode) {
       if (prevChainDigit !== null) {
         const a = prevChainDigit;
@@ -421,19 +425,26 @@ document.addEventListener("DOMContentLoaded", () => {
         if (isConsPair) {
           if (confirmedFirstChainPair !== null && confirmedFirstChainPair[1] === a) {
             // Third consecutive pair — full 3-pair chain confirmed
+            // d === b === trigger right now, so trade immediately
             const trigger = b;
             const barrier = (b + 1) % 10;
-            confirmedChain = { trigger, barrier };
             chainScanMode = false;
+            confirmedChain = null;
+            seqA = trigger;
+            seqB = barrier;
+            lastTradePair = [seqA, seqB];
             appendLogLine(
               `Chain [${lastSeenConsPair[0]},${lastSeenConsPair[1]}]→[${confirmedFirstChainPair[0]},${confirmedFirstChainPair[1]}]→[${a},${b}] confirmed` +
-              ` → watching for digit ${trigger}, will trade DIGITDIFF barrier=${barrier}`,
+              ` → digit ${trigger} is NOW → trading DIGITDIFF barrier=${barrier}`,
               "#f59e0b"
             );
+            placeTrade(barrier);
+            return;
           } else if (lastSeenConsPair !== null && lastSeenConsPair[1] === a) {
             // Second consecutive pair — 1st chain confirmed, need one more
+            // Reset prevChainDigit so the 3rd pair must appear as a fresh event
             confirmedFirstChainPair = [a, b];
-            prevChainDigit = b;
+            prevChainDigit = null;
             appendLogLine(
               `Chain [${lastSeenConsPair[0]},${lastSeenConsPair[1]}]→[${a},${b}] confirmed (1 of 2), awaiting 3rd pair...`,
               "#38bdf8"
@@ -441,9 +452,10 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
           } else {
             // First consecutive pair — start of potential chain
+            // Reset prevChainDigit so the 2nd pair must appear as a fresh event
             lastSeenConsPair = [a, b];
             confirmedFirstChainPair = null;
-            prevChainDigit = b;
+            prevChainDigit = null;
             appendLogLine(
               `Pair [${a},${b}] found, awaiting chain...`,
               "#38bdf8"
