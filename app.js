@@ -1,4 +1,4 @@
-// Deriv DigitDiff bot — unified chained-pair strategy (used for both normal trading and recovery)
+// Deriv DigitDiff bot — unified 2-pair ascending strategy (used for both normal trading and recovery)
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -111,12 +111,16 @@ document.addEventListener("DOMContentLoaded", () => {
   let recoveryPair = null;
   let lastTradePair = null;
 
-  // ── chained-pair scan state (used for BOTH normal trading and recovery) ───
+  // ── 2-pair ascending scan state (used for BOTH normal trading and recovery) ──
+  // Pattern: [a, a+1] → [a+2, a+3] → trigger=(a+4) → barrier=(a+5)
+  // pair2_head = pair1_tail + 1  (ascending, non-chained)
+  // Invalid if barrier would wrap to 0 (i.e. trigger digit = 9)
   let chainScanMode = true;
-  let lastSeenConsPair = null;        // first pair  [a, b]
-  let confirmedFirstChainPair = null;  // second pair [b, c] — 1st chain confirmed
-  let confirmedChain = null;           // {trigger, barrier} — full 3-pair chain confirmed
+  let lastSeenConsPair = null;        // first pair  [a, a+1]
+  let confirmedFirstChainPair = null;  // second pair [a+2, a+3] — 1st chain confirmed
+  let confirmedChain = null;
   let prevChainDigit = null;
+  let chainPairTailSkip = null;       // after a pair [a,b] is found, skip first echo of b
   // ─────────────────────────────────────────────────────────────────────────
 
   const LOG_MAX_ENTRIES = 1200;
@@ -198,8 +202,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     chainScanMode = true;
     confirmedFirstChainPair = null;
+    chainPairTailSkip = null;
     appendLogLine(
-      "Scanning for 3-pair chain pattern [a,b]→[b,c]→[c,d]...",
+      "Scanning for 2-pair ascending pattern [a,a+1]→[a+2,a+3]→trigger→barrier...",
       "#a78bfa"
     );
   }
@@ -210,6 +215,7 @@ document.addEventListener("DOMContentLoaded", () => {
     confirmedFirstChainPair = null;
     confirmedChain = null;
     prevChainDigit = null;
+    chainPairTailSkip = null;
     resetSequence();
     totalProfit = 0;
     recoveryLoss = 0;
@@ -273,10 +279,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const marketMeta = MARKETS.find(m => m.symbol === newSymbol);
     const wasRunning = running;
 
+    // Stop mid-scan state — a pattern detected on one index means nothing on another.
     lastSeenConsPair = null;
     confirmedFirstChainPair = null;
     confirmedChain = null;
     prevChainDigit = null;
+    chainPairTailSkip = null;
     chainScanMode = true;
     settlementDigit = null;
     captureNextTick = false;
@@ -301,7 +309,10 @@ document.addEventListener("DOMContentLoaded", () => {
     );
 
     if (wasRunning) {
-      appendLogLine("Scanning for 3-pair chain pattern [a,b]→[b,c]→[c,d]...", "#a78bfa");
+      appendLogLine(
+        "Scanning for 2-pair ascending pattern [a,a+1]→[a+2,a+3]→trigger→barrier...",
+        "#a78bfa"
+      );
     }
   }
 
@@ -409,53 +420,101 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (waitingProposal || activeContractId) return;
 
-    // ── 3-PAIR CHAINED SCAN (normal trading AND recovery both use this) ─────
-    // Pattern: [a,b]→[b,c]→[c,d]  where each digit = previous + 1 (mod 10)
-    // Trigger = d, Barrier = d+1 (mod 10)
+    // ── 2-PAIR ASCENDING SCAN (normal trading AND recovery both use this) ────
+    // Pattern: [a, a+1] → [a+2, a+3] → trigger=(a+4) → DIGITDIFF barrier=(a+5)
+    //
+    // Rules:
+    //  • pair2_head must equal pair1_tail + 1 (non-chained, ascending gap)
+    //  • Other digits are allowed between pair1, pair2, and the trigger
+    //  • INVALID if the resulting barrier would be 0 (i.e. trigger digit = 9)
+    //
+    // Examples:
+    //  0,1 ... 2,3 ... 4  → DIGITDIFF barrier=5   ✓
+    //  2,3 ... 4,5 ... 6  → DIGITDIFF barrier=7   ✓
+    //  5,6 ... 7,8 ... 9  → barrier=0, INVALID     ✗
     if (chainScanMode) {
+      // ── Phase 2: both pairs confirmed — waiting for trigger digit ──────────
+      if (confirmedFirstChainPair !== null) {
+        const expectedTrigger = (confirmedFirstChainPair[1] + 1) % 10;
+        if (d === expectedTrigger) {
+          const barrier = (d + 1) % 10;
+          if (barrier === 0) {
+            // Trigger digit is 9 → barrier would wrap to 0 → invalid pattern
+            appendLogLine(
+              `[${lastSeenConsPair[0]},${lastSeenConsPair[1]}]→[${confirmedFirstChainPair[0]},${confirmedFirstChainPair[1]}]→trigger=${d} INVALID (barrier=0) — resetting scan...`,
+              "orange"
+            );
+            lastSeenConsPair = null;
+            confirmedFirstChainPair = null;
+            prevChainDigit = null;
+            chainPairTailSkip = null;
+            appendLogLine(
+              "Scanning for 2-pair ascending pattern [a,a+1]→[a+2,a+3]→trigger→barrier...",
+              "#a78bfa"
+            );
+            return;
+          }
+          // Valid trigger found — place trade
+          chainScanMode = false;
+          confirmedChain = null;
+          seqA = d;
+          seqB = barrier;
+          lastTradePair = [seqA, seqB];
+          appendLogLine(
+            `Chain [${lastSeenConsPair[0]},${lastSeenConsPair[1]}]→[${confirmedFirstChainPair[0]},${confirmedFirstChainPair[1]}]→trigger=${d} confirmed → DIGITDIFF barrier=${barrier}`,
+            "#f59e0b"
+          );
+          placeTrade(barrier);
+          return;
+        }
+        // Not the trigger digit yet — keep waiting (other digits in between are fine)
+        return;
+      }
+
+      // ── Phase 0 & 1: scanning for pair1, then pair2 ────────────────────────
       if (prevChainDigit !== null) {
         const a = prevChainDigit;
         const b = d;
-        const isConsPair = (b === (a + 1) % 10);
 
-        if (isConsPair) {
-          if (confirmedFirstChainPair !== null && confirmedFirstChainPair[1] === a) {
-            // Third consecutive pair — full 3-pair chain confirmed
-            const trigger = b;
-            const barrier = (b + 1) % 10;
-            confirmedChain = { trigger, barrier };
-            chainScanMode = false;
-            appendLogLine(
-              `Chain [${lastSeenConsPair[0]},${lastSeenConsPair[1]}]→[${confirmedFirstChainPair[0]},${confirmedFirstChainPair[1]}]→[${a},${b}] confirmed` +
-              ` → watching for digit ${trigger}, will trade DIGITDIFF barrier=${barrier}`,
-              "#f59e0b"
-            );
-          } else if (lastSeenConsPair !== null && lastSeenConsPair[1] === a) {
-            // Second consecutive pair — 1st chain confirmed, need one more
+        if (b === (a + 1) % 10) {
+          // Consecutive ascending pair [a, b] found
+          if (lastSeenConsPair !== null && a === (lastSeenConsPair[1] + 1) % 10) {
+            // Valid pair2: its head (a) = pair1_tail + 1  e.g. pair1=[2,3] → pair2 starts at 4
             confirmedFirstChainPair = [a, b];
-            prevChainDigit = b;
+            prevChainDigit = null;
+            chainPairTailSkip = b; // skip first echo of b before looking for trigger
             appendLogLine(
-              `Chain [${lastSeenConsPair[0]},${lastSeenConsPair[1]}]→[${a},${b}] confirmed (1 of 2), awaiting 3rd pair...`,
+              `Pair2 [${a},${b}] confirmed — awaiting trigger ${(b + 1) % 10}...`,
               "#38bdf8"
             );
             return;
           } else {
-            // First consecutive pair — start of potential chain
+            // New pair1 (replaces any previous pair1)
             lastSeenConsPair = [a, b];
             confirmedFirstChainPair = null;
-            prevChainDigit = b;
-            appendLogLine(
-              `Pair [${a},${b}] found, awaiting chain...`,
-              "#38bdf8"
-            );
+            prevChainDigit = null;
+            chainPairTailSkip = b; // skip first echo of b before looking for pair2
+            appendLogLine(`Pair [${a},${b}] found, awaiting pair2...`, "#38bdf8");
             return;
           }
         }
+        // Not a consecutive pair — fall through to update prevChainDigit
+      }
+
+      // prevChainDigit was null (fresh-start after a pair was found).
+      // If this digit is the echo of the previous pair's tail, skip it so the
+      // next pair cannot immediately piggyback on the same run of digits.
+      if (chainPairTailSkip !== null) {
+        if (d === chainPairTailSkip) {
+          chainPairTailSkip = null; // consume the skip — stay in fresh-start
+          return;                   // prevChainDigit remains null
+        }
+        chainPairTailSkip = null;   // non-matching digit — clear skip, store normally
       }
       prevChainDigit = d;
       return;
     }
-    // ── END 3-PAIR CHAINED SCAN ─────────────────────────────────────────────
+    // ── END 2-PAIR ASCENDING SCAN ────────────────────────────────────────────
 
     if (confirmedChain) {
       if (d === confirmedChain.trigger) {
@@ -661,6 +720,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 confirmedFirstChainPair = null;
                 confirmedChain = null;
                 prevChainDigit = null;
+                chainPairTailSkip = null;
 
                 recoveryLoss = 0;
                 currentStake = 0;
@@ -677,13 +737,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 confirmedFirstChainPair = null;
                 confirmedChain = null;
                 prevChainDigit = null;
+                chainPairTailSkip = null;
                 recoveryPair = null;
 
                 recoveryLoss += Math.abs(pnl);
                 ladder += 1;
                 const nextStake = stake();
                 appendLogLine(
-                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)} → scanning for chain pair pattern`,
+                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)} → scanning for 2-pair ascending pattern`,
                   "red"
                 );
                 resetSequence();
