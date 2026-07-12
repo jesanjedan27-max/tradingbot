@@ -1,4 +1,4 @@
-// Deriv DigitDiff bot — cyclic sequential pair strategy
+// Deriv DigitDiff bot — double consecutive pair strategy
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -111,17 +111,23 @@ document.addEventListener("DOMContentLoaded", () => {
   let recoveryPair = null;
   let lastTradePair = null;
 
-  // ── Cyclic sequential pair scan state ────────────────────────────────────
-  // Pairs cycle forever: [0,1]→[1,2]→[2,3]→[3,4]→[4,5]→[5,6]→[6,7]→[7,8]→[8,9]→[0,1]→...
-  // After the target pair lands, next digit is the trigger X:
-  //   X = 9  → invalid (barrier would be 0), advance pair, restart scan
+  // ── Double consecutive pair scan state ───────────────────────────────────
+  // Pattern: any [a, a+1] followed immediately by any [m, m+1], then trigger X
+  //   X = 9  → invalid (barrier=0), restart scan
   //   X = 0-8 → barrier = X+1, place DIGITDIFF trade
-  // After any trade (win or loss) → advance to next pair in cycle
-  const PAIR_COUNT = 9; // pairs [0,1] through [8,9]
-  let currentPairIndex = 0; // 0=[0,1], 1=[1,2], ..., 8=[8,9]
-  let scanPhase = "seek_pair"; // "seek_pair" | "await_trigger"
-  let prevScanDigit = null;   // last digit seen while seeking the pair
-  let pairFirstDigitSeen = false; // true when we've seen the first digit of the target pair
+  // No fixed pair order — any two back-to-back consecutive pairs qualify.
+  // After any trade (win or loss) → martingale applied, restart scan from idle.
+  //
+  // State machine:
+  //   "idle"          — watching for first digit of any consecutive pair
+  //   "got_p1_a"      — saw candidate p1a, next must be p1a+1 to confirm pair1
+  //   "got_p1"        — pair1 confirmed, watching for first digit of any second pair
+  //   "got_p2_a"      — saw candidate p2a, next must be p2a+1 to confirm pair2
+  //   "await_trigger" — both pairs confirmed, next digit is trigger X
+  let scanPhase = "idle";
+  let p1a = null;
+  let p2a = null;
+  let p1Label = null;
   // ─────────────────────────────────────────────────────────────────────────
 
   const LOG_MAX_ENTRIES = 1200;
@@ -193,16 +199,6 @@ document.addEventListener("DOMContentLoaded", () => {
     return Number(baseStake.toFixed(2));
   }
 
-  function targetPairLabel() {
-    const a = currentPairIndex;
-    const b = (a + 1) % 10;
-    return `[${a},${b}]`;
-  }
-
-  function advancePair() {
-    currentPairIndex = (currentPairIndex + 1) % PAIR_COUNT;
-  }
-
   function resetSequence() {
     settlementDigit = null;
     captureNextTick = false;
@@ -210,20 +206,21 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalVariants = null;
     proposalAttempt = 0;
     activeContractId = null;
-    scanPhase = "seek_pair";
-    prevScanDigit = null;
-    pairFirstDigitSeen = false;
+    scanPhase = "idle";
+    p1a = null;
+    p2a = null;
+    p1Label = null;
     appendLogLine(
-      `Scanning for pair ${targetPairLabel()} then trigger digit X (X≠9) → DIGITDIFF barrier=X+1...`,
+      "Scanning for any [a,a+1]+[m,m+1] double pair, then trigger X (X≠9) → DIGITDIFF barrier=X+1...",
       "#a78bfa"
     );
   }
 
   function fullReset() {
-    currentPairIndex = 0;
-    scanPhase = "seek_pair";
-    prevScanDigit = null;
-    pairFirstDigitSeen = false;
+    scanPhase = "idle";
+    p1a = null;
+    p2a = null;
+    p1Label = null;
     resetSequence();
     totalProfit = 0;
     recoveryLoss = 0;
@@ -287,9 +284,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const marketMeta = MARKETS.find(m => m.symbol === newSymbol);
     const wasRunning = running;
 
-    scanPhase = "seek_pair";
-    prevScanDigit = null;
-    pairFirstDigitSeen = false;
+    scanPhase = "idle";
+    p1a = null;
+    p2a = null;
+    p1Label = null;
     settlementDigit = null;
     captureNextTick = false;
     waitingProposal = false;
@@ -314,7 +312,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (wasRunning) {
       appendLogLine(
-        `Scanning for pair ${targetPairLabel()} then trigger digit X (X≠9) → DIGITDIFF barrier=X+1...`,
+        "Scanning for any [a,a+1]+[m,m+1] double pair, then trigger X (X≠9) → DIGITDIFF barrier=X+1...",
         "#a78bfa"
       );
     }
@@ -424,73 +422,90 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (waitingProposal || activeContractId) return;
 
-    // ── CYCLIC SEQUENTIAL PAIR SCAN ─────────────────────────────────────────
-    // Target pair cycles: [0,1]→[1,2]→[2,3]→[3,4]→[4,5]→[5,6]→[6,7]→[7,8]→[8,9]→[0,1]→...
-    // Phase "seek_pair": watch consecutive digits for the current target pair [pairIdx, pairIdx+1]
-    // Phase "await_trigger": next digit X is the trigger
-    //   X = 9  → invalid (barrier=0), advance pair, back to seek_pair
-    //   X = 0-8 → barrier = X+1, place DIGITDIFF trade
+    // ── DOUBLE CONSECUTIVE PAIR SCAN ────────────────────────────────────────
+    // Looks for any [a,a+1] immediately followed by any [m,m+1], then trigger X.
+    // No fixed pair order — any two back-to-back consecutive pairs qualify.
+    // Chain breaks → restart from idle, re-evaluate current digit as new start.
 
-    const pairA = currentPairIndex;
-    const pairB = (currentPairIndex + 1) % 10;
+    if (scanPhase === "idle") {
+      p1a = d;
+      scanPhase = "got_p1_a";
+      return;
+    }
 
-    if (scanPhase === "seek_pair") {
-      if (!pairFirstDigitSeen) {
-        if (d === pairA) {
-          pairFirstDigitSeen = true;
-          prevScanDigit = d;
-        }
-        return;
+    if (scanPhase === "got_p1_a") {
+      if (d === (p1a + 1) % 10) {
+        p1Label = `[${p1a},${d}]`;
+        appendLogLine(`Pair1 ${p1Label} confirmed — awaiting pair2...`, "#38bdf8");
+        scanPhase = "got_p1";
+        p2a = null;
       } else {
-        if (d === pairB) {
-          scanPhase = "await_trigger";
-          pairFirstDigitSeen = false;
-          prevScanDigit = null;
-          appendLogLine(
-            `Pair ${targetPairLabel()} confirmed — awaiting trigger digit X (X≠9)...`,
-            "#38bdf8"
-          );
-        } else {
-          pairFirstDigitSeen = (d === pairA);
-          prevScanDigit = d;
-        }
-        return;
+        p1a = d;
+        scanPhase = "got_p1_a";
       }
+      return;
+    }
+
+    if (scanPhase === "got_p1") {
+      p2a = d;
+      scanPhase = "got_p2_a";
+      return;
+    }
+
+    if (scanPhase === "got_p2_a") {
+      if (d === (p2a + 1) % 10) {
+        const p2Label = `[${p2a},${d}]`;
+        appendLogLine(
+          `Pair2 ${p2Label} confirmed after ${p1Label} — awaiting trigger X (X≠9)...`,
+          "#38bdf8"
+        );
+        scanPhase = "await_trigger";
+      } else {
+        appendLogLine(
+          `Pair2 broken (expected ${(p2a + 1) % 10}, got ${d}) — restarting scan...`,
+          "#94a3b8"
+        );
+        p1a = d;
+        p1Label = null;
+        p2a = null;
+        scanPhase = "got_p1_a";
+      }
+      return;
     }
 
     if (scanPhase === "await_trigger") {
-      const triggerDigit = d;
-      if (triggerDigit === 9) {
+      if (d === 9) {
         appendLogLine(
-          `Pair ${targetPairLabel()} trigger=${triggerDigit} INVALID (barrier=0) — advancing pair...`,
+          `${p1Label}+pair2 trigger=${d} INVALID (barrier=0) — restarting scan...`,
           "orange"
         );
-        advancePair();
-        scanPhase = "seek_pair";
-        prevScanDigit = null;
-        pairFirstDigitSeen = false;
+        p1a = null;
+        p1Label = null;
+        p2a = null;
+        scanPhase = "idle";
         appendLogLine(
-          `Scanning for pair ${targetPairLabel()} then trigger digit X (X≠9) → DIGITDIFF barrier=X+1...`,
+          "Scanning for any [a,a+1]+[m,m+1] double pair, then trigger X (X≠9) → DIGITDIFF barrier=X+1...",
           "#a78bfa"
         );
         return;
       }
 
-      const barrier = triggerDigit + 1;
-      seqA = triggerDigit;
+      const barrier = d + 1;
+      seqA = d;
       seqB = barrier;
       lastTradePair = [seqA, seqB];
       appendLogLine(
-        `Pair ${targetPairLabel()} trigger=${triggerDigit} → DIGITDIFF barrier=${barrier}`,
+        `${p1Label}+pair2 trigger=${d} → DIGITDIFF barrier=${barrier}`,
         "#f59e0b"
       );
-      scanPhase = "seek_pair";
-      prevScanDigit = null;
-      pairFirstDigitSeen = false;
+      p1a = null;
+      p1Label = null;
+      p2a = null;
+      scanPhase = "idle";
       placeTrade(barrier);
       return;
     }
-    // ── END CYCLIC SEQUENTIAL PAIR SCAN ────────────────────────────────────
+    // ── END DOUBLE CONSECUTIVE PAIR SCAN ───────────────────────────────────
   }
 
   async function connect() {
@@ -691,13 +706,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 ladder += 1;
                 const nextStake = stake();
                 appendLogLine(
-                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)} → advancing pair`,
+                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)} → restarting scan`,
                   "red"
                 );
               }
 
-              // Advance to next pair in cycle after any trade result
-              advancePair();
               if (levelEl) levelEl.textContent = ladder;
 
               if (ws && ws.readyState === WebSocket.OPEN) {
