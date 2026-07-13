@@ -1,4 +1,4 @@
-// Deriv DigitDiff bot — double consecutive pair strategy
+// Deriv DigitDiff bot — fixed 3-digit sequence strategy
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -111,24 +111,32 @@ document.addEventListener("DOMContentLoaded", () => {
   let recoveryPair = null;
   let lastTradePair = null;
 
-  // ── Double consecutive pair scan state ───────────────────────────────────
-  // Pattern: any [a, a+1] followed immediately by any [m, m+1], then trigger X
-  //   Rules:
-  //     - Both pairs: first digit must be 0-8 (pair [9,0] is INVALID)
-  //     - pair2 must be different from pair1 (e.g. [3,4]+[3,4] is INVALID)
-  //     - X = 9  → invalid (barrier=0), restart scan
-  //     - X = 0-8 → barrier = X+1, place DIGITDIFF trade
+  // ── Fixed 3-digit sequence scan state ───────────────────────────────────
+  // Watches for exactly 6 sequences tick-by-tick. First match fires a trade.
+  //   Seq A,B,X → barrier = X+1
+  //   0,1,2 → barrier 3
+  //   1,2,3 → barrier 4
+  //   2,3,4 → barrier 5
+  //   3,4,5 → barrier 6
+  //   5,6,7 → barrier 8
+  //   6,7,8 → barrier 9
+  // On any mismatch → discard current digit, restart from scratch (idle).
+  // After win or loss → martingale applied, restart scan from idle.
   //
   // State machine:
-  //   "idle"          — watching for first digit of any consecutive pair
-  //   "got_p1_a"      — saw candidate p1a, next must be p1a+1 to confirm pair1
-  //   "got_p1"        — pair1 confirmed, watching for first digit of pair2
-  //   "got_p2_a"      — saw candidate p2a, next must be p2a+1 (and p2a≠p1a) to confirm pair2
-  //   "await_trigger" — both pairs confirmed, next digit is trigger X
+  //   "idle"    — waiting; each new digit checked as possible sequence start
+  //   "got_a"   — saw a valid A digit, next must be A+1
+  //   "got_b"   — saw valid A,B, next must be A+2 (= X)
+  const SEQUENCES = [
+    { a: 0, b: 1, x: 2, barrier: 3 },
+    { a: 1, b: 2, x: 3, barrier: 4 },
+    { a: 2, b: 3, x: 4, barrier: 5 },
+    { a: 3, b: 4, x: 5, barrier: 6 },
+    { a: 5, b: 6, x: 7, barrier: 8 },
+    { a: 6, b: 7, x: 8, barrier: 9 }
+  ];
   let scanPhase = "idle";
-  let p1a = null;
-  let p2a = null;
-  let p1Label = null;
+  let scanSeq = null;
   // ─────────────────────────────────────────────────────────────────────────
 
   const LOG_MAX_ENTRIES = 1200;
@@ -208,20 +216,16 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalAttempt = 0;
     activeContractId = null;
     scanPhase = "idle";
-    p1a = null;
-    p2a = null;
-    p1Label = null;
+    scanSeq = null;
     appendLogLine(
-      "Scanning for any [a,a+1]+[m,m+1] double pair (no duplicates, no [9,0]), then trigger X (X≠9) → DIGITDIFF barrier=X+1...",
+      "Scanning for: 0,1,2→3 | 1,2,3→4 | 2,3,4→5 | 3,4,5→6 | 5,6,7→8 | 6,7,8→9",
       "#a78bfa"
     );
   }
 
   function fullReset() {
     scanPhase = "idle";
-    p1a = null;
-    p2a = null;
-    p1Label = null;
+    scanSeq = null;
     resetSequence();
     totalProfit = 0;
     recoveryLoss = 0;
@@ -286,9 +290,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const wasRunning = running;
 
     scanPhase = "idle";
-    p1a = null;
-    p2a = null;
-    p1Label = null;
+    scanSeq = null;
     settlementDigit = null;
     captureNextTick = false;
     waitingProposal = false;
@@ -313,7 +315,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (wasRunning) {
       appendLogLine(
-        "Scanning for any [a,a+1]+[m,m+1] double pair (no duplicates, no [9,0]), then trigger X (X≠9) → DIGITDIFF barrier=X+1...",
+        "Scanning for: 0,1,2→3 | 1,2,3→4 | 2,3,4→5 | 3,4,5→6 | 5,6,7→8 | 6,7,8→9",
         "#a78bfa"
       );
     }
@@ -423,99 +425,56 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (waitingProposal || activeContractId) return;
 
-    // ── DOUBLE CONSECUTIVE PAIR SCAN ────────────────────────────────────────
-    // Valid pair [a, a+1]: a must be 0-8 (pair [9,0] excluded)
-    // Pair2 must differ from pair1 (no duplicate pairs like [3,4]+[3,4])
-    // Trigger X: 0-8 valid (barrier=X+1); X=9 invalid (barrier=0)
+    // ── FIXED 3-DIGIT SEQUENCE SCAN ─────────────────────────────────────────
+    // Watches strictly for one of 6 sequences: A,B,X → DIGITDIFF barrier=X+1
+    //   0,1,2→3 | 1,2,3→4 | 2,3,4→5 | 3,4,5→6 | 5,6,7→8 | 6,7,8→9
+    // Any mismatch → discard current digit, restart from idle (no re-evaluation).
+    //
+    // States:
+    //   "idle"  — check if d is a valid A; if yes store sequence, move to got_a
+    //   "got_a" — check if d === scanSeq.b; if yes move to got_b; else idle
+    //   "got_b" — check if d === scanSeq.x; if yes → trade; else idle
 
     if (scanPhase === "idle") {
-      p1a = d;
-      scanPhase = "got_p1_a";
-      return;
-    }
-
-    if (scanPhase === "got_p1_a") {
-      if (p1a <= 8 && d === p1a + 1) {
-        // Pair1 confirmed (pair [9,0] excluded — p1a must be 0-8)
-        p1Label = `[${p1a},${d}]`;
-        appendLogLine(`Pair1 ${p1Label} confirmed — awaiting pair2...`, "#38bdf8");
-        scanPhase = "got_p1";
-        p2a = null;
-      } else {
-        // Chain broken — restart, re-evaluate current digit as new p1a
-        p1a = d;
-        scanPhase = "got_p1_a";
+      const match = SEQUENCES.find(s => s.a === d);
+      if (match) {
+        scanSeq = match;
+        scanPhase = "got_a";
+        appendLogLine(`Seq start: ${match.a} — waiting for ${match.b}...`, "#94a3b8");
       }
       return;
     }
 
-    if (scanPhase === "got_p1") {
-      p2a = d;
-      scanPhase = "got_p2_a";
-      return;
-    }
-
-    if (scanPhase === "got_p2_a") {
-      if (p2a <= 8 && d === p2a + 1 && p2a !== p1a) {
-        // Pair2 confirmed:
-        //   p2a must be 0-8 (no [9,0] wrap)
-        //   pair2 must differ from pair1 (no [3,4]+[3,4] etc.)
-        const p2Label = `[${p2a},${d}]`;
-        appendLogLine(
-          `Pair2 ${p2Label} confirmed after ${p1Label} — awaiting trigger X (X≠9)...`,
-          "#38bdf8"
-        );
-        scanPhase = "await_trigger";
+    if (scanPhase === "got_a") {
+      if (d === scanSeq.b) {
+        scanPhase = "got_b";
+        appendLogLine(`Seq ${scanSeq.a},${scanSeq.b} — waiting for ${scanSeq.x}...`, "#38bdf8");
       } else {
-        // Chain broken or duplicate pair — restart, re-evaluate current digit as new p1a
-        const reason = (p2a === p1a)
-          ? `duplicate pair rejected`
-          : `expected ${p2a <= 8 ? p2a + 1 : "N/A"}, got ${d}`;
-        appendLogLine(
-          `Pair2 invalid (${reason}) — restarting scan...`,
-          "#94a3b8"
-        );
-        p1a = d;
-        p1Label = null;
-        p2a = null;
-        scanPhase = "got_p1_a";
-      }
-      return;
-    }
-
-    if (scanPhase === "await_trigger") {
-      if (d === 9) {
-        appendLogLine(
-          `${p1Label}+pair2 trigger=${d} INVALID (barrier=0) — restarting scan...`,
-          "orange"
-        );
-        p1a = null;
-        p1Label = null;
-        p2a = null;
+        appendLogLine(`Seq broken (expected ${scanSeq.b}, got ${d}) — restarting scan...`, "#94a3b8");
+        scanSeq = null;
         scanPhase = "idle";
-        appendLogLine(
-          "Scanning for any [a,a+1]+[m,m+1] double pair (no duplicates, no [9,0]), then trigger X (X≠9) → DIGITDIFF barrier=X+1...",
-          "#a78bfa"
-        );
-        return;
       }
-
-      const barrier = d + 1;
-      seqA = d;
-      seqB = barrier;
-      lastTradePair = [seqA, seqB];
-      appendLogLine(
-        `${p1Label}+pair2 trigger=${d} → DIGITDIFF barrier=${barrier}`,
-        "#f59e0b"
-      );
-      p1a = null;
-      p1Label = null;
-      p2a = null;
-      scanPhase = "idle";
-      placeTrade(barrier);
       return;
     }
-    // ── END DOUBLE CONSECUTIVE PAIR SCAN ───────────────────────────────────
+
+    if (scanPhase === "got_b") {
+      if (d === scanSeq.x) {
+        const { a, b, x, barrier } = scanSeq;
+        appendLogLine(`Sequence ${a},${b},${x} matched → DIGITDIFF barrier=${barrier}`, "#f59e0b");
+        seqA = x;
+        seqB = barrier;
+        lastTradePair = [seqA, seqB];
+        scanSeq = null;
+        scanPhase = "idle";
+        placeTrade(barrier);
+      } else {
+        appendLogLine(`Seq broken (expected ${scanSeq.x}, got ${d}) — restarting scan...`, "#94a3b8");
+        scanSeq = null;
+        scanPhase = "idle";
+      }
+      return;
+    }
+    // ── END FIXED 3-DIGIT SEQUENCE SCAN ────────────────────────────────────
   }
 
   async function connect() {
