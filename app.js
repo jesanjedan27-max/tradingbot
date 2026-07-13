@@ -113,16 +113,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ── Double consecutive pair scan state ───────────────────────────────────
   // Pattern: any [a, a+1] followed immediately by any [m, m+1], then trigger X
-  //   X = 9  → invalid (barrier=0), restart scan
-  //   X = 0-8 → barrier = X+1, place DIGITDIFF trade
-  // No fixed pair order — any two back-to-back consecutive pairs qualify.
-  // After any trade (win or loss) → martingale applied, restart scan from idle.
+  //   Rules:
+  //     - Both pairs: first digit must be 0-8 (pair [9,0] is INVALID)
+  //     - pair2 must be different from pair1 (e.g. [3,4]+[3,4] is INVALID)
+  //     - X = 9  → invalid (barrier=0), restart scan
+  //     - X = 0-8 → barrier = X+1, place DIGITDIFF trade
   //
   // State machine:
   //   "idle"          — watching for first digit of any consecutive pair
   //   "got_p1_a"      — saw candidate p1a, next must be p1a+1 to confirm pair1
-  //   "got_p1"        — pair1 confirmed, watching for first digit of any second pair
-  //   "got_p2_a"      — saw candidate p2a, next must be p2a+1 to confirm pair2
+  //   "got_p1"        — pair1 confirmed, watching for first digit of pair2
+  //   "got_p2_a"      — saw candidate p2a, next must be p2a+1 (and p2a≠p1a) to confirm pair2
   //   "await_trigger" — both pairs confirmed, next digit is trigger X
   let scanPhase = "idle";
   let p1a = null;
@@ -211,7 +212,7 @@ document.addEventListener("DOMContentLoaded", () => {
     p2a = null;
     p1Label = null;
     appendLogLine(
-      "Scanning for any [a,a+1]+[m,m+1] double pair, then trigger X (X≠9) → DIGITDIFF barrier=X+1...",
+      "Scanning for any [a,a+1]+[m,m+1] double pair (no duplicates, no [9,0]), then trigger X (X≠9) → DIGITDIFF barrier=X+1...",
       "#a78bfa"
     );
   }
@@ -312,7 +313,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (wasRunning) {
       appendLogLine(
-        "Scanning for any [a,a+1]+[m,m+1] double pair, then trigger X (X≠9) → DIGITDIFF barrier=X+1...",
+        "Scanning for any [a,a+1]+[m,m+1] double pair (no duplicates, no [9,0]), then trigger X (X≠9) → DIGITDIFF barrier=X+1...",
         "#a78bfa"
       );
     }
@@ -423,9 +424,9 @@ document.addEventListener("DOMContentLoaded", () => {
     if (waitingProposal || activeContractId) return;
 
     // ── DOUBLE CONSECUTIVE PAIR SCAN ────────────────────────────────────────
-    // Looks for any [a,a+1] immediately followed by any [m,m+1], then trigger X.
-    // No fixed pair order — any two back-to-back consecutive pairs qualify.
-    // Chain breaks → restart from idle, re-evaluate current digit as new start.
+    // Valid pair [a, a+1]: a must be 0-8 (pair [9,0] excluded)
+    // Pair2 must differ from pair1 (no duplicate pairs like [3,4]+[3,4])
+    // Trigger X: 0-8 valid (barrier=X+1); X=9 invalid (barrier=0)
 
     if (scanPhase === "idle") {
       p1a = d;
@@ -434,12 +435,14 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (scanPhase === "got_p1_a") {
-      if (d === (p1a + 1) % 10) {
+      if (p1a <= 8 && d === p1a + 1) {
+        // Pair1 confirmed (pair [9,0] excluded — p1a must be 0-8)
         p1Label = `[${p1a},${d}]`;
         appendLogLine(`Pair1 ${p1Label} confirmed — awaiting pair2...`, "#38bdf8");
         scanPhase = "got_p1";
         p2a = null;
       } else {
+        // Chain broken — restart, re-evaluate current digit as new p1a
         p1a = d;
         scanPhase = "got_p1_a";
       }
@@ -453,7 +456,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (scanPhase === "got_p2_a") {
-      if (d === (p2a + 1) % 10) {
+      if (p2a <= 8 && d === p2a + 1 && p2a !== p1a) {
+        // Pair2 confirmed:
+        //   p2a must be 0-8 (no [9,0] wrap)
+        //   pair2 must differ from pair1 (no [3,4]+[3,4] etc.)
         const p2Label = `[${p2a},${d}]`;
         appendLogLine(
           `Pair2 ${p2Label} confirmed after ${p1Label} — awaiting trigger X (X≠9)...`,
@@ -461,8 +467,12 @@ document.addEventListener("DOMContentLoaded", () => {
         );
         scanPhase = "await_trigger";
       } else {
+        // Chain broken or duplicate pair — restart, re-evaluate current digit as new p1a
+        const reason = (p2a === p1a)
+          ? `duplicate pair rejected`
+          : `expected ${p2a <= 8 ? p2a + 1 : "N/A"}, got ${d}`;
         appendLogLine(
-          `Pair2 broken (expected ${(p2a + 1) % 10}, got ${d}) — restarting scan...`,
+          `Pair2 invalid (${reason}) — restarting scan...`,
           "#94a3b8"
         );
         p1a = d;
@@ -484,7 +494,7 @@ document.addEventListener("DOMContentLoaded", () => {
         p2a = null;
         scanPhase = "idle";
         appendLogLine(
-          "Scanning for any [a,a+1]+[m,m+1] double pair, then trigger X (X≠9) → DIGITDIFF barrier=X+1...",
+          "Scanning for any [a,a+1]+[m,m+1] double pair (no duplicates, no [9,0]), then trigger X (X≠9) → DIGITDIFF barrier=X+1...",
           "#a78bfa"
         );
         return;
