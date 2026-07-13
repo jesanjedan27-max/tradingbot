@@ -120,13 +120,13 @@ document.addEventListener("DOMContentLoaded", () => {
   //   3,4,5 → barrier 6
   //   5,6,7 → barrier 8
   //   6,7,8 → barrier 9
-  // On any mismatch → discard current digit, restart from scratch (idle).
+  // On mismatch → re-evaluate breaking digit as possible new sequence start.
   // After win or loss → martingale applied, restart scan from idle.
   //
   // State machine:
-  //   "idle"    — waiting; each new digit checked as possible sequence start
-  //   "got_a"   — saw a valid A digit, next must be A+1
-  //   "got_b"   — saw valid A,B, next must be A+2 (= X)
+  //   "idle"  — each digit checked as possible A; move to got_a if match
+  //   "got_a" — next must equal scanSeq.b; else re-evaluate as new A
+  //   "got_b" — next must equal scanSeq.x; if yes → trade; else re-evaluate
   const SEQUENCES = [
     { a: 0, b: 1, x: 2, barrier: 3 },
     { a: 1, b: 2, x: 3, barrier: 4 },
@@ -428,12 +428,12 @@ document.addEventListener("DOMContentLoaded", () => {
     // ── FIXED 3-DIGIT SEQUENCE SCAN ─────────────────────────────────────────
     // Watches strictly for one of 6 sequences: A,B,X → DIGITDIFF barrier=X+1
     //   0,1,2→3 | 1,2,3→4 | 2,3,4→5 | 3,4,5→6 | 5,6,7→8 | 6,7,8→9
-    // Any mismatch → discard current digit, restart from idle (no re-evaluation).
+    // On mismatch → breaking digit is re-evaluated as possible new A.
     //
     // States:
     //   "idle"  — check if d is a valid A; if yes store sequence, move to got_a
-    //   "got_a" — check if d === scanSeq.b; if yes move to got_b; else idle
-    //   "got_b" — check if d === scanSeq.x; if yes → trade; else idle
+    //   "got_a" — check if d === scanSeq.b; if yes move to got_b; else re-eval
+    //   "got_b" — check if d === scanSeq.x; if yes → trade; else re-eval
 
     if (scanPhase === "idle") {
       const match = SEQUENCES.find(s => s.a === d);
@@ -450,9 +450,15 @@ document.addEventListener("DOMContentLoaded", () => {
         scanPhase = "got_b";
         appendLogLine(`Seq ${scanSeq.a},${scanSeq.b} — waiting for ${scanSeq.x}...`, "#38bdf8");
       } else {
-        appendLogLine(`Seq broken (expected ${scanSeq.b}, got ${d}) — restarting scan...`, "#94a3b8");
+        appendLogLine(`Seq broken (expected ${scanSeq.b}, got ${d}) — re-evaluating ${d}...`, "#94a3b8");
         scanSeq = null;
         scanPhase = "idle";
+        const reMatch = SEQUENCES.find(s => s.a === d);
+        if (reMatch) {
+          scanSeq = reMatch;
+          scanPhase = "got_a";
+          appendLogLine(`Seq start: ${reMatch.a} — waiting for ${reMatch.b}...`, "#94a3b8");
+        }
       }
       return;
     }
@@ -468,9 +474,15 @@ document.addEventListener("DOMContentLoaded", () => {
         scanPhase = "idle";
         placeTrade(barrier);
       } else {
-        appendLogLine(`Seq broken (expected ${scanSeq.x}, got ${d}) — restarting scan...`, "#94a3b8");
+        appendLogLine(`Seq broken (expected ${scanSeq.x}, got ${d}) — re-evaluating ${d}...`, "#94a3b8");
         scanSeq = null;
         scanPhase = "idle";
+        const reMatch = SEQUENCES.find(s => s.a === d);
+        if (reMatch) {
+          scanSeq = reMatch;
+          scanPhase = "got_a";
+          appendLogLine(`Seq start: ${reMatch.a} — waiting for ${reMatch.b}...`, "#94a3b8");
+        }
       }
       return;
     }
