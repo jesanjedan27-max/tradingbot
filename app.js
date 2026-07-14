@@ -1,4 +1,4 @@
-// Deriv DigitDiff bot — fixed 3-digit sequence strategy
+// Deriv DigitDiff bot — cyclic sequential pair strategy
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -111,32 +111,22 @@ document.addEventListener("DOMContentLoaded", () => {
   let recoveryPair = null;
   let lastTradePair = null;
 
-  // ── Fixed 3-digit sequence scan state ───────────────────────────────────
-  // Watches for exactly 6 sequences tick-by-tick. First match fires a trade.
-  //   Seq A,B,X → barrier = X+1
-  //   0,1,2 → barrier 3
-  //   1,2,3 → barrier 4
-  //   2,3,4 → barrier 5
-  //   3,4,5 → barrier 6
-  //   5,6,7 → barrier 8
-  //   6,7,8 → barrier 9
-  // On mismatch → re-evaluate breaking digit as possible new sequence start.
-  // After win or loss → martingale applied, restart scan from idle.
-  //
-  // State machine:
-  //   "idle"  — each digit checked as possible A; move to got_a if match
-  //   "got_a" — next must equal scanSeq.b; else re-evaluate as new A
-  //   "got_b" — next must equal scanSeq.x; if yes → trade; else re-evaluate
+  // ── Cyclic fixed pair scan state ─────────────────────────────────────────
+  // Only 3 sequences, followed in order, cycling forever:
+  //   [0,1] → DIGITDIFF barrier 2
+  //   [0,3] → DIGITDIFF barrier 4
+  //   [0,5] → DIGITDIFF barrier 6
+  // As soon as the target pair lands (digit A immediately followed by digit B),
+  // the trade fires immediately with that sequence's fixed barrier — there is
+  // no separate trigger-digit step.
+  // After any trade (win or loss) → advance to the next sequence in the cycle.
   const SEQUENCES = [
-    { a: 0, b: 1, x: 2, barrier: 3 },
-    { a: 1, b: 2, x: 3, barrier: 4 },
-    { a: 2, b: 3, x: 4, barrier: 5 },
-    { a: 3, b: 4, x: 5, barrier: 6 },
-    { a: 5, b: 6, x: 7, barrier: 8 },
-    { a: 6, b: 7, x: 8, barrier: 9 }
+    { a: 0, b: 1, barrier: 2 },
+    { a: 0, b: 3, barrier: 4 },
+    { a: 0, b: 5, barrier: 6 }
   ];
-  let scanPhase = "idle";
-  let scanSeq = null;
+  let currentSeqIndex = 0; // 0=[0,1], 1=[0,3], 2=[0,5]
+  let pairFirstDigitSeen = false; // true when we've seen the first digit of the target pair
   // ─────────────────────────────────────────────────────────────────────────
 
   const LOG_MAX_ENTRIES = 1200;
@@ -208,6 +198,15 @@ document.addEventListener("DOMContentLoaded", () => {
     return Number(baseStake.toFixed(2));
   }
 
+  function targetPairLabel() {
+    const { a, b } = SEQUENCES[currentSeqIndex];
+    return `[${a},${b}]`;
+  }
+
+  function advancePair() {
+    currentSeqIndex = (currentSeqIndex + 1) % SEQUENCES.length;
+  }
+
   function resetSequence() {
     settlementDigit = null;
     captureNextTick = false;
@@ -215,17 +214,16 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalVariants = null;
     proposalAttempt = 0;
     activeContractId = null;
-    scanPhase = "idle";
-    scanSeq = null;
+    pairFirstDigitSeen = false;
     appendLogLine(
-      "Scanning for: 0,1,2→3 | 1,2,3→4 | 2,3,4→5 | 3,4,5→6 | 5,6,7→8 | 6,7,8→9",
+      `Scanning for pair ${targetPairLabel()} → DIGITDIFF barrier=${SEQUENCES[currentSeqIndex].barrier}...`,
       "#a78bfa"
     );
   }
 
   function fullReset() {
-    scanPhase = "idle";
-    scanSeq = null;
+    currentSeqIndex = 0;
+    pairFirstDigitSeen = false;
     resetSequence();
     totalProfit = 0;
     recoveryLoss = 0;
@@ -289,8 +287,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const marketMeta = MARKETS.find(m => m.symbol === newSymbol);
     const wasRunning = running;
 
-    scanPhase = "idle";
-    scanSeq = null;
+    pairFirstDigitSeen = false;
     settlementDigit = null;
     captureNextTick = false;
     waitingProposal = false;
@@ -315,7 +312,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (wasRunning) {
       appendLogLine(
-        "Scanning for: 0,1,2→3 | 1,2,3→4 | 2,3,4→5 | 3,4,5→6 | 5,6,7→8 | 6,7,8→9",
+        `Scanning for pair ${targetPairLabel()} → DIGITDIFF barrier=${SEQUENCES[currentSeqIndex].barrier}...`,
         "#a78bfa"
       );
     }
@@ -425,68 +422,39 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (waitingProposal || activeContractId) return;
 
-    // ── FIXED 3-DIGIT SEQUENCE SCAN ─────────────────────────────────────────
-    // Watches strictly for one of 6 sequences: A,B,X → DIGITDIFF barrier=X+1
-    //   0,1,2→3 | 1,2,3→4 | 2,3,4→5 | 3,4,5→6 | 5,6,7→8 | 6,7,8→9
-    // On mismatch → breaking digit is re-evaluated as possible new A.
-    //
-    // States:
-    //   "idle"  — check if d is a valid A; if yes store sequence, move to got_a
-    //   "got_a" — check if d === scanSeq.b; if yes move to got_b; else re-eval
-    //   "got_b" — check if d === scanSeq.x; if yes → trade; else re-eval
+    // ── CYCLIC FIXED PAIR SCAN ───────────────────────────────────────────────
+    // Only 3 sequences, followed in order, cycling forever:
+    //   [0,1] → DIGITDIFF barrier 2
+    //   [0,3] → DIGITDIFF barrier 4
+    //   [0,5] → DIGITDIFF barrier 6
+    // As soon as digit A is immediately followed by digit B, place the trade
+    // with that sequence's fixed barrier — no separate trigger-digit step.
 
-    if (scanPhase === "idle") {
-      const match = SEQUENCES.find(s => s.a === d);
-      if (match) {
-        scanSeq = match;
-        scanPhase = "got_a";
-        appendLogLine(`Seq start: ${match.a} — waiting for ${match.b}...`, "#94a3b8");
+    const { a: pairA, b: pairB, barrier } = SEQUENCES[currentSeqIndex];
+
+    if (!pairFirstDigitSeen) {
+      if (d === pairA) {
+        pairFirstDigitSeen = true;
       }
       return;
     }
 
-    if (scanPhase === "got_a") {
-      if (d === scanSeq.b) {
-        scanPhase = "got_b";
-        appendLogLine(`Seq ${scanSeq.a},${scanSeq.b} — waiting for ${scanSeq.x}...`, "#38bdf8");
-      } else {
-        appendLogLine(`Seq broken (expected ${scanSeq.b}, got ${d}) — re-evaluating ${d}...`, "#94a3b8");
-        scanSeq = null;
-        scanPhase = "idle";
-        const reMatch = SEQUENCES.find(s => s.a === d);
-        if (reMatch) {
-          scanSeq = reMatch;
-          scanPhase = "got_a";
-          appendLogLine(`Seq start: ${reMatch.a} — waiting for ${reMatch.b}...`, "#94a3b8");
-        }
-      }
+    if (d === pairB) {
+      seqA = pairA;
+      seqB = pairB;
+      lastTradePair = [seqA, seqB];
+      appendLogLine(
+        `Pair ${targetPairLabel()} confirmed → DIGITDIFF barrier=${barrier}`,
+        "#f59e0b"
+      );
+      pairFirstDigitSeen = false;
+      placeTrade(barrier);
       return;
     }
 
-    if (scanPhase === "got_b") {
-      if (d === scanSeq.x) {
-        const { a, b, x, barrier } = scanSeq;
-        appendLogLine(`Sequence ${a},${b},${x} matched → DIGITDIFF barrier=${barrier}`, "#f59e0b");
-        seqA = x;
-        seqB = barrier;
-        lastTradePair = [seqA, seqB];
-        scanSeq = null;
-        scanPhase = "idle";
-        placeTrade(barrier);
-      } else {
-        appendLogLine(`Seq broken (expected ${scanSeq.x}, got ${d}) — re-evaluating ${d}...`, "#94a3b8");
-        scanSeq = null;
-        scanPhase = "idle";
-        const reMatch = SEQUENCES.find(s => s.a === d);
-        if (reMatch) {
-          scanSeq = reMatch;
-          scanPhase = "got_a";
-          appendLogLine(`Seq start: ${reMatch.a} — waiting for ${reMatch.b}...`, "#94a3b8");
-        }
-      }
-      return;
-    }
-    // ── END FIXED 3-DIGIT SEQUENCE SCAN ────────────────────────────────────
+    // Pair not completed on this tick — re-check if this digit restarts the pair
+    pairFirstDigitSeen = (d === pairA);
+    // ── END CYCLIC FIXED PAIR SCAN ──────────────────────────────────────────
   }
 
   async function connect() {
@@ -687,11 +655,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 ladder += 1;
                 const nextStake = stake();
                 appendLogLine(
-                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)} → restarting scan`,
+                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)} → advancing pair`,
                   "red"
                 );
               }
 
+              // Advance to next pair in cycle after any trade result
+              advancePair();
               if (levelEl) levelEl.textContent = ladder;
 
               if (ws && ws.readyState === WebSocket.OPEN) {
