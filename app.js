@@ -460,7 +460,8 @@ document.addEventListener("DOMContentLoaded", () => {
         // Got A, now waiting for B on the very next tick
         if (d === B) {
           // Both [A, B] seen in sequence → place trade immediately
-          const barrier = A; // DIGITDIFF on the third digit A
+          // barrier must be a string for the Deriv DIGITDIFF API
+          const barrier = String(A);
           appendLogLine(
             `Armed [${A},${B},${A}]: saw [${A},${B}] → DIGITDIFF barrier=${barrier} (zero-tick)`,
             "lime"
@@ -504,7 +505,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (count === 1) {
           appendLogLine(
-            `Sequence [${w0},${w1},${w0}] appeared once — watching for 2nd occurrence...`,
+            `Sequence [${w0},${w1},${w0}] — count: 1/2 (waiting for 2nd occurrence...)`,
             "#64748b"
           );
         } else if (count === 2) {
@@ -514,8 +515,7 @@ document.addEventListener("DOMContentLoaded", () => {
           seqCounts = {};   // clear counts — no longer needed
           scanWindow = [];  // clear window — entering armed mode
           appendLogLine(
-            `★ Sequence [${w0},${w1},${w0}] appeared TWICE! ` +
-            `Now watching for [${w0},${w1}] → DIGITDIFF barrier=${w0}`,
+            `★ Sequence [${w0},${w1},${w0}] — count: 2/2 → ARMED! Watching for [${w0},${w1}] → DIGITDIFF ${w0}`,
             "#f59e0b"
           );
         }
