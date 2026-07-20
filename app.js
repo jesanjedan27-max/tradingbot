@@ -160,6 +160,22 @@ document.addEventListener("DOMContentLoaded", () => {
     console.log(message);
   }
 
+  function flushTicksNow() {
+    if (!tickBuffer.length) return;
+    const fragment = document.createDocumentFragment();
+    tickBuffer.splice(0).forEach(({ price, digit }) => {
+      const row = document.createElement("div");
+      row.style.color = "#7dd3fc";
+      row.textContent = `Tick ${Number(price).toFixed(decimalsForSymbol(symbol))} → ${digit === null ? "-" : digit}`;
+      fragment.appendChild(row);
+    });
+    logEl.appendChild(fragment);
+    while (logEl.children.length > LOG_MAX_ENTRIES) {
+      logEl.removeChild(logEl.firstChild);
+    }
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
   function startTickFlush() {
     if (tickFlushTimer) return;
     tickFlushTimer = setInterval(() => {
@@ -505,6 +521,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const count = seqCounts[key];
 
         if (count === 1) {
+          flushTicksNow(); // show triggering tick before the count message
           appendLogLine(
             `Sequence [${w0},${w1},${w0}] — count: 1/2 (waiting for 2nd occurrence...)`,
             "#64748b"
@@ -515,6 +532,7 @@ document.addEventListener("DOMContentLoaded", () => {
           armedStep = 0;
           seqCounts = {};   // clear counts — no longer needed
           scanWindow = [];  // clear window — entering armed mode
+          flushTicksNow(); // show triggering tick before the armed message
           appendLogLine(
             `★ Sequence [${w0},${w1},${w0}] — count: 2/2 → ARMED! Watching for [${w0},${w1}] → DIGITDIFF ${w0}`,
             "#f59e0b"
