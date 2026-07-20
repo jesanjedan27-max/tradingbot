@@ -118,8 +118,10 @@ document.addEventListener("DOMContentLoaded", () => {
   //
   // Phase 1 — SCANNING:
   //   Watch the digit stream for any ABA sequence that appears TWICE.
-  //   Keep a rolling 2-digit window. When a new digit d arrives and
-  //   window = [A, B] and d === A and B < A, that's one ABA occurrence.
+  //   Keep a rolling 2-digit window of the PREVIOUS two digits.
+  //   When a new digit d arrives, check window = [w0, w1] FIRST:
+  //   If d === w0 AND w1 < w0 AND w0 >= 1  →  ABA sequence [w0, w1, w0] found.
+  //   Then slide the window forward.
   //
   // Phase 2 — ARMED:
   //   After the same ABA sequence has appeared twice, arm that sequence.
@@ -488,13 +490,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // ── PHASE 1 — SCANNING: detect any ABA sequence appearing twice ───────
     //
-    // Keep a rolling 2-digit window. When new digit d arrives:
-    //   window = [w0, w1]
+    // Keep a rolling 2-digit window of the PREVIOUS two digits.
+    // When new digit d arrives, check the existing window FIRST:
+    //   window = [w0, w1]  (the two digits before d)
     //   If d === w0 AND w1 < w0 AND w0 >= 1  →  ABA sequence [w0, w1, w0] found
+    // Then slide the window forward by pushing d.
     //
-    scanWindow.push(d);
-    if (scanWindow.length > 2) scanWindow.shift(); // keep only the last 2
-
     if (scanWindow.length === 2) {
       const [w0, w1] = scanWindow;
       // Check for ABA: d == w0 (outer digit), w1 < w0 (middle digit), w0 >= 1
@@ -521,6 +522,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       }
     }
+    // Slide the window forward AFTER the check
+    scanWindow.push(d);
+    if (scanWindow.length > 2) scanWindow.shift();
     // ── END SCAN ──────────────────────────────────────────────────────────
   }
 
