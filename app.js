@@ -113,8 +113,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ── ABA Sequence Strategy ────────────────────────────────────────────────
   //
-  // Valid sequences: all [A, B, A] where A ∈ {1..9} and B ∈ {0..A-1}
-  //   e.g. 101, 202, 212, 303, 313, 323, ..., 989  (45 total)
+  // Valid sequences: all [A, B, A] where A ∈ {1..9} and B ∈ {0..A-1},
+  // excluding 101, 212, 323, 434, 545, 656, 767, 878, and 989 (36 total)
   //
   // Phase 1 — SCANNING:
   //   Watch the digit stream for any ABA sequence that appears TWICE.
@@ -139,6 +139,10 @@ document.addEventListener("DOMContentLoaded", () => {
   let seqCounts = {};   // key: "A-B" → how many times ABA appeared while scanning
   let armedSeq = null;  // [A, B, A] — set when a sequence appears twice
   let armedStep = 0;    // 0 = waiting for armedSeq[0], 1 = got [0] waiting for [1]
+  const EXCLUDED_ABA_KEYS = new Set([
+    "1-0", "2-1", "3-2", "4-3", "5-4",
+    "6-5", "7-6", "8-7", "9-8"
+  ]);
 
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -515,7 +519,12 @@ document.addEventListener("DOMContentLoaded", () => {
     if (scanWindow.length === 2) {
       const [w0, w1] = scanWindow;
       // Check for ABA: d == w0 (outer digit), w1 < w0 (middle digit), w0 >= 1
-      if (d === w0 && w1 < w0 && w0 >= 1) {
+      if (
+        d === w0 &&
+        w1 < w0 &&
+        w0 >= 1 &&
+        !EXCLUDED_ABA_KEYS.has(`${w0}-${w1}`)
+      ) {
         const key = `${w0}-${w1}`; // e.g. "3-0" for sequence 303
         seqCounts[key] = (seqCounts[key] || 0) + 1;
         const count = seqCounts[key];
@@ -583,6 +592,9 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!response.ok) {
         appendLogLine(`OTP request failed ${response.status}.`, "red");
         appendLogLine(text, "red");
+        if (!manualStop && running) {
+          scheduleReconnect();
+        }
         return;
       }
 
@@ -592,12 +604,18 @@ document.addEventListener("DOMContentLoaded", () => {
       } catch (err) {
         appendLogLine("OTP response is not JSON.", "red");
         appendLogLine(text, "red");
+        if (!manualStop && running) {
+          scheduleReconnect();
+        }
         return;
       }
 
       if (!data?.data?.url) {
         appendLogLine("OTP response missing data.url.", "red");
         appendLogLine(JSON.stringify(data), "red");
+        if (!manualStop && running) {
+          scheduleReconnect();
+        }
         return;
       }
 
