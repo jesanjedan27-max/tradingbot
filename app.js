@@ -143,6 +143,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "1-0", "2-1", "3-2", "4-3", "5-4",
     "6-5", "7-6", "8-7", "9-8"
   ]);
+  const DIGITDIFF_DURATION_TICKS = 1;
 
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -369,7 +370,7 @@ document.addEventListener("DOMContentLoaded", () => {
       currency: "USD",
       amount,
       basis: "stake",
-      duration: 1,
+      duration: DIGITDIFF_DURATION_TICKS,
       duration_unit: "t",
       barrier
     };
@@ -481,7 +482,9 @@ document.addEventListener("DOMContentLoaded", () => {
       } else if (armedStep === 1) {
         // Got A, now waiting for B on the very next tick
         if (d === B) {
-          // Both [A, B] seen in sequence → place trade immediately
+          // Both [A, B] seen in sequence → execute on this same tick.
+          // Deriv requires a minimum 1-tick contract duration; there is no
+          // delayed tick between detecting B and sending the proposal.
           // barrier must be a string for the Deriv DIGITDIFF API
           const barrier = String(A);
           appendLogLine(
