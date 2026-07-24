@@ -538,6 +538,10 @@ document.addEventListener("DOMContentLoaded", () => {
             `Sequence [${w0},${w1},${w0}] — count: 1/2 (waiting for 2nd occurrence...)`,
             "#64748b"
           );
+          // Reset the window so the 2nd occurrence cannot overlap the 1st.
+          // e.g. 5,3,5,3,5 must NOT arm — only 5,3,5 then fresh 5,3,5 qualifies.
+          scanWindow = [];
+          return; // skip window-slide — this tick is fully consumed as end of 1st occurrence
         } else if (count === 2) {
           // Sequence appeared twice → arm it
           armedSeq = [w0, w1, w0];
