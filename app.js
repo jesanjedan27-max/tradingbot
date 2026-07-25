@@ -117,14 +117,14 @@ document.addEventListener("DOMContentLoaded", () => {
   // excluding 101, 212, 323, 434, 545, 656, 767, 878, and 989 (36 total)
   //
   // Phase 1 — SCANNING:
-  //   Watch the digit stream for any ABA sequence that appears TWICE.
+  //   Watch the digit stream for any ABA sequence that appears THREE times.
   //   Keep a rolling 2-digit window of the PREVIOUS two digits.
   //   When a new digit d arrives, check window = [w0, w1] FIRST:
   //   If d === w0 AND w1 < w0 AND w0 >= 1  →  ABA sequence [w0, w1, w0] found.
-  //   Then slide the window forward.
+  //   Each occurrence resets the window so occurrences never overlap.
   //
   // Phase 2 — ARMED:
-  //   After the same ABA sequence has appeared twice, arm that sequence.
+  //   After the same ABA sequence has appeared THREE times, arm that sequence.
   //   Now look for its first two digits [A, B] again in order.
   //   The moment both are seen (A then B on the very next tick), place
   //   DIGITDIFF barrier=A (the third digit) immediately — zero-tick speed.
@@ -535,22 +535,31 @@ document.addEventListener("DOMContentLoaded", () => {
         if (count === 1) {
           flushTicksNow(); // show triggering tick before the count message
           appendLogLine(
-            `Sequence [${w0},${w1},${w0}] — count: 1/2 (waiting for 2nd occurrence...)`,
+            `Sequence [${w0},${w1},${w0}] — count: 1/3 (waiting for 2nd occurrence...)`,
             "#64748b"
           );
           // Reset the window so the 2nd occurrence cannot overlap the 1st.
-          // e.g. 5,3,5,3,5 must NOT arm — only 5,3,5 then fresh 5,3,5 qualifies.
+          // e.g. 5,3,5,3,5 must NOT count — each occurrence must start fresh.
           scanWindow = [];
           return; // skip window-slide — this tick is fully consumed as end of 1st occurrence
         } else if (count === 2) {
-          // Sequence appeared twice → arm it
+          flushTicksNow(); // show triggering tick before the count message
+          appendLogLine(
+            `Sequence [${w0},${w1},${w0}] — count: 2/3 (waiting for 3rd occurrence...)`,
+            "#64748b"
+          );
+          // Reset the window so the 3rd occurrence cannot overlap the 2nd.
+          scanWindow = [];
+          return; // skip window-slide — this tick is fully consumed as end of 2nd occurrence
+        } else if (count === 3) {
+          // Sequence appeared three times → arm it
           armedSeq = [w0, w1, w0];
           armedStep = 0;
           seqCounts = {};   // clear counts — no longer needed
           scanWindow = [];  // clear window — entering armed mode
           flushTicksNow(); // show triggering tick before the armed message
           appendLogLine(
-            `★ Sequence [${w0},${w1},${w0}] — count: 2/2 → ARMED! Watching for [${w0},${w1}] → DIGITDIFF ${w0}`,
+            `★ Sequence [${w0},${w1},${w0}] — count: 3/3 → ARMED! Watching for [${w0},${w1}] → DIGITDIFF ${w0}`,
             "#f59e0b"
           );
         }
