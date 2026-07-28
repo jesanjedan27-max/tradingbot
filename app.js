@@ -117,30 +117,27 @@ document.addEventListener("DOMContentLoaded", () => {
   // excluding 101, 212, 323, 434, 545, 656, 767, 878, and 989 (36 total)
   //
   // Phase 1 — SCANNING:
-  //   Watch the digit stream for any ABA sequence (non-overlapping).
-  //   Keep a rolling 2-digit window of the PREVIOUS two digits.
-  //   When a new digit d arrives, check window = [w0, w1] FIRST:
-  //   If d === w0 AND w1 < w0 AND w0 >= 1  →  ABA sequence [w0, w1, w0] found.
-  //   On 1st occurrence: capture the VERY NEXT tick as X (the DIGITDIFF barrier).
-  //   Window resets after each occurrence so they never overlap.
+  //   Track ALL valid ABA sequences in parallel via seqCounts.
+  //   On 1st occurrence of any ABA: capture the very next digit as X
+  //   (stored in seqXMap[key]). Window resets so occurrences never overlap.
+  //   On 2nd occurrence of the SAME ABA: fire DIGITDIFF X immediately.
   //
-  // Phase 2 — ARMED:
-  //   After X is captured, watch for the same ABA sequence a 2nd time.
-  //   The moment the full [A, B, A] is seen again, place DIGITDIFF barrier=X
-  //   immediately on that same tick — zero-tick speed.
+  // Phase 2 — RECOVERY (loss only):
+  //   Stay armed on the same ABA + X, martingale applied.
+  //   Watch for [A, B, A] again — fire DIGITDIFF X on detection.
   //
   // On WIN  → full reset, back to scanning.
-  // On LOSS → stay armed on the same sequence with the same X,
-  //           apply martingale stake, keep watching for A,B,A again.
+  // On LOSS → stay armed, same X, martingale, watch for A,B,A again.
   //
   // ─────────────────────────────────────────────────────────────────────────
 
   let scanWindow = [];  // rolling 2-digit window (for phase-1 scan)
   let seqCounts = {};   // key: "A-B" → how many times ABA appeared while scanning
   let armedSeq = null;  // [A, B, A] — set when a sequence appears twice
-  let armedStep = 0;    // 0 = waiting for A, 1 = got A waiting for B, 2 = got A,B waiting for A
-  let armedX    = null; // digit captured immediately after 1st ABA occurrence — used as DIGITDIFF barrier
-  let captureXNext = false; // true for exactly one tick after 1st ABA occurrence to capture X
+  let armedStep = 0;       // 0 = waiting for A, 1 = got A waiting for B, 2 = got A,B waiting for A
+  let armedX    = null;    // X digit for the currently armed/recovery sequence
+  let seqXMap   = {};      // key: 'A-B' → X digit captured after 1st occurrence
+  let captureXForKey = null; // non-null for exactly one tick: captures X into seqXMap[key]
   const EXCLUDED_ABA_KEYS = new Set([
     "1-0", "2-1", "3-2", "4-3", "5-4",
     "6-5", "7-6", "8-7", "9-8"
@@ -173,14 +170,8 @@ document.addEventListener("DOMContentLoaded", () => {
     tickBuffer.splice(0).forEach(({ price, digit }) => {
       const row = document.createElement("div");
       row.style.color = "#7dd3fc";
-      row.textContent = `Tick ${Number(price).toFixed(decimalsForSymbol(symbol))} → ${digit === null ? "-" : digit}`;
-      fragment.appendChild(row);
+      // tick display suppressed
     });
-    logEl.appendChild(fragment);
-    while (logEl.children.length > LOG_MAX_ENTRIES) {
-      logEl.removeChild(logEl.firstChild);
-    }
-    logEl.scrollTop = logEl.scrollHeight;
   }
 
   function startTickFlush() {
@@ -192,7 +183,7 @@ document.addEventListener("DOMContentLoaded", () => {
       batch.forEach(({ price, digit }) => {
         const row = document.createElement("div");
         row.style.color = "#7dd3fc";
-        row.textContent = `Tick ${Number(price).toFixed(decimalsForSymbol(symbol))} → ${digit === null ? "-" : digit}`;
+        // tick display suppressed
         fragment.appendChild(row);
       });
       logEl.appendChild(fragment);
@@ -243,10 +234,10 @@ document.addEventListener("DOMContentLoaded", () => {
     activeContractId = null;
 
     if (recoveryMode && armedSeq) {
-      // Loss recovery — stay armed on the same sequence with the same X, reset step to 0
+      // Loss recovery — stay armed on the same sequence + X, reset step to 0
       armedStep = 0;
       appendLogLine(
-        `Recovery mode: watching for [${armedSeq[0]},${armedSeq[1]},${armedSeq[0]}] → DIGITDIFF barrier=${armedX} (martingale applied)`,
+        `Recovery → [${armedSeq[0]},${armedSeq[1]},${armedSeq[0]}] DIGITDIFF ${armedX} (martingale)`,
         "#f97316"
       );
     } else {
@@ -254,13 +245,11 @@ document.addEventListener("DOMContentLoaded", () => {
       armedSeq = null;
       armedStep = 0;
       armedX = null;
-      captureXNext = false;
+      captureXForKey = null;
+      seqXMap = {};
       scanWindow = [];
       seqCounts = {};
-      appendLogLine(
-        "Scanning for A,B,A sequence — 1st occurrence captures next digit as X — 2nd occurrence of A,B,A fires DIGITDIFF X...",
-        "#a78bfa"
-      );
+      appendLogLine("Scanning...", "#a78bfa");
     }
   }
 
@@ -268,7 +257,8 @@ document.addEventListener("DOMContentLoaded", () => {
     armedSeq = null;
     armedStep = 0;
     armedX = null;
-    captureXNext = false;
+    captureXForKey = null;
+    seqXMap = {};
     scanWindow = [];
     seqCounts = {};
     resetSequence();
@@ -336,6 +326,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     armedSeq = null;
     armedStep = 0;
+    armedX = null;
+    captureXForKey = null;
+    seqXMap = {};
     scanWindow = [];
     seqCounts = {};
     settlementDigit = null;
@@ -354,18 +347,8 @@ document.addEventListener("DOMContentLoaded", () => {
       symbol = newSymbol;
     }
 
-    appendLogLine(
-      `Market switched to ${marketMeta ? marketMeta.label : symbol} (${symbol}), ` +
-      `using ${decimalsForSymbol(symbol)} decimal place(s) for last-digit extraction.`,
-      "#f59e0b"
-    );
-
-    if (wasRunning) {
-      appendLogLine(
-        "Scanning for A,B,A sequence — 1st occurrence captures next digit as X — 2nd occurrence of A,B,A fires DIGITDIFF X...",
-        "#a78bfa"
-      );
-    }
+    appendLogLine(`Market → ${marketMeta ? marketMeta.label : symbol}`, "#f59e0b");
+    if (wasRunning) appendLogLine("Scanning...", "#a78bfa");
   }
 
   function buildProposalVariants(barrier) {
@@ -426,14 +409,6 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     const payload = proposalVariants[proposalAttempt++];
-    const symbolLabel = payload.underlying_symbol
-      ? "underlying_symbol"
-      : payload.underlying
-        ? "underlying"
-        : payload.symbol
-          ? "symbol"
-          : "none";
-    appendLogLine(`Proposal attempt ${proposalAttempt}: ${symbolLabel} mode`, "#a78bfa");
     sendMessage(payload);
   }
 
@@ -448,10 +423,7 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalVariants = buildProposalVariants(barrier);
     proposalAttempt = 0;
     waitingProposal = true;
-    appendLogLine(
-      `TRADE → DIGITDIFF barrier=${barrier} stake=${proposalVariants[0].amount}`,
-      "lime"
-    );
+    appendLogLine(`TRADE barrier=${barrier} stake=${proposalVariants[0].amount}`, "lime");
     sendNextProposalVariant();
   }
 
@@ -462,130 +434,91 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (priceEl) priceEl.textContent = Number(price).toFixed(decimalsForSymbol(symbol));
     if (lastDigitEl) lastDigitEl.textContent = d;
-    tickBuffer.push({ price, digit: d });
-    startTickFlush();
 
     if (captureNextTick) {
       settlementDigit = d;
       captureNextTick = false;
     }
 
-    // Capture X — the digit immediately after the 1st ABA occurrence
-    if (captureXNext) {
-      armedX = d;
-      captureXNext = false;
-      appendLogLine(
-        `X = ${d} captured → armed [${armedSeq[0]},${armedSeq[1]},${armedSeq[0]}] → waiting for 2nd occurrence to fire DIGITDIFF ${d}`,
-        "#f59e0b"
-      );
-      return; // X tick consumed; do not process further
+    // Capture X — the digit immediately after a 1st ABA occurrence
+    if (captureXForKey !== null) {
+      seqXMap[captureXForKey] = d;
+      appendLogLine(`[${captureXForKey.replace('-', ',')},...] 1st — X=${d} | watching for 2nd...`, "#64748b");
+      captureXForKey = null;
+      return; // X tick consumed
     }
 
     if (waitingProposal || activeContractId) return;
 
-    // ── PHASE 2 — ARMED: watching for full [A,B,A] again then trade DIGITDIFF X ───
+    // ── RECOVERY (armed after loss): watch for [A,B,A] → fire DIGITDIFF X ─
     if (armedSeq) {
       const [A, B] = armedSeq;
 
       if (armedStep === 0) {
-        // Waiting for first digit A
-        if (d === A) {
-          armedStep = 1;
-          appendLogLine(
-            `Armed [${A},${B},${A}] X=${armedX}: got ${A} — waiting for ${B}...`,
-            "#38bdf8"
-          );
-        }
+        if (d === A) armedStep = 1;
       } else if (armedStep === 1) {
-        // Got A, now waiting for B on the very next tick
         if (d === B) {
           armedStep = 2;
-          appendLogLine(
-            `Armed [${A},${B},${A}] X=${armedX}: got [${A},${B}] — waiting for ${A} to fire...`,
-            "#38bdf8"
-          );
         } else {
-          // Next digit wasn't B — reset step
           armedStep = 0;
-          // Re-check: maybe this digit is A (start fresh)
-          if (d === A) {
-            armedStep = 1;
-            appendLogLine(
-              `Armed [${A},${B},${A}] X=${armedX}: got ${A} — waiting for ${B}...`,
-              "#38bdf8"
-            );
-          }
+          if (d === A) armedStep = 1;
         }
       } else if (armedStep === 2) {
-        // Got [A,B] — now waiting for A to complete the 2nd ABA → trade DIGITDIFF X
         if (d === A) {
-          // Full [A,B,A] seen a 2nd time → execute immediately on this tick (zero-tick)
           const barrier = String(armedX);
-          appendLogLine(
-            `Armed [${A},${B},${A}] X=${armedX}: saw 2nd [${A},${B},${A}] → DIGITDIFF barrier=${barrier} (zero-tick)`,
-            "lime"
-          );
-          seqA = A;
-          seqB = B;
-          armedStep = 0; // reset for potential recovery run
+          appendLogLine(`[${A},${B},${A}] → DIGITDIFF ${barrier} (recovery)`, "lime");
+          seqA = A; seqB = B;
+          armedStep = 0;
           placeTrade(barrier);
         } else {
-          // Didn't get A — reset step
           armedStep = 0;
-          // Re-check: maybe this digit is A (start fresh)
-          if (d === A) {
-            armedStep = 1;
-            appendLogLine(
-              `Armed [${A},${B},${A}] X=${armedX}: got ${A} — waiting for ${B}...`,
-              "#38bdf8"
-            );
-          }
+          if (d === A) armedStep = 1;
         }
       }
-      return; // never drop through to scanning while armed
+      return;
     }
 
-    // ── PHASE 1 — SCANNING: detect any ABA sequence appearing twice ───────
-    //
-    // Keep a rolling 2-digit window of the PREVIOUS two digits.
-    // When new digit d arrives, check the existing window FIRST:
-    //   window = [w0, w1]  (the two digits before d)
-    //   If d === w0 AND w1 < w0 AND w0 >= 1  →  ABA sequence [w0, w1, w0] found
-    // Then slide the window forward by pushing d.
-    //
+    // ── SCANNING: track all ABA sequences; 1st→capture X, 2nd→fire ────────
     if (scanWindow.length === 2) {
       const [w0, w1] = scanWindow;
-      // Check for ABA: d == w0 (outer digit), w1 < w0 (middle digit), w0 >= 1
       if (
         d === w0 &&
         w1 < w0 &&
         w0 >= 1 &&
         !EXCLUDED_ABA_KEYS.has(`${w0}-${w1}`)
       ) {
-        const key = `${w0}-${w1}`; // e.g. "3-0" for sequence 303
+        const key = `${w0}-${w1}`;
         seqCounts[key] = (seqCounts[key] || 0) + 1;
         const count = seqCounts[key];
 
         if (count === 1) {
-          // 1st occurrence — arm the sequence and capture the very next digit as X
+          // 1st occurrence — capture next digit as X, keep scanning all sequences
+          captureXForKey = key;
+          scanWindow = []; // non-overlapping
+          return; // this tick consumed as end of 1st occurrence
+        } else if (count === 2) {
+          // 2nd occurrence — fire DIGITDIFF X immediately
+          const X = seqXMap[key];
+          if (X === undefined) {
+            // X not captured yet (edge case) — reset and rescan
+            seqCounts = {}; scanWindow = [];
+            return;
+          }
           armedSeq = [w0, w1, w0];
-          armedStep = 0;
-          captureXNext = true;  // next tick will be stored as X (the DIGITDIFF barrier)
-          seqCounts = {};       // clear counts
-          scanWindow = [];      // clear window — non-overlapping
-          flushTicksNow();
-          appendLogLine(
-            `★ Sequence [${w0},${w1},${w0}] — 1st occurrence! Next digit will be X → then watching for 2nd [${w0},${w1},${w0}] to fire DIGITDIFF X`,
-            "#64748b"
-          );
-          return; // skip window-slide — this tick is fully consumed as end of 1st occurrence
+          armedX = X;
+          seqCounts = {};
+          seqXMap = {};
+          scanWindow = [];
+          const barrier = String(X);
+          appendLogLine(`[${w0},${w1},${w0}] 2nd → DIGITDIFF ${barrier}`, "lime");
+          seqA = w0; seqB = w1;
+          placeTrade(barrier);
+          return;
         }
       }
     }
-    // Slide the window forward AFTER the check
     scanWindow.push(d);
     if (scanWindow.length > 2) scanWindow.shift();
-    // ── END SCAN ──────────────────────────────────────────────────────────
   }
 
   async function connect() {
@@ -602,12 +535,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    if (inputToken) {
-      localStorage.setItem("access_token", accessToken);
-      appendLogLine("Using access_token from input field.", "yellow");
-    } else {
-      appendLogLine("Using access_token from localStorage.", "yellow");
-    }
+    if (inputToken) localStorage.setItem("access_token", accessToken);
 
     try {
       const response = await fetch(
@@ -669,7 +597,6 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
           payload = JSON.parse(e.data);
         } catch (err) {
-          appendLogLine("Invalid JSON from WS.", "red");
           return;
         }
 
@@ -708,11 +635,7 @@ document.addEventListener("DOMContentLoaded", () => {
                   symbolDecimals[entry.symbol] = decimals;
                 }
               });
-              appendLogLine(
-                `Live pip precision loaded for ${Object.keys(symbolDecimals).length} market(s). ` +
-                `Current market ${symbol} → ${decimalsForSymbol(symbol)} decimal place(s).`,
-                "#38bdf8"
-              );
+              // pip precision loaded (silent)
             }
             break;
           }
@@ -729,10 +652,6 @@ document.addEventListener("DOMContentLoaded", () => {
             currentStake = Number(payload.proposal.ask_price || 0);
             if (payload.proposal.payout && currentStake > 0) {
               lastPayoutRatio = Number(payload.proposal.payout / currentStake);
-              appendLogLine(
-                `Payout ratio set to ${lastPayoutRatio.toFixed(2)}`,
-                "#38bdf8"
-              );
             }
             sendMessage({
               buy: payload.proposal.id,
@@ -797,7 +716,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 ladder += 1;
                 const nextStake = stake();
                 appendLogLine(
-                  `LOSS ${pnl.toFixed(2)}; recoveryLoss=${recoveryLoss.toFixed(2)} nextStake=${nextStake.toFixed(2)} → watching for [${armedSeq ? armedSeq[0] + "," + armedSeq[1] : "?"}] again`,
+                  `LOSS ${pnl.toFixed(2)} | next stake=${nextStake.toFixed(2)}`,
                   "red"
                 );
               }
@@ -819,7 +738,6 @@ document.addEventListener("DOMContentLoaded", () => {
       };
 
       ws.onclose = ev => {
-        appendLogLine(`WS closed (code ${ev.code}).`, "orange");
         stopTickFlush();
         stopHeartbeat();
         if (!manualStop && running) {
@@ -828,7 +746,6 @@ document.addEventListener("DOMContentLoaded", () => {
       };
 
       ws.onerror = ev => {
-        appendLogLine("WS error.", "red");
         console.error("WebSocket error:", ev);
       };
     } catch (err) {
