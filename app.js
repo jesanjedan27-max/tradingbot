@@ -117,28 +117,30 @@ document.addEventListener("DOMContentLoaded", () => {
   // excluding 101, 212, 323, 434, 545, 656, 767, 878, and 989 (36 total)
   //
   // Phase 1 — SCANNING:
-  //   Watch the digit stream for any ABA sequence that appears THREE times.
+  //   Watch the digit stream for any ABA sequence (non-overlapping).
   //   Keep a rolling 2-digit window of the PREVIOUS two digits.
   //   When a new digit d arrives, check window = [w0, w1] FIRST:
   //   If d === w0 AND w1 < w0 AND w0 >= 1  →  ABA sequence [w0, w1, w0] found.
-  //   Each occurrence resets the window so occurrences never overlap.
+  //   On 1st occurrence: capture the VERY NEXT tick as X (the DIGITDIFF barrier).
+  //   Window resets after each occurrence so they never overlap.
   //
   // Phase 2 — ARMED:
-  //   After the same ABA sequence has appeared THREE times, arm that sequence.
-  //   Now look for its first two digits [A, B] again in order.
-  //   The moment both are seen (A then B on the very next tick), place
-  //   DIGITDIFF barrier=A (the third digit) immediately — zero-tick speed.
+  //   After X is captured, watch for the same ABA sequence a 2nd time.
+  //   The moment the full [A, B, A] is seen again, place DIGITDIFF barrier=X
+  //   immediately on that same tick — zero-tick speed.
   //
   // On WIN  → full reset, back to scanning.
-  // On LOSS → stay armed on the same sequence, reset step to 0,
-  //           apply martingale stake, keep watching for [A, B] again.
+  // On LOSS → stay armed on the same sequence with the same X,
+  //           apply martingale stake, keep watching for A,B,A again.
   //
   // ─────────────────────────────────────────────────────────────────────────
 
   let scanWindow = [];  // rolling 2-digit window (for phase-1 scan)
   let seqCounts = {};   // key: "A-B" → how many times ABA appeared while scanning
   let armedSeq = null;  // [A, B, A] — set when a sequence appears twice
-  let armedStep = 0;    // 0 = waiting for armedSeq[0], 1 = got [0] waiting for [1]
+  let armedStep = 0;    // 0 = waiting for A, 1 = got A waiting for B, 2 = got A,B waiting for A
+  let armedX    = null; // digit captured immediately after 1st ABA occurrence — used as DIGITDIFF barrier
+  let captureXNext = false; // true for exactly one tick after 1st ABA occurrence to capture X
   const EXCLUDED_ABA_KEYS = new Set([
     "1-0", "2-1", "3-2", "4-3", "5-4",
     "6-5", "7-6", "8-7", "9-8"
@@ -241,20 +243,22 @@ document.addEventListener("DOMContentLoaded", () => {
     activeContractId = null;
 
     if (recoveryMode && armedSeq) {
-      // Loss recovery — stay armed on the same sequence, reset step to 0
+      // Loss recovery — stay armed on the same sequence with the same X, reset step to 0
       armedStep = 0;
       appendLogLine(
-        `Recovery mode: watching for [${armedSeq[0]},${armedSeq[1]}] → DIGITDIFF barrier=${armedSeq[2]} (martingale applied)`,
+        `Recovery mode: watching for [${armedSeq[0]},${armedSeq[1]},${armedSeq[0]}] → DIGITDIFF barrier=${armedX} (martingale applied)`,
         "#f97316"
       );
     } else {
       // Full reset — back to scanning
       armedSeq = null;
       armedStep = 0;
+      armedX = null;
+      captureXNext = false;
       scanWindow = [];
       seqCounts = {};
       appendLogLine(
-        "Scanning for ABA sequence (e.g. 303, 909, 434…) to appear TWICE — then watch for first 2 digits → DIGITDIFF third digit...",
+        "Scanning for A,B,A sequence — 1st occurrence captures next digit as X — 2nd occurrence of A,B,A fires DIGITDIFF X...",
         "#a78bfa"
       );
     }
@@ -263,6 +267,8 @@ document.addEventListener("DOMContentLoaded", () => {
   function fullReset() {
     armedSeq = null;
     armedStep = 0;
+    armedX = null;
+    captureXNext = false;
     scanWindow = [];
     seqCounts = {};
     resetSequence();
@@ -356,7 +362,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (wasRunning) {
       appendLogLine(
-        "Scanning for ABA sequence (e.g. 303, 909, 434…) to appear TWICE — then watch for first 2 digits → DIGITDIFF third digit...",
+        "Scanning for A,B,A sequence — 1st occurrence captures next digit as X — 2nd occurrence of A,B,A fires DIGITDIFF X...",
         "#a78bfa"
       );
     }
@@ -464,9 +470,20 @@ document.addEventListener("DOMContentLoaded", () => {
       captureNextTick = false;
     }
 
+    // Capture X — the digit immediately after the 1st ABA occurrence
+    if (captureXNext) {
+      armedX = d;
+      captureXNext = false;
+      appendLogLine(
+        `X = ${d} captured → armed [${armedSeq[0]},${armedSeq[1]},${armedSeq[0]}] → waiting for 2nd occurrence to fire DIGITDIFF ${d}`,
+        "#f59e0b"
+      );
+      return; // X tick consumed; do not process further
+    }
+
     if (waitingProposal || activeContractId) return;
 
-    // ── PHASE 2 — ARMED: watching for [A, B] then trade DIGITDIFF A ──────
+    // ── PHASE 2 — ARMED: watching for full [A,B,A] again then trade DIGITDIFF X ───
     if (armedSeq) {
       const [A, B] = armedSeq;
 
@@ -475,26 +492,18 @@ document.addEventListener("DOMContentLoaded", () => {
         if (d === A) {
           armedStep = 1;
           appendLogLine(
-            `Armed [${A},${B},${A}]: got first digit ${A} — now waiting for ${B}...`,
+            `Armed [${A},${B},${A}] X=${armedX}: got ${A} — waiting for ${B}...`,
             "#38bdf8"
           );
         }
       } else if (armedStep === 1) {
         // Got A, now waiting for B on the very next tick
         if (d === B) {
-          // Both [A, B] seen in sequence → execute on this same tick.
-          // Deriv requires a minimum 1-tick contract duration; there is no
-          // delayed tick between detecting B and sending the proposal.
-          // barrier must be a string for the Deriv DIGITDIFF API
-          const barrier = String(A);
+          armedStep = 2;
           appendLogLine(
-            `Armed [${A},${B},${A}]: saw [${A},${B}] → DIGITDIFF barrier=${barrier} (zero-tick)`,
-            "lime"
+            `Armed [${A},${B},${A}] X=${armedX}: got [${A},${B}] — waiting for ${A} to fire...`,
+            "#38bdf8"
           );
-          seqA = A;
-          seqB = B;
-          armedStep = 0; // reset for potential recovery run
-          placeTrade(barrier);
         } else {
           // Next digit wasn't B — reset step
           armedStep = 0;
@@ -502,7 +511,32 @@ document.addEventListener("DOMContentLoaded", () => {
           if (d === A) {
             armedStep = 1;
             appendLogLine(
-              `Armed [${A},${B},${A}]: got first digit ${A} — now waiting for ${B}...`,
+              `Armed [${A},${B},${A}] X=${armedX}: got ${A} — waiting for ${B}...`,
+              "#38bdf8"
+            );
+          }
+        }
+      } else if (armedStep === 2) {
+        // Got [A,B] — now waiting for A to complete the 2nd ABA → trade DIGITDIFF X
+        if (d === A) {
+          // Full [A,B,A] seen a 2nd time → execute immediately on this tick (zero-tick)
+          const barrier = String(armedX);
+          appendLogLine(
+            `Armed [${A},${B},${A}] X=${armedX}: saw 2nd [${A},${B},${A}] → DIGITDIFF barrier=${barrier} (zero-tick)`,
+            "lime"
+          );
+          seqA = A;
+          seqB = B;
+          armedStep = 0; // reset for potential recovery run
+          placeTrade(barrier);
+        } else {
+          // Didn't get A — reset step
+          armedStep = 0;
+          // Re-check: maybe this digit is A (start fresh)
+          if (d === A) {
+            armedStep = 1;
+            appendLogLine(
+              `Armed [${A},${B},${A}] X=${armedX}: got ${A} — waiting for ${B}...`,
               "#38bdf8"
             );
           }
@@ -533,35 +567,18 @@ document.addEventListener("DOMContentLoaded", () => {
         const count = seqCounts[key];
 
         if (count === 1) {
-          flushTicksNow(); // show triggering tick before the count message
-          appendLogLine(
-            `Sequence [${w0},${w1},${w0}] — count: 1/3 (waiting for 2nd occurrence...)`,
-            "#64748b"
-          );
-          // Reset the window so the 2nd occurrence cannot overlap the 1st.
-          // e.g. 5,3,5,3,5 must NOT count — each occurrence must start fresh.
-          scanWindow = [];
-          return; // skip window-slide — this tick is fully consumed as end of 1st occurrence
-        } else if (count === 2) {
-          flushTicksNow(); // show triggering tick before the count message
-          appendLogLine(
-            `Sequence [${w0},${w1},${w0}] — count: 2/3 (waiting for 3rd occurrence...)`,
-            "#64748b"
-          );
-          // Reset the window so the 3rd occurrence cannot overlap the 2nd.
-          scanWindow = [];
-          return; // skip window-slide — this tick is fully consumed as end of 2nd occurrence
-        } else if (count === 3) {
-          // Sequence appeared three times → arm it
+          // 1st occurrence — arm the sequence and capture the very next digit as X
           armedSeq = [w0, w1, w0];
           armedStep = 0;
-          seqCounts = {};   // clear counts — no longer needed
-          scanWindow = [];  // clear window — entering armed mode
-          flushTicksNow(); // show triggering tick before the armed message
+          captureXNext = true;  // next tick will be stored as X (the DIGITDIFF barrier)
+          seqCounts = {};       // clear counts
+          scanWindow = [];      // clear window — non-overlapping
+          flushTicksNow();
           appendLogLine(
-            `★ Sequence [${w0},${w1},${w0}] — count: 3/3 → ARMED! Watching for [${w0},${w1}] → DIGITDIFF ${w0}`,
-            "#f59e0b"
+            `★ Sequence [${w0},${w1},${w0}] — 1st occurrence! Next digit will be X → then watching for 2nd [${w0},${w1},${w0}] to fire DIGITDIFF X`,
+            "#64748b"
           );
+          return; // skip window-slide — this tick is fully consumed as end of 1st occurrence
         }
       }
     }
