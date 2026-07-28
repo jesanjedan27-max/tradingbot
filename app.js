@@ -170,8 +170,14 @@ document.addEventListener("DOMContentLoaded", () => {
     tickBuffer.splice(0).forEach(({ price, digit }) => {
       const row = document.createElement("div");
       row.style.color = "#7dd3fc";
-      // tick display suppressed
+      row.textContent = `Tick ${Number(price).toFixed(decimalsForSymbol(symbol))} → ${digit}`;
+      fragment.appendChild(row);
     });
+    logEl.appendChild(fragment);
+    while (logEl.children.length > LOG_MAX_ENTRIES) {
+      logEl.removeChild(logEl.firstChild);
+    }
+    logEl.scrollTop = logEl.scrollHeight;
   }
 
   function startTickFlush() {
@@ -183,7 +189,7 @@ document.addEventListener("DOMContentLoaded", () => {
       batch.forEach(({ price, digit }) => {
         const row = document.createElement("div");
         row.style.color = "#7dd3fc";
-        // tick display suppressed
+        row.textContent = `Tick ${Number(price).toFixed(decimalsForSymbol(symbol))} → ${digit}`;
         fragment.appendChild(row);
       });
       logEl.appendChild(fragment);
@@ -434,6 +440,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (priceEl) priceEl.textContent = Number(price).toFixed(decimalsForSymbol(symbol));
     if (lastDigitEl) lastDigitEl.textContent = d;
+
+    tickBuffer.push({ price, digit: d });
 
     if (captureNextTick) {
       settlementDigit = d;
@@ -763,6 +771,7 @@ document.addEventListener("DOMContentLoaded", () => {
     reconnectAttempts = 0;
     cancelReconnect();
     connect();
+    startTickFlush();
     appendLogLine("BOT STARTED", "lime");
   };
 
