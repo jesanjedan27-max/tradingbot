@@ -530,6 +530,14 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function connect() {
+    // If a trade was in-flight when the connection dropped (proposal sent or
+    // contract active but never settled), treat it as a loss so recovery
+    // state is preserved across the reconnect.
+    if ((waitingProposal || activeContractId) && armedSeq && !recoveryMode) {
+      recoveryMode = true;
+      recoveryLoss += currentStake > 0 ? currentStake : 0;
+      ladder += 1;
+    }
     resetSequence();
     if (ws) ws.close();
 
@@ -595,6 +603,7 @@ document.addEventListener("DOMContentLoaded", () => {
         reconnectAttempts = 0;
         cancelReconnect();
         startHeartbeat();
+        startTickFlush();
         fetchActiveSymbols();
         sendMessage({ ticks: symbol, subscribe: 1 });
         sendMessage({ balance: 1 });
