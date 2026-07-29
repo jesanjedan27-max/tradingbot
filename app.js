@@ -118,26 +118,23 @@ document.addEventListener("DOMContentLoaded", () => {
   //
   // Phase 1 — SCANNING:
   //   Track ALL valid ABA sequences in parallel via seqCounts.
-  //   On 1st occurrence of any ABA: capture the very next digit as X
-  //   (stored in seqXMap[key]). Window resets so occurrences never overlap.
-  //   On 2nd occurrence of the SAME ABA: fire DIGITDIFF X immediately.
+  //   Occurrences are non-overlapping (window resets after each detection).
+  //   Log 1/3, 2/3 as they appear.
+  //   On 3rd occurrence (3/3): ARM — stop scanning, watch for [A, B].
   //
-  // Phase 2 — RECOVERY (loss only):
-  //   Stay armed on the same ABA + X, martingale applied.
-  //   Watch for [A, B, A] again — fire DIGITDIFF X on detection.
-  //
-  // On WIN  → full reset, back to scanning.
-  // On LOSS → stay armed, same X, martingale, watch for A,B,A again.
+  // Phase 2 — ARMED / RECOVERY:
+  //   Watching for digit A then digit B.
+  //   The moment B arrives → fire DIGITDIFF A (zero-tick, barrier = A).
+  //   On WIN  → full reset, back to scanning.
+  //   On LOSS → stay armed, same A/B/barrier, martingale, watch for [A,B] again.
   //
   // ─────────────────────────────────────────────────────────────────────────
 
   let scanWindow = [];  // rolling 2-digit window (for phase-1 scan)
-  let seqCounts = {};   // key: "A-B" → how many times ABA appeared while scanning
-  let armedSeq = null;  // [A, B, A] — set when a sequence appears twice
-  let armedStep = 0;       // 0 = waiting for A, 1 = got A waiting for B, 2 = got A,B waiting for A
-  let armedX    = null;    // X digit for the currently armed/recovery sequence
-  let seqXMap   = {};      // key: 'A-B' → X digit captured after 1st occurrence
-  let captureXForKey = null; // non-null for exactly one tick: captures X into seqXMap[key]
+  let seqCounts = {};   // key: "A-B" → how many non-overlapping ABA occurrences seen
+  let armedSeq = null;  // [A, B] — set when a sequence hits 3/3; used in armed phase
+  let armedStep = 0;    // 0 = waiting for A, 1 = got A waiting for B → fire on B
+  let armedX    = null; // barrier digit (= A) for the currently armed/recovery trade
   const EXCLUDED_ABA_KEYS = new Set([
     "1-0", "2-1", "3-2", "4-3", "5-4",
     "6-5", "7-6", "8-7", "9-8"
@@ -240,10 +237,10 @@ document.addEventListener("DOMContentLoaded", () => {
     activeContractId = null;
 
     if (recoveryMode && armedSeq) {
-      // Loss recovery — stay armed on the same sequence + X, reset step to 0
+      // Loss recovery — stay armed on same [A,B], reset step to 0
       armedStep = 0;
       appendLogLine(
-        `Recovery → [${armedSeq[0]},${armedSeq[1]},${armedSeq[0]}] DIGITDIFF ${armedX} (martingale)`,
+        `Recovery → watching for [${armedSeq[0]},${armedSeq[1]}] DIGITDIFF ${armedX} (martingale)`,
         "#f97316"
       );
     } else {
@@ -251,8 +248,6 @@ document.addEventListener("DOMContentLoaded", () => {
       armedSeq = null;
       armedStep = 0;
       armedX = null;
-      captureXForKey = null;
-      seqXMap = {};
       scanWindow = [];
       seqCounts = {};
       appendLogLine("Scanning...", "#a78bfa");
@@ -263,8 +258,6 @@ document.addEventListener("DOMContentLoaded", () => {
     armedSeq = null;
     armedStep = 0;
     armedX = null;
-    captureXForKey = null;
-    seqXMap = {};
     scanWindow = [];
     seqCounts = {};
     resetSequence();
@@ -333,8 +326,6 @@ document.addEventListener("DOMContentLoaded", () => {
     armedSeq = null;
     armedStep = 0;
     armedX = null;
-    captureXForKey = null;
-    seqXMap = {};
     scanWindow = [];
     seqCounts = {};
     settlementDigit = null;
@@ -448,17 +439,9 @@ document.addEventListener("DOMContentLoaded", () => {
       captureNextTick = false;
     }
 
-    // Capture X — the digit immediately after a 1st ABA occurrence
-    if (captureXForKey !== null) {
-      seqXMap[captureXForKey] = d;
-      appendLogLine(`[${captureXForKey.replace('-', ',')},...] 1st — X=${d} | watching for 2nd...`, "#64748b");
-      captureXForKey = null;
-      return; // X tick consumed
-    }
-
     if (waitingProposal || activeContractId) return;
 
-    // ── RECOVERY (armed after loss): watch for [A,B,A] → fire DIGITDIFF X ─
+    // ── ARMED / RECOVERY: watch for [A, B] → fire DIGITDIFF A on B ──────────
     if (armedSeq) {
       const [A, B] = armedSeq;
 
@@ -466,27 +449,21 @@ document.addEventListener("DOMContentLoaded", () => {
         if (d === A) armedStep = 1;
       } else if (armedStep === 1) {
         if (d === B) {
-          armedStep = 2;
-        } else {
-          armedStep = 0;
-          if (d === A) armedStep = 1;
-        }
-      } else if (armedStep === 2) {
-        if (d === A) {
+          // B arrived — fire immediately (zero-tick)
           const barrier = String(armedX);
-          appendLogLine(`[${A},${B},${A}] → DIGITDIFF ${barrier} (recovery)`, "lime");
+          appendLogLine(`[${A},${B}] → DIGITDIFF ${barrier}`, "lime");
           seqA = A; seqB = B;
           armedStep = 0;
           placeTrade(barrier);
         } else {
           armedStep = 0;
-          if (d === A) armedStep = 1;
+          if (d === A) armedStep = 1; // restart if this digit is A
         }
       }
       return;
     }
 
-    // ── SCANNING: track all ABA sequences; 1st→capture X, 2nd→fire ────────
+    // ── SCANNING: track all ABA sequences in parallel; arm on 3rd ───────────
     if (scanWindow.length === 2) {
       const [w0, w1] = scanWindow;
       if (
@@ -498,31 +475,25 @@ document.addEventListener("DOMContentLoaded", () => {
         const key = `${w0}-${w1}`;
         seqCounts[key] = (seqCounts[key] || 0) + 1;
         const count = seqCounts[key];
+        scanWindow = []; // non-overlapping — always clear after detection
 
         if (count === 1) {
-          // 1st occurrence — capture next digit as X, keep scanning all sequences
-          captureXForKey = key;
-          scanWindow = []; // non-overlapping
-          return; // this tick consumed as end of 1st occurrence
+          appendLogLine(`[${w0},${w1},${w0}] 1/3`, "#64748b");
+          return;
         } else if (count === 2) {
-          // 2nd occurrence — fire DIGITDIFF X immediately
-          const X = seqXMap[key];
-          if (X === undefined) {
-            // X not captured yet (edge case) — reset and rescan
-            seqCounts = {}; scanWindow = [];
-            return;
-          }
-          armedSeq = [w0, w1, w0];
-          armedX = X;
+          appendLogLine(`[${w0},${w1},${w0}] 2/3`, "#64748b");
+          return;
+        } else if (count === 3) {
+          // 3rd occurrence — arm, then wait for [A, B]
+          armedSeq = [w0, w1];
+          armedX = w0; // barrier = A (the outer digit)
+          armedStep = 0;
           seqCounts = {};
-          seqXMap = {};
           scanWindow = [];
-          const barrier = String(X);
-          appendLogLine(`[${w0},${w1},${w0}] 2nd → DIGITDIFF ${barrier}`, "lime");
-          seqA = w0; seqB = w1;
-          placeTrade(barrier);
+          appendLogLine(`[${w0},${w1},${w0}] 3/3 — Armed | watching for [${w0},${w1}]`, "#f59e0b");
           return;
         }
+        return;
       }
     }
     scanWindow.push(d);
