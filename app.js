@@ -120,18 +120,17 @@ document.addEventListener("DOMContentLoaded", () => {
   // Phase 1 — SCANNING (rolling 2-digit window, overlapping triples):
   //   On every tick, the last 3 digits form [A, B, X].
   //   If [A,B] is a valid pair:
-  //     • First time seeing [A,B,?]        → store X, count=1, log 1/3.
-  //     • Same [A,B] again, same X, count=2 → log 2/3.
-  //     • Same [A,B] again, same X, count=3 → ARM. Barrier = X.
+  //     • First time seeing [A,B,?]        → store X, count=1, log 1/2.
+  //     • Same [A,B] again, same X, count=2 → ARM. Barrier = X.
   //     • Same [A,B] again, diff X          → replace stored X, reset count=1, log reset.
-  //   "Consecutive" means no [A,B,differentX] may appear between the three
+  //   "Consecutive" means no [A,B,differentX] may appear between the two
   //   matching occurrences — other unrelated sequences are fine.
   //
   // Phase 2 — ARMED:
   //   Watching for digit A then digit B.
   //   The moment B arrives → fire DIGITDIFF X (zero-tick, barrier = X).
   //   On WIN  → full reset, back to scanning.
-  //   On LOSS → back to scanning (recoveryLoss accumulates for martingale stake).
+  //   On LOSS → back to scanning (recoveryLoss accumulates, martingale stake on next trade).
   //
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -242,7 +241,7 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalAttempt = 0;
     activeContractId = null;
 
-    // Always go back to scanning (martingale stake is preserved via recoveryLoss)
+    // Always go back to scanning (recoveryLoss preserved for martingale stake)
     armedSeq = null;
     armedStep = 0;
     armedX = null;
@@ -463,7 +462,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // ── SCANNING: track ABX sequences; arm when same [A,B,X] appears 3× consecutively ──
+    // ── SCANNING: track ABX sequences; arm when same [A,B,X] appears 2× consecutively ──
     if (scanWindow.length === 2) {
       const [A, B] = scanWindow;
       if (
@@ -476,30 +475,33 @@ document.addEventListener("DOMContentLoaded", () => {
         const prev = lastSeenX[key];
 
         if (prev === undefined) {
+          // First occurrence of this [A,B,?] — store X, count = 1
           lastSeenX[key] = X;
           lastSeenCount[key] = 1;
-          appendLogLine(`[${A},${B},${X}] 1/3`, "#64748b");
+          appendLogLine(`[${A},${B},${X}] 1/2`, "#64748b");
         } else if (prev === X) {
+          // Same X as last time — increment consecutive count
           lastSeenCount[key] = (lastSeenCount[key] || 1) + 1;
           const count = lastSeenCount[key];
 
-          if (count === 2) {
-            appendLogLine(`[${A},${B},${X}] 2/3`, "#64748b");
-          } else if (count >= 3) {
+          if (count >= 2) {
+            // Second consecutive same-X occurrence → ARM
             armedSeq = [A, B];
-            armedX = X;
+            armedX = X; // barrier = X
             armedStep = 0;
             lastSeenX = {};
             lastSeenCount = {};
             scanWindow = [];
-            appendLogLine(`[${A},${B},${X}] 3/3 — Armed | watching for [${A},${B}] DIGITDIFF ${X}`, "#f59e0b");
+            appendLogLine(`[${A},${B},${X}] 2/2 — Armed | watching for [${A},${B}] DIGITDIFF ${X}`, "#f59e0b");
             return;
           }
         } else {
+          // Same [A,B] but different X — reset stored X and count, no arm
           lastSeenX[key] = X;
           lastSeenCount[key] = 1;
           appendLogLine(`[${A},${B},${X}] reset (prev ${prev})`, "#64748b");
         }
+        // Rolling window — do NOT reset scanWindow (overlapping triples allowed)
       }
     }
     scanWindow.push(d);
@@ -699,14 +701,14 @@ document.addEventListener("DOMContentLoaded", () => {
                   "lime"
                 );
               } else {
-                // LOSS — accumulate for martingale, go back to scanning
+                // LOSS — accumulate loss, go back to scanning with martingale stake ready
                 recoveryMode = true;
                 recoveryPair = null;
                 recoveryLoss += Math.abs(pnl);
                 ladder += 1;
                 const nextStake = stake();
                 appendLogLine(
-                  `LOSS ${pnl.toFixed(2)} | next stake=${nextStake.toFixed(2)}`,
+                  `LOSS ${pnl.toFixed(2)} | ladder=${ladder} next stake=${nextStake.toFixed(2)}`,
                   "red"
                 );
               }
