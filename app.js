@@ -127,11 +127,11 @@ document.addEventListener("DOMContentLoaded", () => {
   //   "Consecutive" means no [A,B,differentX] may appear between the three
   //   matching occurrences — other unrelated sequences are fine.
   //
-  // Phase 2 — ARMED / RECOVERY:
+  // Phase 2 — ARMED:
   //   Watching for digit A then digit B.
   //   The moment B arrives → fire DIGITDIFF X (zero-tick, barrier = X).
   //   On WIN  → full reset, back to scanning.
-  //   On LOSS → stay armed, same A/B/barrier X, martingale, watch for [A,B] again.
+  //   On LOSS → back to scanning (recoveryLoss accumulates for martingale stake).
   //
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -242,23 +242,14 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalAttempt = 0;
     activeContractId = null;
 
-    if (recoveryMode && armedSeq) {
-      // Loss recovery — stay armed on same [A,B,X], reset step to 0
-      armedStep = 0;
-      appendLogLine(
-        `Recovery → watching for [${armedSeq[0]},${armedSeq[1]}] DIGITDIFF ${armedX} (martingale)`,
-        "#f97316"
-      );
-    } else {
-      // Full reset — back to scanning
-      armedSeq = null;
-      armedStep = 0;
-      armedX = null;
-      scanWindow = [];
-      lastSeenX = {};
-      lastSeenCount = {};
-      appendLogLine("Scanning...", "#a78bfa");
-    }
+    // Always go back to scanning (martingale stake is preserved via recoveryLoss)
+    armedSeq = null;
+    armedStep = 0;
+    armedX = null;
+    scanWindow = [];
+    lastSeenX = {};
+    lastSeenCount = {};
+    appendLogLine("Scanning...", "#a78bfa");
   }
 
   function fullReset() {
@@ -450,7 +441,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (waitingProposal || activeContractId) return;
 
-    // ── ARMED / RECOVERY: watch for [A, B] → fire DIGITDIFF X on B ──────────
+    // ── ARMED: watch for [A, B] → fire DIGITDIFF X on B ─────────────────────
     if (armedSeq) {
       const [A, B] = armedSeq;
 
@@ -485,21 +476,18 @@ document.addEventListener("DOMContentLoaded", () => {
         const prev = lastSeenX[key];
 
         if (prev === undefined) {
-          // First occurrence of this [A,B,?] — store X, count = 1
           lastSeenX[key] = X;
           lastSeenCount[key] = 1;
           appendLogLine(`[${A},${B},${X}] 1/3`, "#64748b");
         } else if (prev === X) {
-          // Same X as last time — increment consecutive count
           lastSeenCount[key] = (lastSeenCount[key] || 1) + 1;
           const count = lastSeenCount[key];
 
           if (count === 2) {
             appendLogLine(`[${A},${B},${X}] 2/3`, "#64748b");
           } else if (count >= 3) {
-            // Third consecutive same-X occurrence → ARM
             armedSeq = [A, B];
-            armedX = X; // barrier = X
+            armedX = X;
             armedStep = 0;
             lastSeenX = {};
             lastSeenCount = {};
@@ -508,12 +496,10 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
           }
         } else {
-          // Same [A,B] but different X — reset stored X and count, no arm
           lastSeenX[key] = X;
           lastSeenCount[key] = 1;
           appendLogLine(`[${A},${B},${X}] reset (prev ${prev})`, "#64748b");
         }
-        // Rolling window — do NOT reset scanWindow (overlapping triples allowed)
       }
     }
     scanWindow.push(d);
@@ -521,9 +507,6 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function connect() {
-    // If a trade was in-flight when the connection dropped (proposal sent or
-    // contract active but never settled), treat it as a loss so recovery
-    // state is preserved across the reconnect.
     if ((waitingProposal || activeContractId) && armedSeq && !recoveryMode) {
       recoveryMode = true;
       recoveryLoss += currentStake > 0 ? currentStake : 0;
@@ -643,7 +626,6 @@ document.addEventListener("DOMContentLoaded", () => {
                   symbolDecimals[entry.symbol] = decimals;
                 }
               });
-              // pip precision loaded (silent)
             }
             break;
           }
@@ -704,7 +686,7 @@ document.addEventListener("DOMContentLoaded", () => {
               const resultDigit = settlementDigit !== null ? settlementDigit : exitDigit;
 
               if (pnl >= 0) {
-                // WIN — full reset, back to scanning
+                // WIN — clear all recovery state, back to scanning
                 recoveryMode = false;
                 recoveryPair = null;
                 lastTradePair = null;
@@ -717,7 +699,7 @@ document.addEventListener("DOMContentLoaded", () => {
                   "lime"
                 );
               } else {
-                // LOSS — stay armed, martingale next trade
+                // LOSS — accumulate for martingale, go back to scanning
                 recoveryMode = true;
                 recoveryPair = null;
                 recoveryLoss += Math.abs(pnl);
