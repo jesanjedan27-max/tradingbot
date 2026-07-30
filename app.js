@@ -1,4 +1,4 @@
-// Deriv DigitDiff bot — ABA sequence strategy (e.g. 303, 909, 434…)
+// Deriv DigitDiff bot — ABX sequence strategy (e.g. 2,0,X  3,0,X  4,2,X…)
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -111,30 +111,34 @@ document.addEventListener("DOMContentLoaded", () => {
   let recoveryPair = null;
   let lastTradePair = null;
 
-  // ── ABA Sequence Strategy ────────────────────────────────────────────────
+  // ── ABX Sequence Strategy ────────────────────────────────────────────────
   //
-  // Valid sequences: all [A, B, A] where A ∈ {1..9} and B ∈ {0..A-1},
-  // excluding 101, 212, 323, 434, 545, 656, 767, 878, and 989 (36 total)
+  // Valid pairs: all [A, B] where A ∈ {1..9} and B ∈ {0..A-1},
+  // excluding consecutive pairs 1-0, 2-1, 3-2, 4-3, 5-4,
+  // 6-5, 7-6, 8-7, 9-8  (36 total valid pairs)
   //
-  // Phase 1 — SCANNING:
-  //   Track ALL valid ABA sequences in parallel via seqCounts.
-  //   Occurrences are non-overlapping (window resets after each detection).
-  //   Log 1/3, 2/3 as they appear.
-  //   On 3rd occurrence (3/3): ARM — stop scanning, watch for [A, B].
+  // Phase 1 — SCANNING (rolling 2-digit window, overlapping triples):
+  //   On every tick, the last 3 digits form [A, B, X].
+  //   If [A,B] is a valid pair:
+  //     • First time seeing [A,B,?]  → store X, log 1/2.
+  //     • Same [A,B] again, same X   → ARM. Barrier = X.
+  //     • Same [A,B] again, diff X   → replace stored X, log reset. No arm.
+  //   "Consecutive" means no [A,B,differentX] may appear between the two
+  //   matching occurrences — other unrelated sequences are fine.
   //
   // Phase 2 — ARMED / RECOVERY:
   //   Watching for digit A then digit B.
-  //   The moment B arrives → fire DIGITDIFF A (zero-tick, barrier = A).
+  //   The moment B arrives → fire DIGITDIFF X (zero-tick, barrier = X).
   //   On WIN  → full reset, back to scanning.
-  //   On LOSS → stay armed, same A/B/barrier, martingale, watch for [A,B] again.
+  //   On LOSS → stay armed, same A/B/barrier X, martingale, watch for [A,B] again.
   //
   // ─────────────────────────────────────────────────────────────────────────
 
   let scanWindow = [];  // rolling 2-digit window (for phase-1 scan)
-  let seqCounts = {};   // key: "A-B" → how many non-overlapping ABA occurrences seen
-  let armedSeq = null;  // [A, B] — set when a sequence hits 3/3; used in armed phase
+  let lastSeenX = {};   // key: "A-B" → last seen X for that pair (undefined = never seen)
+  let armedSeq = null;  // [A, B] — set when a sequence arms; used in armed phase
   let armedStep = 0;    // 0 = waiting for A, 1 = got A waiting for B → fire on B
-  let armedX    = null; // barrier digit (= A) for the currently armed/recovery trade
+  let armedX    = null; // barrier digit (= X) for the currently armed/recovery trade
   const EXCLUDED_ABA_KEYS = new Set([
     "1-0", "2-1", "3-2", "4-3", "5-4",
     "6-5", "7-6", "8-7", "9-8"
@@ -237,7 +241,7 @@ document.addEventListener("DOMContentLoaded", () => {
     activeContractId = null;
 
     if (recoveryMode && armedSeq) {
-      // Loss recovery — stay armed on same [A,B], reset step to 0
+      // Loss recovery — stay armed on same [A,B,X], reset step to 0
       armedStep = 0;
       appendLogLine(
         `Recovery → watching for [${armedSeq[0]},${armedSeq[1]}] DIGITDIFF ${armedX} (martingale)`,
@@ -249,7 +253,7 @@ document.addEventListener("DOMContentLoaded", () => {
       armedStep = 0;
       armedX = null;
       scanWindow = [];
-      seqCounts = {};
+      lastSeenX = {};
       appendLogLine("Scanning...", "#a78bfa");
     }
   }
@@ -259,7 +263,7 @@ document.addEventListener("DOMContentLoaded", () => {
     armedStep = 0;
     armedX = null;
     scanWindow = [];
-    seqCounts = {};
+    lastSeenX = {};
     resetSequence();
     totalProfit = 0;
     recoveryLoss = 0;
@@ -327,7 +331,7 @@ document.addEventListener("DOMContentLoaded", () => {
     armedStep = 0;
     armedX = null;
     scanWindow = [];
-    seqCounts = {};
+    lastSeenX = {};
     settlementDigit = null;
     captureNextTick = false;
     waitingProposal = false;
@@ -441,7 +445,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (waitingProposal || activeContractId) return;
 
-    // ── ARMED / RECOVERY: watch for [A, B] → fire DIGITDIFF A on B ──────────
+    // ── ARMED / RECOVERY: watch for [A, B] → fire DIGITDIFF X on B ──────────
     if (armedSeq) {
       const [A, B] = armedSeq;
 
@@ -463,37 +467,37 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // ── SCANNING: track all ABA sequences in parallel; arm on 3rd ───────────
+    // ── SCANNING: track ABX sequences; arm when same [A,B,X] appears twice consecutively ──
     if (scanWindow.length === 2) {
-      const [w0, w1] = scanWindow;
+      const [A, B] = scanWindow;
       if (
-        d === w0 &&
-        w1 < w0 &&
-        w0 >= 1 &&
-        !EXCLUDED_ABA_KEYS.has(`${w0}-${w1}`)
+        A >= 1 &&
+        B < A &&
+        !EXCLUDED_ABA_KEYS.has(`${A}-${B}`)
       ) {
-        const key = `${w0}-${w1}`;
-        seqCounts[key] = (seqCounts[key] || 0) + 1;
-        const count = seqCounts[key];
-        scanWindow = []; // non-overlapping — always clear after detection
+        const key = `${A}-${B}`;
+        const X = d;
+        const prev = lastSeenX[key];
 
-        if (count === 1) {
-          appendLogLine(`[${w0},${w1},${w0}] 1/3`, "#64748b");
-          return;
-        } else if (count === 2) {
-          appendLogLine(`[${w0},${w1},${w0}] 2/3`, "#64748b");
-          return;
-        } else if (count === 3) {
-          // 3rd occurrence — arm, then wait for [A, B]
-          armedSeq = [w0, w1];
-          armedX = w0; // barrier = A (the outer digit)
+        if (prev === undefined) {
+          // First occurrence of this [A,B,?] — store X
+          lastSeenX[key] = X;
+          appendLogLine(`[${A},${B},${X}] 1/2`, "#64748b");
+        } else if (prev === X) {
+          // Second consecutive occurrence with same X → ARM
+          armedSeq = [A, B];
+          armedX = X; // barrier = X
           armedStep = 0;
-          seqCounts = {};
+          lastSeenX = {};
           scanWindow = [];
-          appendLogLine(`[${w0},${w1},${w0}] 3/3 — Armed | watching for [${w0},${w1}]`, "#f59e0b");
+          appendLogLine(`[${A},${B},${X}] 2/2 — Armed | watching for [${A},${B}] DIGITDIFF ${X}`, "#f59e0b");
           return;
+        } else {
+          // Same [A,B] but different X — replace stored X, no arm
+          lastSeenX[key] = X;
+          appendLogLine(`[${A},${B},${X}] reset (prev ${prev})`, "#64748b");
         }
-        return;
+        // Rolling window — do NOT reset scanWindow (overlapping triples allowed)
       }
     }
     scanWindow.push(d);
