@@ -120,10 +120,11 @@ document.addEventListener("DOMContentLoaded", () => {
   // Phase 1 — SCANNING (rolling 2-digit window, overlapping triples):
   //   On every tick, the last 3 digits form [A, B, X].
   //   If [A,B] is a valid pair:
-  //     • First time seeing [A,B,?]  → store X, log 1/2.
-  //     • Same [A,B] again, same X   → ARM. Barrier = X.
-  //     • Same [A,B] again, diff X   → replace stored X, log reset. No arm.
-  //   "Consecutive" means no [A,B,differentX] may appear between the two
+  //     • First time seeing [A,B,?]        → store X, count=1, log 1/3.
+  //     • Same [A,B] again, same X, count=2 → log 2/3.
+  //     • Same [A,B] again, same X, count=3 → ARM. Barrier = X.
+  //     • Same [A,B] again, diff X          → replace stored X, reset count=1, log reset.
+  //   "Consecutive" means no [A,B,differentX] may appear between the three
   //   matching occurrences — other unrelated sequences are fine.
   //
   // Phase 2 — ARMED / RECOVERY:
@@ -134,11 +135,12 @@ document.addEventListener("DOMContentLoaded", () => {
   //
   // ─────────────────────────────────────────────────────────────────────────
 
-  let scanWindow = [];  // rolling 2-digit window (for phase-1 scan)
-  let lastSeenX = {};   // key: "A-B" → last seen X for that pair (undefined = never seen)
-  let armedSeq = null;  // [A, B] — set when a sequence arms; used in armed phase
-  let armedStep = 0;    // 0 = waiting for A, 1 = got A waiting for B → fire on B
-  let armedX    = null; // barrier digit (= X) for the currently armed/recovery trade
+  let scanWindow = [];    // rolling 2-digit window (for phase-1 scan)
+  let lastSeenX = {};     // key: "A-B" → last seen X for that pair (undefined = never seen)
+  let lastSeenCount = {}; // key: "A-B" → consecutive count of same-X appearances
+  let armedSeq = null;    // [A, B] — set when a sequence arms; used in armed phase
+  let armedStep = 0;      // 0 = waiting for A, 1 = got A waiting for B → fire on B
+  let armedX    = null;   // barrier digit (= X) for the currently armed/recovery trade
   const EXCLUDED_ABA_KEYS = new Set([
     "1-0", "2-1", "3-2", "4-3", "5-4",
     "6-5", "7-6", "8-7", "9-8"
@@ -254,6 +256,7 @@ document.addEventListener("DOMContentLoaded", () => {
       armedX = null;
       scanWindow = [];
       lastSeenX = {};
+      lastSeenCount = {};
       appendLogLine("Scanning...", "#a78bfa");
     }
   }
@@ -264,6 +267,7 @@ document.addEventListener("DOMContentLoaded", () => {
     armedX = null;
     scanWindow = [];
     lastSeenX = {};
+    lastSeenCount = {};
     resetSequence();
     totalProfit = 0;
     recoveryLoss = 0;
@@ -332,6 +336,7 @@ document.addEventListener("DOMContentLoaded", () => {
     armedX = null;
     scanWindow = [];
     lastSeenX = {};
+    lastSeenCount = {};
     settlementDigit = null;
     captureNextTick = false;
     waitingProposal = false;
@@ -467,7 +472,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // ── SCANNING: track ABX sequences; arm when same [A,B,X] appears twice consecutively ──
+    // ── SCANNING: track ABX sequences; arm when same [A,B,X] appears 3× consecutively ──
     if (scanWindow.length === 2) {
       const [A, B] = scanWindow;
       if (
@@ -480,21 +485,32 @@ document.addEventListener("DOMContentLoaded", () => {
         const prev = lastSeenX[key];
 
         if (prev === undefined) {
-          // First occurrence of this [A,B,?] — store X
+          // First occurrence of this [A,B,?] — store X, count = 1
           lastSeenX[key] = X;
-          appendLogLine(`[${A},${B},${X}] 1/2`, "#64748b");
+          lastSeenCount[key] = 1;
+          appendLogLine(`[${A},${B},${X}] 1/3`, "#64748b");
         } else if (prev === X) {
-          // Second consecutive occurrence with same X → ARM
-          armedSeq = [A, B];
-          armedX = X; // barrier = X
-          armedStep = 0;
-          lastSeenX = {};
-          scanWindow = [];
-          appendLogLine(`[${A},${B},${X}] 2/2 — Armed | watching for [${A},${B}] DIGITDIFF ${X}`, "#f59e0b");
-          return;
+          // Same X as last time — increment consecutive count
+          lastSeenCount[key] = (lastSeenCount[key] || 1) + 1;
+          const count = lastSeenCount[key];
+
+          if (count === 2) {
+            appendLogLine(`[${A},${B},${X}] 2/3`, "#64748b");
+          } else if (count >= 3) {
+            // Third consecutive same-X occurrence → ARM
+            armedSeq = [A, B];
+            armedX = X; // barrier = X
+            armedStep = 0;
+            lastSeenX = {};
+            lastSeenCount = {};
+            scanWindow = [];
+            appendLogLine(`[${A},${B},${X}] 3/3 — Armed | watching for [${A},${B}] DIGITDIFF ${X}`, "#f59e0b");
+            return;
+          }
         } else {
-          // Same [A,B] but different X — replace stored X, no arm
+          // Same [A,B] but different X — reset stored X and count, no arm
           lastSeenX[key] = X;
+          lastSeenCount[key] = 1;
           appendLogLine(`[${A},${B},${X}] reset (prev ${prev})`, "#64748b");
         }
         // Rolling window — do NOT reset scanWindow (overlapping triples allowed)
