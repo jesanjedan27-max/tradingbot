@@ -120,17 +120,18 @@ document.addEventListener("DOMContentLoaded", () => {
   // Phase 1 — SCANNING (rolling 2-digit window, overlapping triples):
   //   On every tick, the last 3 digits form [A, B, X].
   //   If [A,B] is a valid pair:
-  //     • First time seeing [A,B,?]        → store X, count=1, log 1/2.
-  //     • Same [A,B] again, same X, count=2 → ARM. Barrier = X.
+  //     • First time seeing [A,B,?]        → store X, count=1, log 1/3.
+  //     • Same [A,B] again, same X, count=2 → log 2/3.
+  //     • Same [A,B] again, same X, count=3 → ARM. Barrier = X.
   //     • Same [A,B] again, diff X          → replace stored X, reset count=1, log reset.
-  //   "Consecutive" means no [A,B,differentX] may appear between the two
+  //   "Consecutive" means no [A,B,differentX] may appear between the three
   //   matching occurrences — other unrelated sequences are fine.
   //
-  // Phase 2 — ARMED:
+  // Phase 2 — ARMED / RECOVERY:
   //   Watching for digit A then digit B.
   //   The moment B arrives → fire DIGITDIFF X (zero-tick, barrier = X).
   //   On WIN  → full reset, back to scanning.
-  //   On LOSS → back to scanning (recoveryLoss accumulates, martingale stake on next trade).
+  //   On LOSS → stay armed, same A/B/barrier X, martingale, watch for [A,B] again.
   //
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -241,14 +242,23 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalAttempt = 0;
     activeContractId = null;
 
-    // Always go back to scanning (recoveryLoss preserved for martingale stake)
-    armedSeq = null;
-    armedStep = 0;
-    armedX = null;
-    scanWindow = [];
-    lastSeenX = {};
-    lastSeenCount = {};
-    appendLogLine("Scanning...", "#a78bfa");
+    if (recoveryMode && armedSeq) {
+      // Loss recovery — stay armed on same [A,B,X], reset step to 0
+      armedStep = 0;
+      appendLogLine(
+        `Recovery → watching for [${armedSeq[0]},${armedSeq[1]}] DIGITDIFF ${armedX} (martingale)`,
+        "#f97316"
+      );
+    } else {
+      // Full reset — back to scanning
+      armedSeq = null;
+      armedStep = 0;
+      armedX = null;
+      scanWindow = [];
+      lastSeenX = {};
+      lastSeenCount = {};
+      appendLogLine("Scanning...", "#a78bfa");
+    }
   }
 
   function fullReset() {
@@ -440,7 +450,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (waitingProposal || activeContractId) return;
 
-    // ── ARMED: watch for [A, B] → fire DIGITDIFF X on B ─────────────────────
+    // ── ARMED / RECOVERY: watch for [A, B] → fire DIGITDIFF X on B ──────────
     if (armedSeq) {
       const [A, B] = armedSeq;
 
@@ -462,7 +472,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // ── SCANNING: track ABX sequences; arm when same [A,B,X] appears 2× consecutively ──
+    // ── SCANNING: track ABX sequences; arm when same [A,B,X] appears 3× consecutively ──
     if (scanWindow.length === 2) {
       const [A, B] = scanWindow;
       if (
@@ -478,21 +488,23 @@ document.addEventListener("DOMContentLoaded", () => {
           // First occurrence of this [A,B,?] — store X, count = 1
           lastSeenX[key] = X;
           lastSeenCount[key] = 1;
-          appendLogLine(`[${A},${B},${X}] 1/2`, "#64748b");
+          appendLogLine(`[${A},${B},${X}] 1/3`, "#64748b");
         } else if (prev === X) {
           // Same X as last time — increment consecutive count
           lastSeenCount[key] = (lastSeenCount[key] || 1) + 1;
           const count = lastSeenCount[key];
 
-          if (count >= 2) {
-            // Second consecutive same-X occurrence → ARM
+          if (count === 2) {
+            appendLogLine(`[${A},${B},${X}] 2/3`, "#64748b");
+          } else if (count >= 3) {
+            // Third consecutive same-X occurrence → ARM
             armedSeq = [A, B];
             armedX = X; // barrier = X
             armedStep = 0;
             lastSeenX = {};
             lastSeenCount = {};
             scanWindow = [];
-            appendLogLine(`[${A},${B},${X}] 2/2 — Armed | watching for [${A},${B}] DIGITDIFF ${X}`, "#f59e0b");
+            appendLogLine(`[${A},${B},${X}] 3/3 — Armed | watching for [${A},${B}] DIGITDIFF ${X}`, "#f59e0b");
             return;
           }
         } else {
@@ -509,6 +521,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function connect() {
+    // If a trade was in-flight when the connection dropped (proposal sent or
+    // contract active but never settled), treat it as a loss so recovery
+    // state is preserved across the reconnect.
     if ((waitingProposal || activeContractId) && armedSeq && !recoveryMode) {
       recoveryMode = true;
       recoveryLoss += currentStake > 0 ? currentStake : 0;
@@ -628,6 +643,7 @@ document.addEventListener("DOMContentLoaded", () => {
                   symbolDecimals[entry.symbol] = decimals;
                 }
               });
+              // pip precision loaded (silent)
             }
             break;
           }
@@ -688,7 +704,7 @@ document.addEventListener("DOMContentLoaded", () => {
               const resultDigit = settlementDigit !== null ? settlementDigit : exitDigit;
 
               if (pnl >= 0) {
-                // WIN — clear all recovery state, back to scanning
+                // WIN — full reset, back to scanning
                 recoveryMode = false;
                 recoveryPair = null;
                 lastTradePair = null;
@@ -701,14 +717,14 @@ document.addEventListener("DOMContentLoaded", () => {
                   "lime"
                 );
               } else {
-                // LOSS — accumulate loss, go back to scanning with martingale stake ready
+                // LOSS — stay armed, martingale next trade
                 recoveryMode = true;
                 recoveryPair = null;
                 recoveryLoss += Math.abs(pnl);
                 ladder += 1;
                 const nextStake = stake();
                 appendLogLine(
-                  `LOSS ${pnl.toFixed(2)} | ladder=${ladder} next stake=${nextStake.toFixed(2)}`,
+                  `LOSS ${pnl.toFixed(2)} | next stake=${nextStake.toFixed(2)}`,
                   "red"
                 );
               }
