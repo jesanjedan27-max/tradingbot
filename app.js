@@ -1,8 +1,8 @@
-// Deriv DigitDiff bot — Chain-pair strategy
-// Chains: (2,0→3,0)→digit4 ddf0→digit5 ddf0
-//         (3,0→4,0)→digit5 ddf0→digit6 ddf0
-//         (4,0→5,0)→digit6 ddf0→digit7 ddf0
-//         (5,0→6,0)→digit7 ddf0→digit8 ddf0
+// Deriv DigitDiff bot — Chain-pair strategy (3 pairs before arm)
+// Chains: (2,0→3,0→4,0)→digit5 ddf0→digit6 ddf0
+//         (3,0→4,0→5,0)→digit6 ddf0→digit7 ddf0
+//         (4,0→5,0→6,0)→digit7 ddf0→digit8 ddf0
+//         (5,0→6,0→7,0)→digit8 ddf0→digit9 ddf0
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -41,17 +41,18 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   // ── Chain definitions ────────────────────────────────────────────────────
-  //   starter  : first [A, 0] pair that triggers "waiting" state
-  //   second   : [A+1, 0] pair that confirms and ARMS the chain
+  //   starter  : first [A, 0] pair   → triggers "waiting1"
+  //   second   : [A+1, 0] pair       → triggers "waiting2"
+  //   third    : [A+2, 0] pair       → ARMS the chain
   //   targets  : [primaryDigit, recoveryDigit]
   //              bot fires DIGITDIFF barrier=0 when that digit appears
-  //   Invalidation: if [A+1, X≠0] appears while waiting → reset to scan
+  //   Invalidation: if [A+n, X≠0] appears while waiting → reset to scan
   // ─────────────────────────────────────────────────────────────────────────
   const CHAINS = [
-    { starter: [2, 0], second: [3, 0], targets: [4, 5] },
-    { starter: [3, 0], second: [4, 0], targets: [5, 6] },
-    { starter: [4, 0], second: [5, 0], targets: [6, 7] },
-    { starter: [5, 0], second: [6, 0], targets: [7, 8] }
+    { starter: [2, 0], second: [3, 0], third: [4, 0], targets: [5, 6] },
+    { starter: [3, 0], second: [4, 0], third: [5, 0], targets: [6, 7] },
+    { starter: [4, 0], second: [5, 0], third: [6, 0], targets: [7, 8] },
+    { starter: [5, 0], second: [6, 0], third: [7, 0], targets: [8, 9] }
   ];
 
   const DEFAULT_PAYOUT_RATIO = 11.57;
@@ -112,9 +113,11 @@ document.addEventListener("DOMContentLoaded", () => {
   // ── Strategy state ────────────────────────────────────────────────────────
   // phase:
   //   "scan"     — rolling window, looking for a starter pair [A,0]
-  //   "waiting"  — starter found, watching for second pair [A+1,0]
+  //   "waiting1" — starter found, watching for second pair [A+1,0]
   //                invalidated if [A+1,X≠0] appears
-  //   "armed"    — both pairs confirmed, waiting for targets[0] digit to fire
+  //   "waiting2" — second pair found, watching for third pair [A+2,0]
+  //                invalidated if [A+2,X≠0] appears
+  //   "armed"    — all 3 pairs confirmed, waiting for targets[0] digit to fire
   //   "recovery" — primary trade lost, waiting for targets[1] digit (martingale)
   let phase = "scan";
   let chainId = null;   // index into CHAINS (0–3), or null
@@ -197,7 +200,6 @@ document.addEventListener("DOMContentLoaded", () => {
     activeContractId = null;
   }
 
-  // Full reset back to scanning (keeps recoveryLoss/ladder for martingale)
   function resetToScan() {
     clearContractState();
     phase = "scan";
@@ -206,7 +208,6 @@ document.addEventListener("DOMContentLoaded", () => {
     appendLogLine("Scanning...", "#a78bfa");
   }
 
-  // Hard reset — clears everything including martingale state
   function fullReset() {
     clearContractState();
     phase = "scan";
@@ -336,7 +337,7 @@ document.addEventListener("DOMContentLoaded", () => {
       appendLogLine("Already waiting for a proposal.", "orange");
       return;
     }
-    proposalVariants = buildProposalVariants("0"); // barrier always 0
+    proposalVariants = buildProposalVariants("0");
     proposalAttempt = 0;
     waitingProposal = true;
     appendLogLine(`TRADE DIGITDIFF barrier=0 stake=${proposalVariants[0].amount}`, "lime");
@@ -359,20 +360,18 @@ document.addEventListener("DOMContentLoaded", () => {
       captureNextTick = false;
     }
 
-    // While a trade is in flight, still update prevDigit so window is ready after
     if (waitingProposal || activeContractId) {
       prevDigit = d;
       return;
     }
 
     if (phase === "scan") {
-      // Look for any starter [A, 0]
       if (prevDigit !== null) {
         for (let i = 0; i < CHAINS.length; i++) {
           const [sa, sb] = CHAINS[i].starter;
           if (prevDigit === sa && d === sb) {
             chainId = i;
-            phase = "waiting";
+            phase = "waiting1";
             const [wa] = CHAINS[i].second;
             appendLogLine(
               `Starter [${sa},${sb}] found → waiting for [${wa},0]`,
@@ -384,29 +383,42 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       }
 
-    } else if (phase === "waiting") {
+    } else if (phase === "waiting1") {
       const chain = CHAINS[chainId];
-      const [wa, wb] = chain.second; // wb is always 0
+      const [wa, wb] = chain.second;
 
       if (prevDigit === wa) {
         if (d === wb) {
-          // Second pair confirmed → ARM
-          phase = "armed";
+          phase = "waiting2";
+          const [ta] = chain.third;
           appendLogLine(
-            `[${chain.starter[0]},0 → ${wa},0] Armed | watching for digit ${chain.targets[0]} DIGITDIFF 0`,
-            "#f59e0b"
-          );
-        } else {
-          // [wa, X≠0] appeared — chain invalidated
-          appendLogLine(
-            `[${wa},${d}] invalidates chain — Scanning...`,
+            `[${chain.starter[0]},0 → ${wa},0] found → waiting for [${ta},0]`,
             "#64748b"
           );
+        } else {
+          appendLogLine(`[${wa},${d}] invalidates chain — Scanning...`, "#64748b");
           phase = "scan";
           chainId = null;
         }
       }
-      // Any other digit: keep waiting silently
+
+    } else if (phase === "waiting2") {
+      const chain = CHAINS[chainId];
+      const [ta, tb] = chain.third;
+
+      if (prevDigit === ta) {
+        if (d === tb) {
+          phase = "armed";
+          appendLogLine(
+            `[${chain.starter[0]},0 → ${chain.second[0]},0 → ${ta},0] Armed | watching for digit ${chain.targets[0]} DIGITDIFF 0`,
+            "#f59e0b"
+          );
+        } else {
+          appendLogLine(`[${ta},${d}] invalidates chain — Scanning...`, "#64748b");
+          phase = "scan";
+          chainId = null;
+        }
+      }
 
     } else if (phase === "armed") {
       const chain = CHAINS[chainId];
@@ -428,7 +440,6 @@ document.addEventListener("DOMContentLoaded", () => {
   // ─────────────────────────────────────────────────────────────────────────
 
   async function connect() {
-    // If a trade was in-flight when connection dropped, record it as a loss
     if ((waitingProposal || activeContractId) && phase !== "scan") {
       recoveryLoss += currentStake > 0 ? currentStake : 0;
       ladder += 1;
@@ -591,7 +602,6 @@ document.addEventListener("DOMContentLoaded", () => {
               const resultDigit = settlementDigit !== null ? settlementDigit : exitDigit;
 
               if (pnl >= 0) {
-                // ── WIN ─────────────────────────────────────────────────────
                 recoveryLoss = 0;
                 currentStake = 0;
                 ladder = 0;
@@ -603,13 +613,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 resetToScan();
 
               } else {
-                // ── LOSS ────────────────────────────────────────────────────
                 recoveryLoss += Math.abs(pnl);
                 ladder += 1;
                 const nextStake = stake();
 
                 if (phase === "armed") {
-                  // Primary trade lost → move to recovery, stay on same chain
                   const chain = CHAINS[chainId];
                   phase = "recovery";
                   clearContractState();
@@ -620,7 +628,6 @@ document.addEventListener("DOMContentLoaded", () => {
                     "red"
                   );
                 } else {
-                  // Recovery trade also lost → back to scan, martingale carries over
                   appendLogLine(
                     `LOSS ${pnl.toFixed(2)} | ladder=${ladder}` +
                     (resultDigit !== null ? ` (digit=${resultDigit})` : "") +
