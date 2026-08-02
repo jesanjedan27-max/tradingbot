@@ -1,4 +1,8 @@
-// Deriv DigitDiff bot — ABX sequence strategy (e.g. 2,0,X  3,0,X  4,2,X…)
+// Deriv DigitDiff bot — Chain-pair strategy
+// Chains: (2,0→3,0)→digit4 ddf0→digit5 ddf0
+//         (3,0→4,0)→digit5 ddf0→digit6 ddf0
+//         (4,0→5,0)→digit6 ddf0→digit7 ddf0
+//         (5,0→6,0)→digit7 ddf0→digit8 ddf0
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -19,32 +23,39 @@ document.addEventListener("DOMContentLoaded", () => {
   const tokenInput = $("tokenInput");
 
   const MARKETS = [
-    { symbol: "R_10", label: "Volatility 10 Index" },
-    { symbol: "R_25", label: "Volatility 25 Index" },
-    { symbol: "R_50", label: "Volatility 50 Index" },
-    { symbol: "R_75", label: "Volatility 75 Index" },
-    { symbol: "R_100", label: "Volatility 100 Index" },
-    { symbol: "1HZ10V", label: "Volatility 10 (1s) Index" },
-    { symbol: "1HZ25V", label: "Volatility 25 (1s) Index" },
-    { symbol: "1HZ50V", label: "Volatility 50 (1s) Index" },
-    { symbol: "1HZ75V", label: "Volatility 75 (1s) Index" },
+    { symbol: "R_10",    label: "Volatility 10 Index" },
+    { symbol: "R_25",    label: "Volatility 25 Index" },
+    { symbol: "R_50",    label: "Volatility 50 Index" },
+    { symbol: "R_75",    label: "Volatility 75 Index" },
+    { symbol: "R_100",   label: "Volatility 100 Index" },
+    { symbol: "1HZ10V",  label: "Volatility 10 (1s) Index" },
+    { symbol: "1HZ25V",  label: "Volatility 25 (1s) Index" },
+    { symbol: "1HZ50V",  label: "Volatility 50 (1s) Index" },
+    { symbol: "1HZ75V",  label: "Volatility 75 (1s) Index" },
     { symbol: "1HZ100V", label: "Volatility 100 (1s) Index" }
   ];
 
   const FALLBACK_DECIMALS = {
-    R_10: 3,
-    R_25: 3,
-    R_50: 4,
-    R_75: 4,
-    R_100: 2,
-    "1HZ10V": 2,
-    "1HZ25V": 3,
-    "1HZ50V": 2,
-    "1HZ75V": 3,
-    "1HZ100V": 2
+    R_10: 3, R_25: 3, R_50: 4, R_75: 4, R_100: 2,
+    "1HZ10V": 2, "1HZ25V": 3, "1HZ50V": 2, "1HZ75V": 3, "1HZ100V": 2
   };
 
+  // ── Chain definitions ────────────────────────────────────────────────────
+  //   starter  : first [A, 0] pair that triggers "waiting" state
+  //   second   : [A+1, 0] pair that confirms and ARMS the chain
+  //   targets  : [primaryDigit, recoveryDigit]
+  //              bot fires DIGITDIFF barrier=0 when that digit appears
+  //   Invalidation: if [A+1, X≠0] appears while waiting → reset to scan
+  // ─────────────────────────────────────────────────────────────────────────
+  const CHAINS = [
+    { starter: [2, 0], second: [3, 0], targets: [4, 5] },
+    { starter: [3, 0], second: [4, 0], targets: [5, 6] },
+    { starter: [4, 0], second: [5, 0], targets: [6, 7] },
+    { starter: [5, 0], second: [6, 0], targets: [7, 8] }
+  ];
+
   const DEFAULT_PAYOUT_RATIO = 11.57;
+  const DIGITDIFF_DURATION_TICKS = 1;
 
   let symbol = "R_100";
   const symbolDecimals = {};
@@ -54,19 +65,13 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   const savedToken = localStorage.getItem("access_token");
-  if (tokenInput && savedToken) {
-    tokenInput.value = savedToken;
-  }
+  if (tokenInput && savedToken) tokenInput.value = savedToken;
 
-  const ACCOUNTS = {
-    demo: "DOT92927394",
-    live: "ROT91650098"
-  };
-
+  const ACCOUNTS = { demo: "DOT92927394", live: "ROT91650098" };
   let account = "demo";
   demoBtn.classList.add("active");
 
-  // ── market selector ─────────────────────────────────────────────────────
+  // ── Market selector ───────────────────────────────────────────────────────
   const marketSelect = $("marketSelect");
   marketSelect.innerHTML = "";
   MARKETS.forEach(m => {
@@ -76,9 +81,7 @@ document.addEventListener("DOMContentLoaded", () => {
     marketSelect.appendChild(opt);
   });
   marketSelect.value = symbol;
-  marketSelect.addEventListener("change", () => {
-    switchMarket(marketSelect.value);
-  });
+  marketSelect.addEventListener("change", () => switchMarket(marketSelect.value));
   // ─────────────────────────────────────────────────────────────────────────
 
   let ws = null;
@@ -90,6 +93,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const HEARTBEAT_MS = 20000;
   const RECONNECT_BASE_MS = 2000;
   const RECONNECT_MAX_MS = 30000;
+
   let lastPayoutRatio = null;
   let recoveryLoss = 0;
   let currentStake = 0;
@@ -97,56 +101,24 @@ document.addEventListener("DOMContentLoaded", () => {
   let paused = false;
   let ladder = 0;
   let totalProfit = 0;
+
   let waitingProposal = false;
   let proposalVariants = null;
   let proposalAttempt = 0;
   let activeContractId = null;
-
-  let seqA = null;
-  let seqB = null;
   let settlementDigit = null;
   let captureNextTick = false;
 
-  let recoveryMode = false;
-  let recoveryPair = null;
-  let lastTradePair = null;
-
-  // ── ABX Sequence Strategy ────────────────────────────────────────────────
-  //
-  // Valid pairs: all [A, B] where A ∈ {1..9} and B ∈ {0..A-1},
-  // excluding consecutive pairs 1-0, 2-1, 3-2, 4-3, 5-4,
-  // 6-5, 7-6, 8-7, 9-8  (36 total valid pairs)
-  //
-  // Phase 1 — SCANNING (rolling 2-digit window, overlapping triples):
-  //   On every tick, the last 3 digits form [A, B, X].
-  //   If [A,B] is a valid pair:
-  //     • First time seeing [A,B,?]        → store X, count=1, log 1/3.
-  //     • Same [A,B] again, same X, count=2 → log 2/3.
-  //     • Same [A,B] again, same X, count=3 → ARM. Barrier = X.
-  //     • Same [A,B] again, diff X          → replace stored X, reset count=1, log reset.
-  //   "Consecutive" means no [A,B,differentX] may appear between the three
-  //   matching occurrences — other unrelated sequences are fine.
-  //
-  // Phase 2 — ARMED / RECOVERY:
-  //   Watching for digit A then digit B.
-  //   The moment B arrives → fire DIGITDIFF X (zero-tick, barrier = X).
-  //   On WIN  → full reset, back to scanning.
-  //   On LOSS → stay armed, same A/B/barrier X, martingale, watch for [A,B] again.
-  //
-  // ─────────────────────────────────────────────────────────────────────────
-
-  let scanWindow = [];    // rolling 2-digit window (for phase-1 scan)
-  let lastSeenX = {};     // key: "A-B" → last seen X for that pair (undefined = never seen)
-  let lastSeenCount = {}; // key: "A-B" → consecutive count of same-X appearances
-  let armedSeq = null;    // [A, B] — set when a sequence arms; used in armed phase
-  let armedStep = 0;      // 0 = waiting for A, 1 = got A waiting for B → fire on B
-  let armedX    = null;   // barrier digit (= X) for the currently armed/recovery trade
-  const EXCLUDED_ABA_KEYS = new Set([
-    "1-0", "2-1", "3-2", "4-3", "5-4",
-    "6-5", "7-6", "8-7", "9-8"
-  ]);
-  const DIGITDIFF_DURATION_TICKS = 1;
-
+  // ── Strategy state ────────────────────────────────────────────────────────
+  // phase:
+  //   "scan"     — rolling window, looking for a starter pair [A,0]
+  //   "waiting"  — starter found, watching for second pair [A+1,0]
+  //                invalidated if [A+1,X≠0] appears
+  //   "armed"    — both pairs confirmed, waiting for targets[0] digit to fire
+  //   "recovery" — primary trade lost, waiting for targets[1] digit (martingale)
+  let phase = "scan";
+  let chainId = null;   // index into CHAINS (0–3), or null
+  let prevDigit = null; // last seen digit (rolling 1-digit window for pair detection)
   // ─────────────────────────────────────────────────────────────────────────
 
   const LOG_MAX_ENTRIES = 1200;
@@ -155,32 +127,15 @@ document.addEventListener("DOMContentLoaded", () => {
   let tickBuffer = [];
   let tickFlushTimer = null;
 
+  // ── Logging ───────────────────────────────────────────────────────────────
   function appendLogLine(message, color = "#fff") {
     const entry = document.createElement("div");
     entry.style.color = color;
     entry.textContent = message;
     logEl.appendChild(entry);
-    while (logEl.children.length > LOG_MAX_ENTRIES) {
-      logEl.removeChild(logEl.firstChild);
-    }
+    while (logEl.children.length > LOG_MAX_ENTRIES) logEl.removeChild(logEl.firstChild);
     logEl.scrollTop = logEl.scrollHeight;
     console.log(message);
-  }
-
-  function flushTicksNow() {
-    if (!tickBuffer.length) return;
-    const fragment = document.createDocumentFragment();
-    tickBuffer.splice(0).forEach(({ price, digit }) => {
-      const row = document.createElement("div");
-      row.style.color = "#7dd3fc";
-      row.textContent = `Tick ${Number(price).toFixed(decimalsForSymbol(symbol))} → ${digit}`;
-      fragment.appendChild(row);
-    });
-    logEl.appendChild(fragment);
-    while (logEl.children.length > LOG_MAX_ENTRIES) {
-      logEl.removeChild(logEl.firstChild);
-    }
-    logEl.scrollTop = logEl.scrollHeight;
   }
 
   function startTickFlush() {
@@ -188,17 +143,14 @@ document.addEventListener("DOMContentLoaded", () => {
     tickFlushTimer = setInterval(() => {
       if (!tickBuffer.length) return;
       const fragment = document.createDocumentFragment();
-      const batch = tickBuffer.splice(0, TICK_BATCH_LIMIT);
-      batch.forEach(({ price, digit }) => {
+      tickBuffer.splice(0, TICK_BATCH_LIMIT).forEach(({ price, digit }) => {
         const row = document.createElement("div");
         row.style.color = "#7dd3fc";
         row.textContent = `Tick ${Number(price).toFixed(decimalsForSymbol(symbol))} → ${digit}`;
         fragment.appendChild(row);
       });
       logEl.appendChild(fragment);
-      while (logEl.children.length > LOG_MAX_ENTRIES) {
-        logEl.removeChild(logEl.firstChild);
-      }
+      while (logEl.children.length > LOG_MAX_ENTRIES) logEl.removeChild(logEl.firstChild);
       logEl.scrollTop = logEl.scrollHeight;
     }, TICK_FLUSH_MS);
   }
@@ -208,6 +160,7 @@ document.addEventListener("DOMContentLoaded", () => {
     clearInterval(tickFlushTimer);
     tickFlushTimer = null;
   }
+  // ─────────────────────────────────────────────────────────────────────────
 
   function digitFromPrice(price) {
     const value = Number(price);
@@ -224,7 +177,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function stake() {
     const baseStake = Number(stakeInput.value || 0.35);
-    const payoutRatio = lastPayoutRatio && lastPayoutRatio > 1.01
+    const payoutRatio = (lastPayoutRatio && lastPayoutRatio > 1.01)
       ? lastPayoutRatio
       : DEFAULT_PAYOUT_RATIO;
     if (recoveryLoss > 0 && payoutRatio > 1.01) {
@@ -234,41 +187,31 @@ document.addEventListener("DOMContentLoaded", () => {
     return Number(baseStake.toFixed(2));
   }
 
-  function resetSequence() {
+  // ── State reset helpers ───────────────────────────────────────────────────
+  function clearContractState() {
     settlementDigit = null;
     captureNextTick = false;
     waitingProposal = false;
     proposalVariants = null;
     proposalAttempt = 0;
     activeContractId = null;
-
-    if (recoveryMode && armedSeq) {
-      // Loss recovery — stay armed on same [A,B,X], reset step to 0
-      armedStep = 0;
-      appendLogLine(
-        `Recovery → watching for [${armedSeq[0]},${armedSeq[1]}] DIGITDIFF ${armedX} (martingale)`,
-        "#f97316"
-      );
-    } else {
-      // Full reset — back to scanning
-      armedSeq = null;
-      armedStep = 0;
-      armedX = null;
-      scanWindow = [];
-      lastSeenX = {};
-      lastSeenCount = {};
-      appendLogLine("Scanning...", "#a78bfa");
-    }
   }
 
+  // Full reset back to scanning (keeps recoveryLoss/ladder for martingale)
+  function resetToScan() {
+    clearContractState();
+    phase = "scan";
+    chainId = null;
+    prevDigit = null;
+    appendLogLine("Scanning...", "#a78bfa");
+  }
+
+  // Hard reset — clears everything including martingale state
   function fullReset() {
-    armedSeq = null;
-    armedStep = 0;
-    armedX = null;
-    scanWindow = [];
-    lastSeenX = {};
-    lastSeenCount = {};
-    resetSequence();
+    clearContractState();
+    phase = "scan";
+    chainId = null;
+    prevDigit = null;
     totalProfit = 0;
     recoveryLoss = 0;
     lastPayoutRatio = null;
@@ -276,54 +219,31 @@ document.addEventListener("DOMContentLoaded", () => {
     lastBalance = null;
     ladder = 0;
     tickBuffer.length = 0;
-    recoveryMode = false;
-    recoveryPair = null;
-    lastTradePair = null;
   }
-
-  function fetchActiveSymbols() {
-    if (!sendMessage({ active_symbols: "brief" })) return;
-  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   function startHeartbeat() {
     stopHeartbeat();
     heartbeatTimer = setInterval(() => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ ping: 1 }));
-      }
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ ping: 1 }));
     }, HEARTBEAT_MS);
   }
 
   function stopHeartbeat() {
-    if (heartbeatTimer) {
-      clearInterval(heartbeatTimer);
-      heartbeatTimer = null;
-    }
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
   }
 
   function cancelReconnect() {
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   }
 
   function scheduleReconnect() {
     if (manualStop || !running) return;
     cancelReconnect();
     reconnectAttempts += 1;
-    const delay = Math.min(
-      RECONNECT_BASE_MS * Math.pow(1.5, reconnectAttempts - 1),
-      RECONNECT_MAX_MS
-    );
-    appendLogLine(
-      `Reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempts})...`,
-      "orange"
-    );
-    reconnectTimer = setTimeout(() => {
-      if (manualStop || !running) return;
-      connect();
-    }, delay);
+    const delay = Math.min(RECONNECT_BASE_MS * Math.pow(1.5, reconnectAttempts - 1), RECONNECT_MAX_MS);
+    appendLogLine(`Reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempts})...`, "orange");
+    reconnectTimer = setTimeout(() => { if (!manualStop && running) connect(); }, delay);
   }
 
   function switchMarket(newSymbol) {
@@ -331,12 +251,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const marketMeta = MARKETS.find(m => m.symbol === newSymbol);
     const wasRunning = running;
 
-    armedSeq = null;
-    armedStep = 0;
-    armedX = null;
-    scanWindow = [];
-    lastSeenX = {};
-    lastSeenCount = {};
+    phase = "scan";
+    chainId = null;
+    prevDigit = null;
     settlementDigit = null;
     captureNextTick = false;
     waitingProposal = false;
@@ -372,7 +289,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return [
       Object.assign({}, base, { underlying_symbol: symbol }),
       Object.assign({}, base, { underlying: symbol }),
-      Object.assign({}, base, { symbol: symbol }),
+      Object.assign({}, base, { symbol }),
       Object.assign({}, base)
     ];
   }
@@ -390,12 +307,9 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!waitingProposal || !proposalVariants) return false;
     const lower = String(errorText || "").toLowerCase();
     if (
-      lower.includes("underlying_symbol") ||
-      lower.includes("underlying") ||
-      lower.includes("properties not allowed") ||
-      lower.includes("symbol") ||
-      lower.includes("missing") ||
-      lower.includes("invalid") ||
+      lower.includes("underlying_symbol") || lower.includes("underlying") ||
+      lower.includes("properties not allowed") || lower.includes("symbol") ||
+      lower.includes("missing") || lower.includes("invalid") ||
       lower.includes("validation failed")
     ) {
       appendLogLine("Proposal validation failed; retrying next variant.", "orange");
@@ -414,25 +328,22 @@ document.addEventListener("DOMContentLoaded", () => {
       proposalAttempt = 0;
       return;
     }
-    const payload = proposalVariants[proposalAttempt++];
-    sendMessage(payload);
+    sendMessage(proposalVariants[proposalAttempt++]);
   }
 
-  function placeTrade(barrier) {
+  function placeTrade() {
     if (waitingProposal) {
       appendLogLine("Already waiting for a proposal.", "orange");
       return;
     }
-
-    lastTradePair = armedSeq ? [...armedSeq] : null;
-
-    proposalVariants = buildProposalVariants(barrier);
+    proposalVariants = buildProposalVariants("0"); // barrier always 0
     proposalAttempt = 0;
     waitingProposal = true;
-    appendLogLine(`TRADE barrier=${barrier} stake=${proposalVariants[0].amount}`, "lime");
+    appendLogLine(`TRADE DIGITDIFF barrier=0 stake=${proposalVariants[0].amount}`, "lime");
     sendNextProposalVariant();
   }
 
+  // ── Main tick handler ─────────────────────────────────────────────────────
   function onTick(price) {
     if (!running || paused) return;
     const d = digitFromPrice(price);
@@ -448,88 +359,81 @@ document.addEventListener("DOMContentLoaded", () => {
       captureNextTick = false;
     }
 
-    if (waitingProposal || activeContractId) return;
-
-    // ── ARMED / RECOVERY: watch for [A, B] → fire DIGITDIFF X on B ──────────
-    if (armedSeq) {
-      const [A, B] = armedSeq;
-
-      if (armedStep === 0) {
-        if (d === A) armedStep = 1;
-      } else if (armedStep === 1) {
-        if (d === B) {
-          // B arrived — fire immediately (zero-tick)
-          const barrier = String(armedX);
-          appendLogLine(`[${A},${B}] → DIGITDIFF ${barrier}`, "lime");
-          seqA = A; seqB = B;
-          armedStep = 0;
-          placeTrade(barrier);
-        } else {
-          armedStep = 0;
-          if (d === A) armedStep = 1; // restart if this digit is A
-        }
-      }
+    // While a trade is in flight, still update prevDigit so window is ready after
+    if (waitingProposal || activeContractId) {
+      prevDigit = d;
       return;
     }
 
-    // ── SCANNING: track ABX sequences; arm when same [A,B,X] appears 3× consecutively ──
-    if (scanWindow.length === 2) {
-      const [A, B] = scanWindow;
-      if (
-        A >= 1 &&
-        B < A &&
-        !EXCLUDED_ABA_KEYS.has(`${A}-${B}`)
-      ) {
-        const key = `${A}-${B}`;
-        const X = d;
-        const prev = lastSeenX[key];
-
-        if (prev === undefined) {
-          // First occurrence of this [A,B,?] — store X, count = 1
-          lastSeenX[key] = X;
-          lastSeenCount[key] = 1;
-          appendLogLine(`[${A},${B},${X}] 1/3`, "#64748b");
-        } else if (prev === X) {
-          // Same X as last time — increment consecutive count
-          lastSeenCount[key] = (lastSeenCount[key] || 1) + 1;
-          const count = lastSeenCount[key];
-
-          if (count === 2) {
-            appendLogLine(`[${A},${B},${X}] 2/3`, "#64748b");
-          } else if (count >= 3) {
-            // Third consecutive same-X occurrence → ARM
-            armedSeq = [A, B];
-            armedX = X; // barrier = X
-            armedStep = 0;
-            lastSeenX = {};
-            lastSeenCount = {};
-            scanWindow = [];
-            appendLogLine(`[${A},${B},${X}] 3/3 — Armed | watching for [${A},${B}] DIGITDIFF ${X}`, "#f59e0b");
+    if (phase === "scan") {
+      // Look for any starter [A, 0]
+      if (prevDigit !== null) {
+        for (let i = 0; i < CHAINS.length; i++) {
+          const [sa, sb] = CHAINS[i].starter;
+          if (prevDigit === sa && d === sb) {
+            chainId = i;
+            phase = "waiting";
+            const [wa] = CHAINS[i].second;
+            appendLogLine(
+              `Starter [${sa},${sb}] found → waiting for [${wa},0]`,
+              "#64748b"
+            );
+            prevDigit = d;
             return;
           }
-        } else {
-          // Same [A,B] but different X — reset stored X and count, no arm
-          lastSeenX[key] = X;
-          lastSeenCount[key] = 1;
-          appendLogLine(`[${A},${B},${X}] reset (prev ${prev})`, "#64748b");
         }
-        // Rolling window — do NOT reset scanWindow (overlapping triples allowed)
+      }
+
+    } else if (phase === "waiting") {
+      const chain = CHAINS[chainId];
+      const [wa, wb] = chain.second; // wb is always 0
+
+      if (prevDigit === wa) {
+        if (d === wb) {
+          // Second pair confirmed → ARM
+          phase = "armed";
+          appendLogLine(
+            `[${chain.starter[0]},0 → ${wa},0] Armed | watching for digit ${chain.targets[0]} DIGITDIFF 0`,
+            "#f59e0b"
+          );
+        } else {
+          // [wa, X≠0] appeared — chain invalidated
+          appendLogLine(
+            `[${wa},${d}] invalidates chain — Scanning...`,
+            "#64748b"
+          );
+          phase = "scan";
+          chainId = null;
+        }
+      }
+      // Any other digit: keep waiting silently
+
+    } else if (phase === "armed") {
+      const chain = CHAINS[chainId];
+      if (d === chain.targets[0]) {
+        appendLogLine(`Digit ${d} → DIGITDIFF 0`, "lime");
+        placeTrade();
+      }
+
+    } else if (phase === "recovery") {
+      const chain = CHAINS[chainId];
+      if (d === chain.targets[1]) {
+        appendLogLine(`Recovery digit ${d} → DIGITDIFF 0 (martingale)`, "lime");
+        placeTrade();
       }
     }
-    scanWindow.push(d);
-    if (scanWindow.length > 2) scanWindow.shift();
+
+    prevDigit = d;
   }
+  // ─────────────────────────────────────────────────────────────────────────
 
   async function connect() {
-    // If a trade was in-flight when the connection dropped (proposal sent or
-    // contract active but never settled), treat it as a loss so recovery
-    // state is preserved across the reconnect.
-    if ((waitingProposal || activeContractId) && armedSeq && !recoveryMode) {
-      recoveryMode = true;
+    // If a trade was in-flight when connection dropped, record it as a loss
+    if ((waitingProposal || activeContractId) && phase !== "scan") {
       recoveryLoss += currentStake > 0 ? currentStake : 0;
       ladder += 1;
     }
-    resetSequence();
+    resetToScan();
     if (ws) ws.close();
 
     const accountId = ACCOUNTS[account];
@@ -560,30 +464,22 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!response.ok) {
         appendLogLine(`OTP request failed ${response.status}.`, "red");
         appendLogLine(text, "red");
-        if (!manualStop && running) {
-          scheduleReconnect();
-        }
+        if (!manualStop && running) scheduleReconnect();
         return;
       }
 
       let data;
-      try {
-        data = JSON.parse(text);
-      } catch (err) {
+      try { data = JSON.parse(text); } catch {
         appendLogLine("OTP response is not JSON.", "red");
         appendLogLine(text, "red");
-        if (!manualStop && running) {
-          scheduleReconnect();
-        }
+        if (!manualStop && running) scheduleReconnect();
         return;
       }
 
       if (!data?.data?.url) {
         appendLogLine("OTP response missing data.url.", "red");
         appendLogLine(JSON.stringify(data), "red");
-        if (!manualStop && running) {
-          scheduleReconnect();
-        }
+        if (!manualStop && running) scheduleReconnect();
         return;
       }
 
@@ -595,18 +491,14 @@ document.addEventListener("DOMContentLoaded", () => {
         cancelReconnect();
         startHeartbeat();
         startTickFlush();
-        fetchActiveSymbols();
+        sendMessage({ active_symbols: "brief" });
         sendMessage({ ticks: symbol, subscribe: 1 });
         sendMessage({ balance: 1 });
       };
 
       ws.onmessage = e => {
         let payload;
-        try {
-          payload = JSON.parse(e.data);
-        } catch (err) {
-          return;
-        }
+        try { payload = JSON.parse(e.data); } catch { return; }
 
         if (payload.error) {
           const message = payload.error.message || JSON.stringify(payload.error);
@@ -620,6 +512,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         switch (payload.msg_type) {
+
           case "tick":
             onTick(payload.tick.quote);
             break;
@@ -633,17 +526,14 @@ document.addEventListener("DOMContentLoaded", () => {
           case "active_symbols": {
             const list = payload.active_symbols;
             if (Array.isArray(list)) {
-              const wantedSymbols = new Set(MARKETS.map(m => m.symbol));
+              const wanted = new Set(MARKETS.map(m => m.symbol));
               list.forEach(entry => {
-                if (!entry || !wantedSymbols.has(entry.symbol)) return;
+                if (!entry || !wanted.has(entry.symbol)) return;
                 const pip = Number(entry.pip);
                 if (!pip || Number.isNaN(pip)) return;
-                const decimals = Math.round(-Math.log10(pip));
-                if (decimals >= 0 && decimals <= 6) {
-                  symbolDecimals[entry.symbol] = decimals;
-                }
+                const dec = Math.round(-Math.log10(pip));
+                if (dec >= 0 && dec <= 6) symbolDecimals[entry.symbol] = dec;
               });
-              // pip precision loaded (silent)
             }
             break;
           }
@@ -659,12 +549,9 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             currentStake = Number(payload.proposal.ask_price || 0);
             if (payload.proposal.payout && currentStake > 0) {
-              lastPayoutRatio = Number(payload.proposal.payout / currentStake);
+              lastPayoutRatio = Number(payload.proposal.payout) / currentStake;
             }
-            sendMessage({
-              buy: payload.proposal.id,
-              price: payload.proposal.ask_price
-            });
+            sendMessage({ buy: payload.proposal.id, price: payload.proposal.ask_price });
             break;
 
           case "buy":
@@ -704,10 +591,7 @@ document.addEventListener("DOMContentLoaded", () => {
               const resultDigit = settlementDigit !== null ? settlementDigit : exitDigit;
 
               if (pnl >= 0) {
-                // WIN — full reset, back to scanning
-                recoveryMode = false;
-                recoveryPair = null;
-                lastTradePair = null;
+                // ── WIN ─────────────────────────────────────────────────────
                 recoveryLoss = 0;
                 currentStake = 0;
                 ladder = 0;
@@ -716,55 +600,63 @@ document.addEventListener("DOMContentLoaded", () => {
                   (resultDigit !== null ? ` (digit=${resultDigit})` : ""),
                   "lime"
                 );
+                resetToScan();
+
               } else {
-                // LOSS — stay armed, martingale next trade
-                recoveryMode = true;
-                recoveryPair = null;
+                // ── LOSS ────────────────────────────────────────────────────
                 recoveryLoss += Math.abs(pnl);
                 ladder += 1;
                 const nextStake = stake();
-                appendLogLine(
-                  `LOSS ${pnl.toFixed(2)} | next stake=${nextStake.toFixed(2)}`,
-                  "red"
-                );
+
+                if (phase === "armed") {
+                  // Primary trade lost → move to recovery, stay on same chain
+                  const chain = CHAINS[chainId];
+                  phase = "recovery";
+                  clearContractState();
+                  appendLogLine(
+                    `LOSS ${pnl.toFixed(2)} | ladder=${ladder}` +
+                    (resultDigit !== null ? ` (digit=${resultDigit})` : "") +
+                    ` → recovery: watch digit ${chain.targets[1]} DIGITDIFF 0 stake=${nextStake.toFixed(2)}`,
+                    "red"
+                  );
+                } else {
+                  // Recovery trade also lost → back to scan, martingale carries over
+                  appendLogLine(
+                    `LOSS ${pnl.toFixed(2)} | ladder=${ladder}` +
+                    (resultDigit !== null ? ` (digit=${resultDigit})` : "") +
+                    ` | next stake=${nextStake.toFixed(2)}`,
+                    "red"
+                  );
+                  resetToScan();
+                }
               }
 
               if (levelEl) levelEl.textContent = ladder;
-
-              if (ws && ws.readyState === WebSocket.OPEN) {
-                sendMessage({ balance: 1 });
-              }
-
-              resetSequence();
+              if (ws && ws.readyState === WebSocket.OPEN) sendMessage({ balance: 1 });
             }
             break;
           }
 
-          default:
-            break;
+          default: break;
         }
       };
 
-      ws.onclose = ev => {
+      ws.onclose = () => {
         stopTickFlush();
         stopHeartbeat();
-        if (!manualStop && running) {
-          scheduleReconnect();
-        }
+        if (!manualStop && running) scheduleReconnect();
       };
 
-      ws.onerror = ev => {
-        console.error("WebSocket error:", ev);
-      };
+      ws.onerror = ev => console.error("WebSocket error:", ev);
+
     } catch (err) {
       appendLogLine(`OTP fetch failed: ${String(err)}`, "red");
       console.error(err);
-      if (!manualStop && running) {
-        scheduleReconnect();
-      }
+      if (!manualStop && running) scheduleReconnect();
     }
   }
 
+  // ── Button handlers ───────────────────────────────────────────────────────
   startBtn.onclick = () => {
     running = true;
     manualStop = false;
@@ -804,11 +696,7 @@ document.addEventListener("DOMContentLoaded", () => {
     liveBtn.classList.remove("active");
     appendLogLine("DEMO MODE", "blue");
     const mi = $("modeIndicator");
-    if (mi) {
-      mi.textContent = "JESAN 💲 MODE - DEMO";
-      mi.classList.add("demo");
-      mi.classList.remove("live");
-    }
+    if (mi) { mi.textContent = "JESAN 💲 MODE - DEMO"; mi.classList.add("demo"); mi.classList.remove("live"); }
   };
 
   liveBtn.onclick = () => {
@@ -817,11 +705,7 @@ document.addEventListener("DOMContentLoaded", () => {
     demoBtn.classList.remove("active");
     appendLogLine("LIVE MODE", "red");
     const mi = $("modeIndicator");
-    if (mi) {
-      mi.textContent = "JESAN 💲 MODE - LIVE";
-      mi.classList.add("live");
-      mi.classList.remove("demo");
-    }
+    if (mi) { mi.textContent = "JESAN 💲 MODE - LIVE"; mi.classList.add("live"); mi.classList.remove("demo"); }
   };
 
   window.addEventListener("beforeunload", () => {
