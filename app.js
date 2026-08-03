@@ -1,8 +1,8 @@
-// Deriv DigitDiff bot — Chain-pair strategy (3 pairs before arm)
-// Chains: (2,0→3,0→4,0)→digit5 ddf0→digit6 ddf0
-//         (3,0→4,0→5,0)→digit6 ddf0→digit7 ddf0
-//         (4,0→5,0→6,0)→digit7 ddf0→digit8 ddf0
-//         (5,0→6,0→7,0)→digit8 ddf0→digit9 ddf0
+// Deriv DigitDiff bot — Chain-pair strategy
+// Chains: (2,2→3,3)→digit4 ddf4→digit5 ddf5
+//         (3,3→4,4)→digit5 ddf5→digit6 ddf6
+//         (4,4→5,5)→digit6 ddf6→digit7 ddf7
+//         (5,5→6,6)→digit7 ddf7→digit8 ddf8
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -40,22 +40,14 @@ document.addEventListener("DOMContentLoaded", () => {
     "1HZ10V": 2, "1HZ25V": 3, "1HZ50V": 2, "1HZ75V": 3, "1HZ100V": 2
   };
 
-  // ── Chain definitions ────────────────────────────────────────────────────
-  //   starter  : first [A, 0] pair   → triggers "waiting1"
-  //   second   : [A+1, 0] pair       → triggers "waiting2"
-  //   third    : [A+2, 0] pair       → ARMS the chain
-  //   targets  : [primaryDigit, recoveryDigit]
-  //              bot fires DIGITDIFF barrier=0 when that digit appears
-  //   Invalidation: if [A+n, X≠0] appears while waiting → reset to scan
-  // ─────────────────────────────────────────────────────────────────────────
   const CHAINS = [
-    { starter: [2, 0], second: [3, 0], third: [4, 0], targets: [5, 6] },
-    { starter: [3, 0], second: [4, 0], third: [5, 0], targets: [6, 7] },
-    { starter: [4, 0], second: [5, 0], third: [6, 0], targets: [7, 8] },
-    { starter: [5, 0], second: [6, 0], third: [7, 0], targets: [8, 9] }
+    { starter: [2, 2], second: [3, 3], targets: [4, 5] },
+    { starter: [3, 3], second: [4, 4], targets: [5, 6] },
+    { starter: [4, 4], second: [5, 5], targets: [6, 7] },
+    { starter: [5, 5], second: [6, 6], targets: [7, 8] }
   ];
 
-  const DEFAULT_PAYOUT_RATIO = 11.57;
+  const DEFAULT_PAYOUT_RATIO = 1.09;
   const DIGITDIFF_DURATION_TICKS = 1;
 
   let symbol = "R_100";
@@ -72,7 +64,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let account = "demo";
   demoBtn.classList.add("active");
 
-  // ── Market selector ───────────────────────────────────────────────────────
   const marketSelect = $("marketSelect");
   marketSelect.innerHTML = "";
   MARKETS.forEach(m => {
@@ -83,7 +74,6 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   marketSelect.value = symbol;
   marketSelect.addEventListener("change", () => switchMarket(marketSelect.value));
-  // ─────────────────────────────────────────────────────────────────────────
 
   let ws = null;
   let running = false;
@@ -110,19 +100,10 @@ document.addEventListener("DOMContentLoaded", () => {
   let settlementDigit = null;
   let captureNextTick = false;
 
-  // ── Strategy state ────────────────────────────────────────────────────────
-  // phase:
-  //   "scan"     — rolling window, looking for a starter pair [A,0]
-  //   "waiting1" — starter found, watching for second pair [A+1,0]
-  //                invalidated if [A+1,X≠0] appears
-  //   "waiting2" — second pair found, watching for third pair [A+2,0]
-  //                invalidated if [A+2,X≠0] appears
-  //   "armed"    — all 3 pairs confirmed, waiting for targets[0] digit to fire
-  //   "recovery" — primary trade lost, waiting for targets[1] digit (martingale)
+  // phase: "scan" | "waiting" | "armed" | "recovery"
   let phase = "scan";
-  let chainId = null;   // index into CHAINS (0–3), or null
-  let prevDigit = null; // last seen digit (rolling 1-digit window for pair detection)
-  // ─────────────────────────────────────────────────────────────────────────
+  let chainId = null;
+  let prevDigit = null;
 
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
@@ -130,7 +111,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let tickBuffer = [];
   let tickFlushTimer = null;
 
-  // ── Logging ───────────────────────────────────────────────────────────────
   function appendLogLine(message, color = "#fff") {
     const entry = document.createElement("div");
     entry.style.color = color;
@@ -163,7 +143,6 @@ document.addEventListener("DOMContentLoaded", () => {
     clearInterval(tickFlushTimer);
     tickFlushTimer = null;
   }
-  // ─────────────────────────────────────────────────────────────────────────
 
   function digitFromPrice(price) {
     const value = Number(price);
@@ -190,7 +169,6 @@ document.addEventListener("DOMContentLoaded", () => {
     return Number(baseStake.toFixed(2));
   }
 
-  // ── State reset helpers ───────────────────────────────────────────────────
   function clearContractState() {
     settlementDigit = null;
     captureNextTick = false;
@@ -221,7 +199,6 @@ document.addEventListener("DOMContentLoaded", () => {
     ladder = 0;
     tickBuffer.length = 0;
   }
-  // ─────────────────────────────────────────────────────────────────────────
 
   function startHeartbeat() {
     stopHeartbeat();
@@ -231,20 +208,34 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function stopHeartbeat() {
-    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
   }
 
   function cancelReconnect() {
-    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
   }
 
   function scheduleReconnect() {
     if (manualStop || !running) return;
     cancelReconnect();
     reconnectAttempts += 1;
-    const delay = Math.min(RECONNECT_BASE_MS * Math.pow(1.5, reconnectAttempts - 1), RECONNECT_MAX_MS);
-    appendLogLine(`Reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempts})...`, "orange");
-    reconnectTimer = setTimeout(() => { if (!manualStop && running) connect(); }, delay);
+    const delay = Math.min(
+      RECONNECT_BASE_MS * Math.pow(1.5, reconnectAttempts - 1),
+      RECONNECT_MAX_MS
+    );
+    appendLogLine(
+      `Reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempts})...`,
+      "orange"
+    );
+    reconnectTimer = setTimeout(() => {
+      if (!manualStop && running) connect();
+    }, delay);
   }
 
   function switchMarket(newSymbol) {
@@ -271,7 +262,11 @@ document.addEventListener("DOMContentLoaded", () => {
       symbol = newSymbol;
     }
 
-    appendLogLine(`Market → ${marketMeta ? marketMeta.label : symbol}`, "#f59e0b");
+    appendLogLine(
+      `Market → ${marketMeta ? marketMeta.label : symbol}`,
+      "#f59e0b"
+    );
+
     if (wasRunning) appendLogLine("Scanning...", "#a78bfa");
   }
 
@@ -287,6 +282,7 @@ document.addEventListener("DOMContentLoaded", () => {
       duration_unit: "t",
       barrier
     };
+
     return [
       Object.assign({}, base, { underlying_symbol: symbol }),
       Object.assign({}, base, { underlying: symbol }),
@@ -300,28 +296,39 @@ document.addEventListener("DOMContentLoaded", () => {
       appendLogLine("WS not open; cannot send.", "red");
       return false;
     }
+
     ws.send(JSON.stringify(data));
     return true;
   }
 
   function handleValidationError(errorText) {
     if (!waitingProposal || !proposalVariants) return false;
+
     const lower = String(errorText || "").toLowerCase();
+
     if (
-      lower.includes("underlying_symbol") || lower.includes("underlying") ||
-      lower.includes("properties not allowed") || lower.includes("symbol") ||
-      lower.includes("missing") || lower.includes("invalid") ||
+      lower.includes("underlying_symbol") ||
+      lower.includes("underlying") ||
+      lower.includes("properties not allowed") ||
+      lower.includes("symbol") ||
+      lower.includes("missing") ||
+      lower.includes("invalid") ||
       lower.includes("validation failed")
     ) {
-      appendLogLine("Proposal validation failed; retrying next variant.", "orange");
+      appendLogLine(
+        "Proposal validation failed; retrying next variant.",
+        "orange"
+      );
       sendNextProposalVariant();
       return true;
     }
+
     return false;
   }
 
   function sendNextProposalVariant() {
     if (!proposalVariants) return;
+
     if (proposalAttempt >= proposalVariants.length) {
       appendLogLine("All proposal variants failed.", "red");
       waitingProposal = false;
@@ -329,28 +336,38 @@ document.addEventListener("DOMContentLoaded", () => {
       proposalAttempt = 0;
       return;
     }
+
     sendMessage(proposalVariants[proposalAttempt++]);
   }
 
-  function placeTrade() {
+  function placeTrade(barrier) {
     if (waitingProposal) {
       appendLogLine("Already waiting for a proposal.", "orange");
       return;
     }
-    proposalVariants = buildProposalVariants("0");
+
+    proposalVariants = buildProposalVariants(String(barrier));
     proposalAttempt = 0;
     waitingProposal = true;
-    appendLogLine(`TRADE DIGITDIFF barrier=0 stake=${proposalVariants[0].amount}`, "lime");
+
+    appendLogLine(
+      `TRADE DIGITDIFF barrier=${barrier} stake=${proposalVariants[0].amount}`,
+      "lime"
+    );
+
     sendNextProposalVariant();
   }
 
-  // ── Main tick handler ─────────────────────────────────────────────────────
   function onTick(price) {
     if (!running || paused) return;
+
     const d = digitFromPrice(price);
     if (d === null) return;
 
-    if (priceEl) priceEl.textContent = Number(price).toFixed(decimalsForSymbol(symbol));
+    if (priceEl) {
+      priceEl.textContent = Number(price).toFixed(decimalsForSymbol(symbol));
+    }
+
     if (lastDigitEl) lastDigitEl.textContent = d;
 
     tickBuffer.push({ price, digit: d });
@@ -369,52 +386,42 @@ document.addEventListener("DOMContentLoaded", () => {
       if (prevDigit !== null) {
         for (let i = 0; i < CHAINS.length; i++) {
           const [sa, sb] = CHAINS[i].starter;
+
           if (prevDigit === sa && d === sb) {
             chainId = i;
-            phase = "waiting1";
+            phase = "waiting";
+
             const [wa] = CHAINS[i].second;
+            const [, wb] = CHAINS[i].second;
+
             appendLogLine(
-              `Starter [${sa},${sb}] found → waiting for [${wa},0]`,
+              `Starter [${sa},${sb}] → waiting for [${wa},${wb}]`,
               "#64748b"
             );
+
             prevDigit = d;
             return;
           }
         }
       }
 
-    } else if (phase === "waiting1") {
+    } else if (phase === "waiting") {
       const chain = CHAINS[chainId];
       const [wa, wb] = chain.second;
 
       if (prevDigit === wa) {
         if (d === wb) {
-          phase = "waiting2";
-          const [ta] = chain.third;
-          appendLogLine(
-            `[${chain.starter[0]},0 → ${wa},0] found → waiting for [${ta},0]`,
-            "#64748b"
-          );
-        } else {
-          appendLogLine(`[${wa},${d}] invalidates chain — Scanning...`, "#64748b");
-          phase = "scan";
-          chainId = null;
-        }
-      }
-
-    } else if (phase === "waiting2") {
-      const chain = CHAINS[chainId];
-      const [ta, tb] = chain.third;
-
-      if (prevDigit === ta) {
-        if (d === tb) {
           phase = "armed";
+
           appendLogLine(
-            `[${chain.starter[0]},0 → ${chain.second[0]},0 → ${ta},0] Armed | watching for digit ${chain.targets[0]} DIGITDIFF 0`,
+            `[${chain.starter[0]},${chain.starter[1]} → ${wa},${wb}] Armed | watching for digit ${chain.targets[0]} DIGITDIFF ${chain.targets[0]}`,
             "#f59e0b"
           );
         } else {
-          appendLogLine(`[${ta},${d}] invalidates chain — Scanning...`, "#64748b");
+          appendLogLine(
+            `[${wa},${d}] invalidates chain — Scanning...`,
+            "#64748b"
+          );
           phase = "scan";
           chainId = null;
         }
@@ -422,29 +429,38 @@ document.addEventListener("DOMContentLoaded", () => {
 
     } else if (phase === "armed") {
       const chain = CHAINS[chainId];
+
       if (d === chain.targets[0]) {
-        appendLogLine(`Digit ${d} → DIGITDIFF 0`, "lime");
-        placeTrade();
+        appendLogLine(
+          `Digit ${d} → DIGITDIFF ${chain.targets[0]}`,
+          "lime"
+        );
+        placeTrade(chain.targets[0]);
       }
 
     } else if (phase === "recovery") {
       const chain = CHAINS[chainId];
+
       if (d === chain.targets[1]) {
-        appendLogLine(`Recovery digit ${d} → DIGITDIFF 0 (martingale)`, "lime");
-        placeTrade();
+        appendLogLine(
+          `Recovery digit ${d} → DIGITDIFF ${chain.targets[1]} (martingale)`,
+          "lime"
+        );
+        placeTrade(chain.targets[1]);
       }
     }
 
     prevDigit = d;
   }
-  // ─────────────────────────────────────────────────────────────────────────
 
   async function connect() {
     if ((waitingProposal || activeContractId) && phase !== "scan") {
       recoveryLoss += currentStake > 0 ? currentStake : 0;
       ladder += 1;
     }
+
     resetToScan();
+
     if (ws) ws.close();
 
     const accountId = ACCOUNTS[account];
@@ -453,7 +469,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const accessToken = inputToken || storedToken;
 
     if (!accessToken) {
-      appendLogLine("Missing access_token. Paste it in the Access Token field.", "red");
+      appendLogLine(
+        "Missing access_token. Paste it in the Access Token field.",
+        "red"
+      );
       return;
     }
 
@@ -472,17 +491,23 @@ document.addEventListener("DOMContentLoaded", () => {
       );
 
       const text = await response.text();
+
       if (!response.ok) {
         appendLogLine(`OTP request failed ${response.status}.`, "red");
         appendLogLine(text, "red");
+
         if (!manualStop && running) scheduleReconnect();
         return;
       }
 
       let data;
-      try { data = JSON.parse(text); } catch {
+
+      try {
+        data = JSON.parse(text);
+      } catch {
         appendLogLine("OTP response is not JSON.", "red");
         appendLogLine(text, "red");
+
         if (!manualStop && running) scheduleReconnect();
         return;
       }
@@ -490,6 +515,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!data?.data?.url) {
         appendLogLine("OTP response missing data.url.", "red");
         appendLogLine(JSON.stringify(data), "red");
+
         if (!manualStop && running) scheduleReconnect();
         return;
       }
@@ -502,6 +528,7 @@ document.addEventListener("DOMContentLoaded", () => {
         cancelReconnect();
         startHeartbeat();
         startTickFlush();
+
         sendMessage({ active_symbols: "brief" });
         sendMessage({ ticks: symbol, subscribe: 1 });
         sendMessage({ balance: 1 });
@@ -509,21 +536,29 @@ document.addEventListener("DOMContentLoaded", () => {
 
       ws.onmessage = e => {
         let payload;
-        try { payload = JSON.parse(e.data); } catch { return; }
+
+        try {
+          payload = JSON.parse(e.data);
+        } catch {
+          return;
+        }
 
         if (payload.error) {
-          const message = payload.error.message || JSON.stringify(payload.error);
+          const message =
+            payload.error.message || JSON.stringify(payload.error);
+
           appendLogLine(`Error: ${message}`, "red");
+
           if (!handleValidationError(message)) {
             waitingProposal = false;
             proposalVariants = null;
             proposalAttempt = 0;
           }
+
           return;
         }
 
         switch (payload.msg_type) {
-
           case "tick":
             onTick(payload.tick.quote);
             break;
@@ -536,39 +571,61 @@ document.addEventListener("DOMContentLoaded", () => {
 
           case "active_symbols": {
             const list = payload.active_symbols;
+
             if (Array.isArray(list)) {
               const wanted = new Set(MARKETS.map(m => m.symbol));
+
               list.forEach(entry => {
                 if (!entry || !wanted.has(entry.symbol)) return;
+
                 const pip = Number(entry.pip);
+
                 if (!pip || Number.isNaN(pip)) return;
+
                 const dec = Math.round(-Math.log10(pip));
-                if (dec >= 0 && dec <= 6) symbolDecimals[entry.symbol] = dec;
+
+                if (dec >= 0 && dec <= 6) {
+                  symbolDecimals[entry.symbol] = dec;
+                }
               });
             }
+
             break;
           }
 
           case "proposal":
             if (!waitingProposal) break;
+
             waitingProposal = false;
             proposalVariants = null;
             proposalAttempt = 0;
+
             if (!payload.proposal) {
-              appendLogLine("Proposal response missing payload.", "red");
+              appendLogLine(
+                "Proposal response missing payload.",
+                "red"
+              );
               break;
             }
+
             currentStake = Number(payload.proposal.ask_price || 0);
+
             if (payload.proposal.payout && currentStake > 0) {
-              lastPayoutRatio = Number(payload.proposal.payout) / currentStake;
+              lastPayoutRatio =
+                Number(payload.proposal.payout) / currentStake;
             }
-            sendMessage({ buy: payload.proposal.id, price: payload.proposal.ask_price });
+
+            sendMessage({
+              buy: payload.proposal.id,
+              price: payload.proposal.ask_price
+            });
             break;
 
           case "buy":
             activeContractId = payload.buy?.contract_id || null;
             settlementDigit = null;
             captureNextTick = true;
+
             if (activeContractId) {
               sendMessage({
                 proposal_open_contract: 1,
@@ -576,6 +633,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 subscribe: 1
               });
             }
+
             break;
 
           case "proposal_open_contract": {
@@ -595,63 +653,95 @@ document.addEventListener("DOMContentLoaded", () => {
 
               const pnl = Number(contract.profit || 0);
               totalProfit += pnl;
-              if (profitEl) profitEl.textContent = totalProfit.toFixed(2);
 
-              const exitPrice = contract.exit_tick || contract.exit_tick_display_value;
-              const exitDigit = exitPrice !== undefined ? digitFromPrice(exitPrice) : null;
-              const resultDigit = settlementDigit !== null ? settlementDigit : exitDigit;
+              if (profitEl) {
+                profitEl.textContent = totalProfit.toFixed(2);
+              }
+
+              const exitPrice =
+                contract.exit_tick || contract.exit_tick_display_value;
+
+              const exitDigit =
+                exitPrice !== undefined
+                  ? digitFromPrice(exitPrice)
+                  : null;
+
+              const resultDigit =
+                settlementDigit !== null
+                  ? settlementDigit
+                  : exitDigit;
 
               if (pnl >= 0) {
                 recoveryLoss = 0;
                 currentStake = 0;
                 ladder = 0;
+
                 appendLogLine(
                   `WIN +${pnl.toFixed(2)}` +
-                  (resultDigit !== null ? ` (digit=${resultDigit})` : ""),
+                    (resultDigit !== null
+                      ? ` (digit=${resultDigit})`
+                      : ""),
                   "lime"
                 );
+
                 resetToScan();
 
               } else {
                 recoveryLoss += Math.abs(pnl);
                 ladder += 1;
+
                 const nextStake = stake();
 
                 if (phase === "armed") {
                   const chain = CHAINS[chainId];
                   phase = "recovery";
                   clearContractState();
+
                   appendLogLine(
                     `LOSS ${pnl.toFixed(2)} | ladder=${ladder}` +
-                    (resultDigit !== null ? ` (digit=${resultDigit})` : "") +
-                    ` → recovery: watch digit ${chain.targets[1]} DIGITDIFF 0 stake=${nextStake.toFixed(2)}`,
+                      (resultDigit !== null
+                        ? ` (digit=${resultDigit})`
+                        : "") +
+                      ` → recovery: watch digit ${chain.targets[1]} DIGITDIFF ${chain.targets[1]} stake=${nextStake.toFixed(2)}`,
                     "red"
                   );
+
                 } else {
                   appendLogLine(
                     `LOSS ${pnl.toFixed(2)} | ladder=${ladder}` +
-                    (resultDigit !== null ? ` (digit=${resultDigit})` : "") +
-                    ` | next stake=${nextStake.toFixed(2)}`,
+                      (resultDigit !== null
+                        ? ` (digit=${resultDigit})`
+                        : "") +
+                      ` | next stake=${nextStake.toFixed(2)}`,
                     "red"
                   );
+
                   resetToScan();
                 }
               }
 
               if (levelEl) levelEl.textContent = ladder;
-              if (ws && ws.readyState === WebSocket.OPEN) sendMessage({ balance: 1 });
+
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                sendMessage({ balance: 1 });
+              }
             }
+
             break;
           }
 
-          default: break;
+          default:
+            break;
         }
       };
 
       ws.onclose = () => {
         stopTickFlush();
         stopHeartbeat();
-        if (!manualStop && running) scheduleReconnect();
+
+        if (!manualStop && running) {
+          scheduleReconnect();
+        }
       };
 
       ws.onerror = ev => console.error("WebSocket error:", ev);
@@ -659,11 +749,13 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (err) {
       appendLogLine(`OTP fetch failed: ${String(err)}`, "red");
       console.error(err);
-      if (!manualStop && running) scheduleReconnect();
+
+      if (!manualStop && running) {
+        scheduleReconnect();
+      }
     }
   }
 
-  // ── Button handlers ───────────────────────────────────────────────────────
   startBtn.onclick = () => {
     running = true;
     manualStop = false;
@@ -684,16 +776,20 @@ document.addEventListener("DOMContentLoaded", () => {
     manualStop = true;
     cancelReconnect();
     stopHeartbeat();
+
     if (ws) ws.close();
+
     stopTickFlush();
     appendLogLine("STOPPED", "red");
   };
 
   resetBtn.onclick = () => {
     fullReset();
+
     if (profitEl) profitEl.textContent = "0.00";
     if (levelEl) levelEl.textContent = "0";
     if (balanceEl) balanceEl.textContent = "-";
+
     appendLogLine("RESET DONE", "orange");
   };
 
@@ -702,8 +798,14 @@ document.addEventListener("DOMContentLoaded", () => {
     demoBtn.classList.add("active");
     liveBtn.classList.remove("active");
     appendLogLine("DEMO MODE", "blue");
+
     const mi = $("modeIndicator");
-    if (mi) { mi.textContent = "JESAN 💲 MODE - DEMO"; mi.classList.add("demo"); mi.classList.remove("live"); }
+
+    if (mi) {
+      mi.textContent = "JESAN 💲 MODE - DEMO";
+      mi.classList.add("demo");
+      mi.classList.remove("live");
+    }
   };
 
   liveBtn.onclick = () => {
@@ -711,15 +813,23 @@ document.addEventListener("DOMContentLoaded", () => {
     liveBtn.classList.add("active");
     demoBtn.classList.remove("active");
     appendLogLine("LIVE MODE", "red");
+
     const mi = $("modeIndicator");
-    if (mi) { mi.textContent = "JESAN 💲 MODE - LIVE"; mi.classList.add("live"); mi.classList.remove("demo"); }
+
+    if (mi) {
+      mi.textContent = "JESAN 💲 MODE - LIVE";
+      mi.classList.add("live");
+      mi.classList.remove("demo");
+    }
   };
 
   window.addEventListener("beforeunload", () => {
     manualStop = true;
     cancelReconnect();
     stopHeartbeat();
+
     if (ws) ws.close();
+
     stopTickFlush();
   });
 });
