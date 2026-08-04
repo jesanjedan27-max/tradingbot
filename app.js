@@ -6,6 +6,7 @@
 //         (6,6→6,6)→digit6 ddf6→digit6 ddf6
 //         (7,7→7,7)→digit7 ddf7→digit7 ddf7
 //         (8,8→8,8)→digit8 ddf8→digit8 ddf8
+
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -26,21 +27,29 @@ document.addEventListener("DOMContentLoaded", () => {
   const tokenInput = $("tokenInput");
 
   const MARKETS = [
-    { symbol: "R_10",    label: "Volatility 10 Index" },
-    { symbol: "R_25",    label: "Volatility 25 Index" },
-    { symbol: "R_50",    label: "Volatility 50 Index" },
-    { symbol: "R_75",    label: "Volatility 75 Index" },
-    { symbol: "R_100",   label: "Volatility 100 Index" },
-    { symbol: "1HZ10V",  label: "Volatility 10 (1s) Index" },
-    { symbol: "1HZ25V",  label: "Volatility 25 (1s) Index" },
-    { symbol: "1HZ50V",  label: "Volatility 50 (1s) Index" },
-    { symbol: "1HZ75V",  label: "Volatility 75 (1s) Index" },
+    { symbol: "R_10", label: "Volatility 10 Index" },
+    { symbol: "R_25", label: "Volatility 25 Index" },
+    { symbol: "R_50", label: "Volatility 50 Index" },
+    { symbol: "R_75", label: "Volatility 75 Index" },
+    { symbol: "R_100", label: "Volatility 100 Index" },
+    { symbol: "1HZ10V", label: "Volatility 10 (1s) Index" },
+    { symbol: "1HZ25V", label: "Volatility 25 (1s) Index" },
+    { symbol: "1HZ50V", label: "Volatility 50 (1s) Index" },
+    { symbol: "1HZ75V", label: "Volatility 75 (1s) Index" },
     { symbol: "1HZ100V", label: "Volatility 100 (1s) Index" }
   ];
 
   const FALLBACK_DECIMALS = {
-    R_10: 3, R_25: 3, R_50: 4, R_75: 4, R_100: 2,
-    "1HZ10V": 2, "1HZ25V": 3, "1HZ50V": 2, "1HZ75V": 3, "1HZ100V": 2
+    R_10: 3,
+    R_25: 3,
+    R_50: 4,
+    R_75: 4,
+    R_100: 2,
+    "1HZ10V": 2,
+    "1HZ25V": 3,
+    "1HZ50V": 2,
+    "1HZ75V": 3,
+    "1HZ100V": 2
   };
 
   const CHAINS = [
@@ -66,7 +75,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const savedToken = localStorage.getItem("access_token");
   if (tokenInput && savedToken) tokenInput.value = savedToken;
 
-  const ACCOUNTS = { demo: "DOT92927394", live: "ROT91650098" };
+  const ACCOUNTS = {
+    demo: "DOT92927394",
+    live: "ROT91650098"
+  };
+
   let account = "demo";
   demoBtn.classList.add("active");
 
@@ -81,7 +94,9 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   marketSelect.value = symbol;
-  marketSelect.addEventListener("change", () => switchMarket(marketSelect.value));
+  marketSelect.addEventListener("change", () => {
+    switchMarket(marketSelect.value);
+  });
 
   let ws = null;
   let running = false;
@@ -447,7 +462,11 @@ document.addEventListener("DOMContentLoaded", () => {
               "#64748b"
             );
 
-            prevDigit = d;
+            // Consume the starter pair so it cannot overlap
+            // with the second pair.
+            // (3,3,3) is not two pairs.
+            // The valid pattern is (3,3), (3,3).
+            prevDigit = null;
             return;
           }
         }
