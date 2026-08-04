@@ -1,8 +1,11 @@
 // Deriv DigitDiff bot — Chain-pair strategy
-// Chains: (2,2→3,3)→digit4 ddf4→digit5 ddf5
-//         (3,3→4,4)→digit5 ddf5→digit6 ddf6
-//         (4,4→5,5)→digit6 ddf6→digit7 ddf7
-//         (5,5→6,6)→digit7 ddf7→digit8 ddf8
+// Chains: (2,2→2,2)→digit2 ddf2→digit2 ddf2
+//         (3,3→3,3)→digit3 ddf3→digit3 ddf3
+//         (4,4→4,4)→digit4 ddf4→digit4 ddf4
+//         (5,5→5,5)→digit5 ddf5→digit5 ddf5
+//         (6,6→6,6)→digit6 ddf6→digit6 ddf6
+//         (7,7→7,7)→digit7 ddf7→digit7 ddf7
+//         (8,8→8,8)→digit8 ddf8→digit8 ddf8
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -41,10 +44,13 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   const CHAINS = [
-    { starter: [2, 2], second: [3, 3], targets: [4, 5] },
-    { starter: [3, 3], second: [4, 4], targets: [5, 6] },
-    { starter: [4, 4], second: [5, 5], targets: [6, 7] },
-    { starter: [5, 5], second: [6, 6], targets: [7, 8] }
+    { starter: [2, 2], second: [2, 2], targets: [2, 2] },
+    { starter: [3, 3], second: [3, 3], targets: [3, 3] },
+    { starter: [4, 4], second: [4, 4], targets: [4, 4] },
+    { starter: [5, 5], second: [5, 5], targets: [5, 5] },
+    { starter: [6, 6], second: [6, 6], targets: [6, 6] },
+    { starter: [7, 7], second: [7, 7], targets: [7, 7] },
+    { starter: [8, 8], second: [8, 8], targets: [8, 8] }
   ];
 
   const DEFAULT_PAYOUT_RATIO = 1.09;
@@ -66,12 +72,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const marketSelect = $("marketSelect");
   marketSelect.innerHTML = "";
+
   MARKETS.forEach(m => {
     const opt = document.createElement("option");
     opt.value = m.symbol;
     opt.textContent = m.label;
     marketSelect.appendChild(opt);
   });
+
   marketSelect.value = symbol;
   marketSelect.addEventListener("change", () => switchMarket(marketSelect.value));
 
@@ -81,6 +89,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let heartbeatTimer = null;
   let reconnectTimer = null;
   let reconnectAttempts = 0;
+
   const HEARTBEAT_MS = 20000;
   const RECONNECT_BASE_MS = 2000;
   const RECONNECT_MAX_MS = 30000;
@@ -108,6 +117,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
   const TICK_BATCH_LIMIT = 200;
+
   let tickBuffer = [];
   let tickFlushTimer = null;
 
@@ -116,30 +126,44 @@ document.addEventListener("DOMContentLoaded", () => {
     entry.style.color = color;
     entry.textContent = message;
     logEl.appendChild(entry);
-    while (logEl.children.length > LOG_MAX_ENTRIES) logEl.removeChild(logEl.firstChild);
+
+    while (logEl.children.length > LOG_MAX_ENTRIES) {
+      logEl.removeChild(logEl.firstChild);
+    }
+
     logEl.scrollTop = logEl.scrollHeight;
     console.log(message);
   }
 
   function startTickFlush() {
     if (tickFlushTimer) return;
+
     tickFlushTimer = setInterval(() => {
       if (!tickBuffer.length) return;
+
       const fragment = document.createDocumentFragment();
+
       tickBuffer.splice(0, TICK_BATCH_LIMIT).forEach(({ price, digit }) => {
         const row = document.createElement("div");
         row.style.color = "#7dd3fc";
-        row.textContent = `Tick ${Number(price).toFixed(decimalsForSymbol(symbol))} → ${digit}`;
+        row.textContent =
+          `Tick ${Number(price).toFixed(decimalsForSymbol(symbol))} → ${digit}`;
         fragment.appendChild(row);
       });
+
       logEl.appendChild(fragment);
-      while (logEl.children.length > LOG_MAX_ENTRIES) logEl.removeChild(logEl.firstChild);
+
+      while (logEl.children.length > LOG_MAX_ENTRIES) {
+        logEl.removeChild(logEl.firstChild);
+      }
+
       logEl.scrollTop = logEl.scrollHeight;
     }, TICK_FLUSH_MS);
   }
 
   function stopTickFlush() {
     if (!tickFlushTimer) return;
+
     clearInterval(tickFlushTimer);
     tickFlushTimer = null;
   }
@@ -147,25 +171,34 @@ document.addEventListener("DOMContentLoaded", () => {
   function digitFromPrice(price) {
     const value = Number(price);
     if (Number.isNaN(value)) return null;
+
     const str = value.toFixed(decimalsForSymbol(symbol));
     return Number(str[str.length - 1]);
   }
 
   function updateBalance(value) {
     if (typeof value !== "number" || Number.isNaN(value)) return;
+
     lastBalance = value;
-    if (balanceEl) balanceEl.textContent = value.toFixed(2);
+
+    if (balanceEl) {
+      balanceEl.textContent = value.toFixed(2);
+    }
   }
 
   function stake() {
     const baseStake = Number(stakeInput.value || 0.35);
-    const payoutRatio = (lastPayoutRatio && lastPayoutRatio > 1.01)
-      ? lastPayoutRatio
-      : DEFAULT_PAYOUT_RATIO;
+
+    const payoutRatio =
+      lastPayoutRatio && lastPayoutRatio > 1.01
+        ? lastPayoutRatio
+        : DEFAULT_PAYOUT_RATIO;
+
     if (recoveryLoss > 0 && payoutRatio > 1.01) {
       const neededStake = recoveryLoss / (payoutRatio - 1);
       return Number(Math.max(baseStake, neededStake).toFixed(2));
     }
+
     return Number(baseStake.toFixed(2));
   }
 
@@ -202,8 +235,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function startHeartbeat() {
     stopHeartbeat();
+
     heartbeatTimer = setInterval(() => {
-      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ ping: 1 }));
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ ping: 1 }));
+      }
     }, HEARTBEAT_MS);
   }
 
@@ -223,16 +259,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function scheduleReconnect() {
     if (manualStop || !running) return;
+
     cancelReconnect();
     reconnectAttempts += 1;
+
     const delay = Math.min(
       RECONNECT_BASE_MS * Math.pow(1.5, reconnectAttempts - 1),
       RECONNECT_MAX_MS
     );
+
     appendLogLine(
       `Reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempts})...`,
       "orange"
     );
+
     reconnectTimer = setTimeout(() => {
       if (!manualStop && running) connect();
     }, delay);
@@ -240,6 +280,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function switchMarket(newSymbol) {
     if (newSymbol === symbol) return;
+
     const marketMeta = MARKETS.find(m => m.symbol === newSymbol);
     const wasRunning = running;
 
@@ -267,11 +308,14 @@ document.addEventListener("DOMContentLoaded", () => {
       "#f59e0b"
     );
 
-    if (wasRunning) appendLogLine("Scanning...", "#a78bfa");
+    if (wasRunning) {
+      appendLogLine("Scanning...", "#a78bfa");
+    }
   }
 
   function buildProposalVariants(barrier) {
     const amount = stake();
+
     const base = {
       proposal: 1,
       contract_type: "DIGITDIFF",
@@ -319,6 +363,7 @@ document.addEventListener("DOMContentLoaded", () => {
         "Proposal validation failed; retrying next variant.",
         "orange"
       );
+
       sendNextProposalVariant();
       return true;
     }
@@ -365,10 +410,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (d === null) return;
 
     if (priceEl) {
-      priceEl.textContent = Number(price).toFixed(decimalsForSymbol(symbol));
+      priceEl.textContent =
+        Number(price).toFixed(decimalsForSymbol(symbol));
     }
 
-    if (lastDigitEl) lastDigitEl.textContent = d;
+    if (lastDigitEl) {
+      lastDigitEl.textContent = d;
+    }
 
     tickBuffer.push({ price, digit: d });
 
@@ -422,6 +470,7 @@ document.addEventListener("DOMContentLoaded", () => {
             `[${wa},${d}] invalidates chain — Scanning...`,
             "#64748b"
           );
+
           phase = "scan";
           chainId = null;
         }
@@ -435,6 +484,7 @@ document.addEventListener("DOMContentLoaded", () => {
           `Digit ${d} → DIGITDIFF ${chain.targets[0]}`,
           "lime"
         );
+
         placeTrade(chain.targets[0]);
       }
 
@@ -446,6 +496,7 @@ document.addEventListener("DOMContentLoaded", () => {
           `Recovery digit ${d} → DIGITDIFF ${chain.targets[1]} (martingale)`,
           "lime"
         );
+
         placeTrade(chain.targets[1]);
       }
     }
@@ -461,7 +512,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     resetToScan();
 
-    if (ws) ws.close();
+    if (ws) {
+      ws.close();
+    }
 
     const accountId = ACCOUNTS[account];
     const inputToken = tokenInput?.value.trim();
@@ -476,7 +529,9 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    if (inputToken) localStorage.setItem("access_token", accessToken);
+    if (inputToken) {
+      localStorage.setItem("access_token", accessToken);
+    }
 
     try {
       const response = await fetch(
@@ -496,7 +551,10 @@ document.addEventListener("DOMContentLoaded", () => {
         appendLogLine(`OTP request failed ${response.status}.`, "red");
         appendLogLine(text, "red");
 
-        if (!manualStop && running) scheduleReconnect();
+        if (!manualStop && running) {
+          scheduleReconnect();
+        }
+
         return;
       }
 
@@ -508,7 +566,10 @@ document.addEventListener("DOMContentLoaded", () => {
         appendLogLine("OTP response is not JSON.", "red");
         appendLogLine(text, "red");
 
-        if (!manualStop && running) scheduleReconnect();
+        if (!manualStop && running) {
+          scheduleReconnect();
+        }
+
         return;
       }
 
@@ -516,7 +577,10 @@ document.addEventListener("DOMContentLoaded", () => {
         appendLogLine("OTP response missing data.url.", "red");
         appendLogLine(JSON.stringify(data), "red");
 
-        if (!manualStop && running) scheduleReconnect();
+        if (!manualStop && running) {
+          scheduleReconnect();
+        }
+
         return;
       }
 
@@ -579,7 +643,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (!entry || !wanted.has(entry.symbol)) return;
 
                 const pip = Number(entry.pip);
-
                 if (!pip || Number.isNaN(pip)) return;
 
                 const dec = Math.round(-Math.log10(pip));
@@ -619,6 +682,7 @@ document.addEventListener("DOMContentLoaded", () => {
               buy: payload.proposal.id,
               price: payload.proposal.ask_price
             });
+
             break;
 
           case "buy":
@@ -720,7 +784,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
               }
 
-              if (levelEl) levelEl.textContent = ladder;
+              if (levelEl) {
+                levelEl.textContent = ladder;
+              }
 
               if (ws && ws.readyState === WebSocket.OPEN) {
                 sendMessage({ balance: 1 });
@@ -777,7 +843,9 @@ document.addEventListener("DOMContentLoaded", () => {
     cancelReconnect();
     stopHeartbeat();
 
-    if (ws) ws.close();
+    if (ws) {
+      ws.close();
+    }
 
     stopTickFlush();
     appendLogLine("STOPPED", "red");
@@ -828,7 +896,9 @@ document.addEventListener("DOMContentLoaded", () => {
     cancelReconnect();
     stopHeartbeat();
 
-    if (ws) ws.close();
+    if (ws) {
+      ws.close();
+    }
 
     stopTickFlush();
   });
