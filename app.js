@@ -26,6 +26,26 @@ document.addEventListener("DOMContentLoaded", () => {
   const stakeInput = $("stakeInput");
   const tokenInput = $("tokenInput");
 
+  let selectedBaseStake = Number(stakeInput.value || 0.35);
+
+  stakeInput.addEventListener("change", () => {
+    const nextBaseStake = Number(stakeInput.value || 0.35);
+
+    if (!Number.isFinite(nextBaseStake) || nextBaseStake <= 0) return;
+    if (nextBaseStake === selectedBaseStake) return;
+
+    selectedBaseStake = nextBaseStake;
+    recoveryLoss = 0;
+    ladder = 0;
+
+    if (levelEl) levelEl.textContent = "0";
+
+    appendLogLine(
+      `Base stake changed to ${nextBaseStake.toFixed(2)} — fresh ladder started.`,
+      "#f59e0b"
+    );
+  });
+
   const MARKETS = [
     { symbol: "R_10",    label: "Volatility 10 Index" },
     { symbol: "R_25",    label: "Volatility 25 Index" },
@@ -40,8 +60,16 @@ document.addEventListener("DOMContentLoaded", () => {
   ];
 
   const FALLBACK_DECIMALS = {
-    R_10: 3, R_25: 3, R_50: 4, R_75: 4, R_100: 2,
-    "1HZ10V": 2, "1HZ25V": 3, "1HZ50V": 2, "1HZ75V": 3, "1HZ100V": 2
+    R_10: 3,
+    R_25: 3,
+    R_50: 4,
+    R_75: 4,
+    R_100: 2,
+    "1HZ10V": 2,
+    "1HZ25V": 3,
+    "1HZ50V": 2,
+    "1HZ75V": 3,
+    "1HZ100V": 2
   };
 
   const CHAINS = [
@@ -56,6 +84,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const DEFAULT_PAYOUT_RATIO = 1.09;
   const DIGITDIFF_DURATION_TICKS = 1;
+  const MARTINGALE_LEVEL_2_MULTIPLIER = 17.49;
+  const MARTINGALE_LEVEL_3_MULTIPLIER = 16.99;
+
+  function roundStake(value) {
+    return Number(value.toFixed(2));
+  }
 
   let symbol = "R_100";
   const symbolDecimals = {};
@@ -65,9 +99,15 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   const savedToken = localStorage.getItem("access_token");
-  if (tokenInput && savedToken) tokenInput.value = savedToken;
+  if (tokenInput && savedToken) {
+    tokenInput.value = savedToken;
+  }
 
-  const ACCOUNTS = { demo: "DOT92927394", live: "ROT91650098" };
+  const ACCOUNTS = {
+    demo: "DOT92927394",
+    live: "ROT91650098"
+  };
+
   let account = "demo";
   demoBtn.classList.add("active");
 
@@ -82,6 +122,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   marketSelect.value = symbol;
+
   marketSelect.addEventListener("change", () => {
     switchMarket(marketSelect.value);
   });
@@ -106,6 +147,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let totalProfit = 0;
 
   let waitingProposal = false;
+  let tradeInFlight = false;
   let proposalVariants = null;
   let proposalAttempt = 0;
   let activeContractId = null;
@@ -146,13 +188,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const fragment = document.createDocumentFragment();
 
-      tickBuffer.splice(0, TICK_BATCH_LIMIT).forEach(({ price, digit }) => {
-        const row = document.createElement("div");
-        row.style.color = "#7dd3fc";
-        row.textContent =
-          `Tick ${Number(price).toFixed(decimalsForSymbol(symbol))} → ${digit}`;
-        fragment.appendChild(row);
-      });
+      tickBuffer
+        .splice(0, TICK_BATCH_LIMIT)
+        .forEach(({ price, digit }) => {
+          const row = document.createElement("div");
+          row.style.color = "#7dd3fc";
+          row.textContent =
+            `Tick ${Number(price).toFixed(decimalsForSymbol(symbol))} → ${digit}`;
+          fragment.appendChild(row);
+        });
 
       logEl.appendChild(fragment);
 
@@ -189,25 +233,45 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function stake() {
-    const baseStake = Number(stakeInput.value || 0.35);
+  function getBaseStake() {
+    const enteredStake = Number(stakeInput.value || 0.35);
 
-    const payoutRatio =
-      lastPayoutRatio && lastPayoutRatio > 1.01
-        ? lastPayoutRatio
-        : DEFAULT_PAYOUT_RATIO;
-
-    if (recoveryLoss > 0 && payoutRatio > 1.01) {
-      const neededStake = recoveryLoss / (payoutRatio - 1);
-      return Number(Math.max(baseStake, neededStake).toFixed(2));
+    if (!Number.isFinite(enteredStake) || enteredStake <= 0) {
+      return 0.35;
     }
 
-    return Number(baseStake.toFixed(2));
+    return Number(enteredStake.toFixed(2));
+  }
+
+  function stake() {
+    const baseStake = getBaseStake();
+
+    // Ladder 0 = base stake
+    // Ladder 1 = Martingale level 2
+    // Ladder 2+ = Martingale level 3
+    // Level 3 is capped so extended losses do not create unlimited stakes.
+
+    if (ladder <= 0) {
+      return baseStake;
+    }
+
+    const levelTwoStake =
+      baseStake * MARTINGALE_LEVEL_2_MULTIPLIER;
+
+    if (ladder === 1) {
+      return roundStake(levelTwoStake);
+    }
+
+    const levelThreeStake =
+      levelTwoStake * MARTINGALE_LEVEL_3_MULTIPLIER;
+
+    return roundStake(levelThreeStake);
   }
 
   function clearContractState() {
     settlementDigit = null;
     captureNextTick = false;
+    tradeInFlight = false;
     waitingProposal = false;
     proposalVariants = null;
     proposalAttempt = 0;
@@ -277,7 +341,9 @@ document.addEventListener("DOMContentLoaded", () => {
     );
 
     reconnectTimer = setTimeout(() => {
-      if (!manualStop && running) connect();
+      if (!manualStop && running) {
+        connect();
+      }
     }, delay);
   }
 
@@ -300,8 +366,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (ws && ws.readyState === WebSocket.OPEN) {
       sendMessage({ forget_all: "ticks" });
+
       symbol = newSymbol;
-      sendMessage({ ticks: symbol, subscribe: 1 });
+
+      sendMessage({
+        ticks: symbol,
+        subscribe: 1
+      });
     } else {
       symbol = newSymbol;
     }
@@ -331,9 +402,15 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     return [
-      Object.assign({}, base, { underlying_symbol: symbol }),
-      Object.assign({}, base, { underlying: symbol }),
-      Object.assign({}, base, { symbol }),
+      Object.assign({}, base, {
+        underlying_symbol: symbol
+      }),
+      Object.assign({}, base, {
+        underlying: symbol
+      }),
+      Object.assign({}, base, {
+        symbol
+      }),
       Object.assign({}, base)
     ];
   }
@@ -349,7 +426,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function handleValidationError(errorText) {
-    if (!waitingProposal || !proposalVariants) return false;
+    if (!waitingProposal || !proposalVariants) {
+      return false;
+    }
 
     const lower = String(errorText || "").toLowerCase();
 
@@ -379,9 +458,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (proposalAttempt >= proposalVariants.length) {
       appendLogLine("All proposal variants failed.", "red");
+
+      tradeInFlight = false;
       waitingProposal = false;
       proposalVariants = null;
       proposalAttempt = 0;
+
       return;
     }
 
@@ -389,11 +471,12 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function placeTrade(barrier) {
-    if (waitingProposal) {
-      appendLogLine("Already waiting for a proposal.", "orange");
+    if (waitingProposal || tradeInFlight || activeContractId) {
+      appendLogLine("Trade already in progress.", "orange");
       return;
     }
 
+    tradeInFlight = true;
     proposalVariants = buildProposalVariants(String(barrier));
     proposalAttempt = 0;
     waitingProposal = true;
@@ -421,15 +504,20 @@ document.addEventListener("DOMContentLoaded", () => {
       lastDigitEl.textContent = d;
     }
 
-    tickBuffer.push({ price, digit: d });
+    tickBuffer.push({
+      price,
+      digit: d
+    });
 
     if (captureNextTick) {
       settlementDigit = d;
       captureNextTick = false;
     }
 
-    if (waitingProposal || activeContractId) {
-      prevDigit = d;
+    // Ignore all tick-based triggers while any trade stage is active.
+    // This prevents duplicate proposals during rapid ticks.
+    if (waitingProposal || tradeInFlight || activeContractId) {
+      prevDigit = null;
       return;
     }
 
@@ -450,9 +538,9 @@ document.addEventListener("DOMContentLoaded", () => {
               "#64748b"
             );
 
-            // Consume the starter pair so the second pair cannot overlap it.
-            // Example: (3,3,3) is not two pairs.
-            // The second pair must begin on the next tick.
+            // Consume the starter pair so it cannot overlap.
+            // For example, (3,3,3) is not two separate pairs.
+            // The next pair must begin on a later tick.
             prevDigit = null;
             return;
           }
@@ -520,7 +608,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function connect() {
-    if ((waitingProposal || activeContractId) && phase !== "scan") {
+    if (
+      (waitingProposal || tradeInFlight || activeContractId) &&
+      phase !== "scan"
+    ) {
       recoveryLoss += currentStake > 0 ? currentStake : 0;
       ladder += 1;
     }
@@ -563,7 +654,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const text = await response.text();
 
       if (!response.ok) {
-        appendLogLine(`OTP request failed ${response.status}.`, "red");
+        appendLogLine(
+          `OTP request failed ${response.status}.`,
+          "red"
+        );
+
         appendLogLine(text, "red");
 
         if (!manualStop && running) {
@@ -603,14 +698,24 @@ document.addEventListener("DOMContentLoaded", () => {
 
       ws.onopen = () => {
         appendLogLine("WS connected.", "lime");
+
         reconnectAttempts = 0;
         cancelReconnect();
         startHeartbeat();
         startTickFlush();
 
-        sendMessage({ active_symbols: "brief" });
-        sendMessage({ ticks: symbol, subscribe: 1 });
-        sendMessage({ balance: 1 });
+        sendMessage({
+          active_symbols: "brief"
+        });
+
+        sendMessage({
+          ticks: symbol,
+          subscribe: 1
+        });
+
+        sendMessage({
+          balance: 1
+        });
       };
 
       ws.onmessage = e => {
@@ -624,11 +729,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (payload.error) {
           const message =
-            payload.error.message || JSON.stringify(payload.error);
+            payload.error.message ||
+            JSON.stringify(payload.error);
 
           appendLogLine(`Error: ${message}`, "red");
 
           if (!handleValidationError(message)) {
+            tradeInFlight = false;
             waitingProposal = false;
             proposalVariants = null;
             proposalAttempt = 0;
@@ -652,13 +759,20 @@ document.addEventListener("DOMContentLoaded", () => {
             const list = payload.active_symbols;
 
             if (Array.isArray(list)) {
-              const wanted = new Set(MARKETS.map(m => m.symbol));
+              const wanted = new Set(
+                MARKETS.map(m => m.symbol)
+              );
 
               list.forEach(entry => {
-                if (!entry || !wanted.has(entry.symbol)) return;
+                if (!entry || !wanted.has(entry.symbol)) {
+                  return;
+                }
 
                 const pip = Number(entry.pip);
-                if (!pip || Number.isNaN(pip)) return;
+
+                if (!pip || Number.isNaN(pip)) {
+                  return;
+                }
 
                 const dec = Math.round(-Math.log10(pip));
 
@@ -672,7 +786,9 @@ document.addEventListener("DOMContentLoaded", () => {
           }
 
           case "proposal":
-            if (!waitingProposal) break;
+            if (!waitingProposal) {
+              break;
+            }
 
             waitingProposal = false;
             proposalVariants = null;
@@ -683,12 +799,19 @@ document.addEventListener("DOMContentLoaded", () => {
                 "Proposal response missing payload.",
                 "red"
               );
+
+              tradeInFlight = false;
               break;
             }
 
-            currentStake = Number(payload.proposal.ask_price || 0);
+            currentStake = Number(
+              payload.proposal.ask_price || 0
+            );
 
-            if (payload.proposal.payout && currentStake > 0) {
+            if (
+              payload.proposal.payout &&
+              currentStake > 0
+            ) {
               lastPayoutRatio =
                 Number(payload.proposal.payout) / currentStake;
             }
@@ -701,23 +824,32 @@ document.addEventListener("DOMContentLoaded", () => {
             break;
 
           case "buy":
-            activeContractId = payload.buy?.contract_id || null;
+            activeContractId =
+              payload.buy?.contract_id || null;
+
+            if (!activeContractId) {
+              tradeInFlight = false;
+              break;
+            }
+
             settlementDigit = null;
             captureNextTick = true;
 
-            if (activeContractId) {
-              sendMessage({
-                proposal_open_contract: 1,
-                contract_id: activeContractId,
-                subscribe: 1
-              });
-            }
+            sendMessage({
+              proposal_open_contract: 1,
+              contract_id: activeContractId,
+              subscribe: 1
+            });
 
             break;
 
           case "proposal_open_contract": {
-            const contract = payload.proposal_open_contract;
-            if (!contract) return;
+            const contract =
+              payload.proposal_open_contract;
+
+            if (!contract) {
+              return;
+            }
 
             if (
               typeof contract.balance_after === "number" &&
@@ -734,11 +866,13 @@ document.addEventListener("DOMContentLoaded", () => {
               totalProfit += pnl;
 
               if (profitEl) {
-                profitEl.textContent = totalProfit.toFixed(2);
+                profitEl.textContent =
+                  totalProfit.toFixed(2);
               }
 
               const exitPrice =
-                contract.exit_tick || contract.exit_tick_display_value;
+                contract.exit_tick ||
+                contract.exit_tick_display_value;
 
               const exitDigit =
                 exitPrice !== undefined
@@ -771,8 +905,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
                 const nextStake = stake();
 
-                if (phase === "armed") {
+                // Continue recovery after every loss while preserving
+                // the same chain. Level 3 is the maximum ladder level.
+                if (
+                  phase === "armed" ||
+                  phase === "recovery"
+                ) {
                   const chain = CHAINS[chainId];
+
                   phase = "recovery";
                   prevDigit = null;
                   clearContractState();
@@ -782,7 +922,13 @@ document.addEventListener("DOMContentLoaded", () => {
                       (resultDigit !== null
                         ? ` (digit=${resultDigit})`
                         : "") +
-                      ` → recovery: watch pair [${chain.targets[1]},${chain.targets[1]}] DIGITDIFF ${chain.targets[1]} stake=${nextStake.toFixed(2)}`,
+                      ` → recovery level=${Math.min(
+                        ladder + 1,
+                        3
+                      )}: watch pair [` +
+                      `${chain.targets[1]},${chain.targets[1]}] ` +
+                      `DIGITDIFF ${chain.targets[1]} ` +
+                      `stake=${nextStake.toFixed(2)}`,
                     "red"
                   );
 
@@ -804,8 +950,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 levelEl.textContent = ladder;
               }
 
-              if (ws && ws.readyState === WebSocket.OPEN) {
-                sendMessage({ balance: 1 });
+              if (
+                ws &&
+                ws.readyState === WebSocket.OPEN
+              ) {
+                sendMessage({
+                  balance: 1
+                });
               }
             }
 
@@ -826,10 +977,16 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       };
 
-      ws.onerror = ev => console.error("WebSocket error:", ev);
+      ws.onerror = ev => {
+        console.error("WebSocket error:", ev);
+      };
 
     } catch (err) {
-      appendLogLine(`OTP fetch failed: ${String(err)}`, "red");
+      appendLogLine(
+        `OTP fetch failed: ${String(err)}`,
+        "red"
+      );
+
       console.error(err);
 
       if (!manualStop && running) {
@@ -842,20 +999,26 @@ document.addEventListener("DOMContentLoaded", () => {
     running = true;
     manualStop = false;
     reconnectAttempts = 0;
+
     cancelReconnect();
     connect();
     startTickFlush();
+
     appendLogLine("BOT STARTED", "lime");
   };
 
   pauseBtn.onclick = () => {
     paused = !paused;
-    appendLogLine(paused ? "PAUSED" : "RUNNING", "yellow");
+    appendLogLine(
+      paused ? "PAUSED" : "RUNNING",
+      "yellow"
+    );
   };
 
   stopBtn.onclick = () => {
     running = false;
     manualStop = true;
+
     cancelReconnect();
     stopHeartbeat();
 
@@ -870,17 +1033,27 @@ document.addEventListener("DOMContentLoaded", () => {
   resetBtn.onclick = () => {
     fullReset();
 
-    if (profitEl) profitEl.textContent = "0.00";
-    if (levelEl) levelEl.textContent = "0";
-    if (balanceEl) balanceEl.textContent = "-";
+    if (profitEl) {
+      profitEl.textContent = "0.00";
+    }
+
+    if (levelEl) {
+      levelEl.textContent = "0";
+    }
+
+    if (balanceEl) {
+      balanceEl.textContent = "-";
+    }
 
     appendLogLine("RESET DONE", "orange");
   };
 
   demoBtn.onclick = () => {
     account = "demo";
+
     demoBtn.classList.add("active");
     liveBtn.classList.remove("active");
+
     appendLogLine("DEMO MODE", "blue");
 
     const mi = $("modeIndicator");
@@ -894,8 +1067,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   liveBtn.onclick = () => {
     account = "live";
+
     liveBtn.classList.add("active");
     demoBtn.classList.remove("active");
+
     appendLogLine("LIVE MODE", "red");
 
     const mi = $("modeIndicator");
@@ -909,6 +1084,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   window.addEventListener("beforeunload", () => {
     manualStop = true;
+
     cancelReconnect();
     stopHeartbeat();
 
