@@ -26,6 +26,26 @@ document.addEventListener("DOMContentLoaded", () => {
   const stakeInput = $("stakeInput");
   const tokenInput = $("tokenInput");
 
+  let selectedBaseStake = Number(stakeInput.value || 0.35);
+
+  stakeInput.addEventListener("change", () => {
+    const nextBaseStake = Number(stakeInput.value || 0.35);
+
+    if (!Number.isFinite(nextBaseStake) || nextBaseStake <= 0) return;
+    if (nextBaseStake === selectedBaseStake) return;
+
+    selectedBaseStake = nextBaseStake;
+    recoveryLoss = 0;
+    ladder = 0;
+
+    if (levelEl) levelEl.textContent = "0";
+
+    appendLogLine(
+      `Base stake changed to ${nextBaseStake.toFixed(2)} — fresh ladder started.`,
+      "#f59e0b"
+    );
+  });
+
   const MARKETS = [
     { symbol: "R_10",    label: "Volatility 10 Index" },
     { symbol: "R_25",    label: "Volatility 25 Index" },
@@ -40,8 +60,16 @@ document.addEventListener("DOMContentLoaded", () => {
   ];
 
   const FALLBACK_DECIMALS = {
-    R_10: 3, R_25: 3, R_50: 4, R_75: 4, R_100: 2,
-    "1HZ10V": 2, "1HZ25V": 3, "1HZ50V": 2, "1HZ75V": 3, "1HZ100V": 2
+    R_10: 3,
+    R_25: 3,
+    R_50: 4,
+    R_75: 4,
+    R_100: 2,
+    "1HZ10V": 2,
+    "1HZ25V": 3,
+    "1HZ50V": 2,
+    "1HZ75V": 3,
+    "1HZ100V": 2
   };
 
   const CHAINS = [
@@ -67,7 +95,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const savedToken = localStorage.getItem("access_token");
   if (tokenInput && savedToken) tokenInput.value = savedToken;
 
-  const ACCOUNTS = { demo: "DOT92927394", live: "ROT91650098" };
+  const ACCOUNTS = {
+    demo: "DOT92927394",
+    live: "ROT91650098"
+  };
+
   let account = "demo";
   demoBtn.classList.add("active");
 
@@ -106,6 +138,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let totalProfit = 0;
 
   let waitingProposal = false;
+  let tradeInFlight = false;
   let proposalVariants = null;
   let proposalAttempt = 0;
   let activeContractId = null;
@@ -208,6 +241,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function clearContractState() {
     settlementDigit = null;
     captureNextTick = false;
+    tradeInFlight = false;
     waitingProposal = false;
     proposalVariants = null;
     proposalAttempt = 0;
@@ -379,6 +413,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (proposalAttempt >= proposalVariants.length) {
       appendLogLine("All proposal variants failed.", "red");
+      tradeInFlight = false;
       waitingProposal = false;
       proposalVariants = null;
       proposalAttempt = 0;
@@ -389,11 +424,12 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function placeTrade(barrier) {
-    if (waitingProposal) {
-      appendLogLine("Already waiting for a proposal.", "orange");
+    if (waitingProposal || tradeInFlight || activeContractId) {
+      appendLogLine("Trade already in progress.", "orange");
       return;
     }
 
+    tradeInFlight = true;
     proposalVariants = buildProposalVariants(String(barrier));
     proposalAttempt = 0;
     waitingProposal = true;
@@ -428,8 +464,8 @@ document.addEventListener("DOMContentLoaded", () => {
       captureNextTick = false;
     }
 
-    if (waitingProposal || activeContractId) {
-      prevDigit = d;
+    if (waitingProposal || tradeInFlight || activeContractId) {
+      prevDigit = null;
       return;
     }
 
@@ -520,7 +556,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function connect() {
-    if ((waitingProposal || activeContractId) && phase !== "scan") {
+    if (
+      (waitingProposal || tradeInFlight || activeContractId) &&
+      phase !== "scan"
+    ) {
       recoveryLoss += currentStake > 0 ? currentStake : 0;
       ladder += 1;
     }
@@ -629,6 +668,7 @@ document.addEventListener("DOMContentLoaded", () => {
           appendLogLine(`Error: ${message}`, "red");
 
           if (!handleValidationError(message)) {
+            tradeInFlight = false;
             waitingProposal = false;
             proposalVariants = null;
             proposalAttempt = 0;
@@ -683,6 +723,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 "Proposal response missing payload.",
                 "red"
               );
+              tradeInFlight = false;
               break;
             }
 
@@ -702,16 +743,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
           case "buy":
             activeContractId = payload.buy?.contract_id || null;
+
+            if (!activeContractId) {
+              tradeInFlight = false;
+              break;
+            }
+
             settlementDigit = null;
             captureNextTick = true;
 
-            if (activeContractId) {
-              sendMessage({
-                proposal_open_contract: 1,
-                contract_id: activeContractId,
-                subscribe: 1
-              });
-            }
+            sendMessage({
+              proposal_open_contract: 1,
+              contract_id: activeContractId,
+              subscribe: 1
+            });
 
             break;
 
