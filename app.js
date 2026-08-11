@@ -1,7 +1,8 @@
-// Deriv DigitDiff bot — adjusted chain-pair strategy
-// Allowed digits: 3, 4, 5, 6
-// Trigger: [n1,n1,n2,n2] → [n3,n3],n4 → DIGITDIFF n4
-// Conditions: n1 !== n2, n3 !== n4, and all digits are allowed.
+// Deriv DigitDiff bot — Chain-pair strategy
+// Chains: (3,3→3,3)→(3,3)→(3,3)→digit3 ddf3
+//         (4,4→4,4)→(4,4)→(4,4)→digit4 ddf4
+//         (5,5→5,5)→(5,5)→(5,5)→digit5 ddf5
+//         (6,6→6,6)→(6,6)→(6,6)→digit6 ddf6
 
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
@@ -43,15 +44,15 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   const MARKETS = [
-    { symbol: "R_10", label: "Volatility 10 Index" },
-    { symbol: "R_25", label: "Volatility 25 Index" },
-    { symbol: "R_50", label: "Volatility 50 Index" },
-    { symbol: "R_75", label: "Volatility 75 Index" },
-    { symbol: "R_100", label: "Volatility 100 Index" },
-    { symbol: "1HZ10V", label: "Volatility 10 (1s) Index" },
-    { symbol: "1HZ25V", label: "Volatility 25 (1s) Index" },
-    { symbol: "1HZ50V", label: "Volatility 50 (1s) Index" },
-    { symbol: "1HZ75V", label: "Volatility 75 (1s) Index" },
+    { symbol: "R_10",    label: "Volatility 10 Index" },
+    { symbol: "R_25",    label: "Volatility 25 Index" },
+    { symbol: "R_50",    label: "Volatility 50 Index" },
+    { symbol: "R_75",    label: "Volatility 75 Index" },
+    { symbol: "R_100",   label: "Volatility 100 Index" },
+    { symbol: "1HZ10V",  label: "Volatility 10 (1s) Index" },
+    { symbol: "1HZ25V",  label: "Volatility 25 (1s) Index" },
+    { symbol: "1HZ50V",  label: "Volatility 50 (1s) Index" },
+    { symbol: "1HZ75V",  label: "Volatility 75 (1s) Index" },
     { symbol: "1HZ100V", label: "Volatility 100 (1s) Index" }
   ];
 
@@ -68,7 +69,12 @@ document.addEventListener("DOMContentLoaded", () => {
     "1HZ100V": 2
   };
 
-  const ALLOWED_CHAIN_DIGITS = [3, 4, 5, 6];
+  const CHAINS = [
+    { starter: [3, 3], second: [3, 3], targets: [3, 3] },
+    { starter: [4, 4], second: [4, 4], targets: [4, 4] },
+    { starter: [5, 5], second: [5, 5], targets: [5, 5] },
+    { starter: [6, 6], second: [6, 6], targets: [6, 6] }
+  ];
 
   const DEFAULT_PAYOUT_RATIO = 1.09;
   const DIGITDIFF_DURATION_TICKS = 1;
@@ -84,10 +90,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function decimalsForSymbol(sym) {
     return symbolDecimals[sym] ?? FALLBACK_DECIMALS[sym] ?? 2;
-  }
-
-  function isAllowedChainDigit(digit) {
-    return ALLOWED_CHAIN_DIGITS.includes(digit);
   }
 
   const savedToken = localStorage.getItem("access_token");
@@ -146,12 +148,11 @@ document.addEventListener("DOMContentLoaded", () => {
   let settlementDigit = null;
   let captureNextTick = false;
 
-  // phase: "scan" | "waiting" | "armed" | "recovery"
+  // phase: "scan" | "waiting" | "rolling" | "recovery"
   let phase = "scan";
+  let chainId = null;
   let prevDigit = null;
-  let firstPairDigit = null;
-  let secondPairDigit = null;
-  let triggerPairDigit = null;
+  let rollingPairCount = 0;
 
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
@@ -270,26 +271,24 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalVariants = null;
     proposalAttempt = 0;
     activeContractId = null;
-    triggerPairDigit = null;
+    rollingPairCount = 0;
   }
 
   function resetToScan() {
     clearContractState();
     phase = "scan";
+    chainId = null;
     prevDigit = null;
-    firstPairDigit = null;
-    secondPairDigit = null;
-    triggerPairDigit = null;
+    rollingPairCount = 0;
     appendLogLine("Scanning...", "#a78bfa");
   }
 
   function fullReset() {
     clearContractState();
     phase = "scan";
+    chainId = null;
     prevDigit = null;
-    firstPairDigit = null;
-    secondPairDigit = null;
-    triggerPairDigit = null;
+    rollingPairCount = 0;
     totalProfit = 0;
     recoveryLoss = 0;
     lastPayoutRatio = null;
@@ -353,10 +352,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const wasRunning = running;
 
     phase = "scan";
+    chainId = null;
     prevDigit = null;
-    firstPairDigit = null;
-    secondPairDigit = null;
-    triggerPairDigit = null;
+    rollingPairCount = 0;
     settlementDigit = null;
     captureNextTick = false;
     waitingProposal = false;
@@ -523,117 +521,110 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (phase === "scan") {
-      if (
-        prevDigit !== null &&
-        prevDigit === d &&
-        isAllowedChainDigit(d)
-      ) {
-        firstPairDigit = d;
-        secondPairDigit = null;
-        phase = "waiting";
-        prevDigit = null;
+      if (prevDigit !== null) {
+        for (let i = 0; i < CHAINS.length; i++) {
+          const [sa, sb] = CHAINS[i].starter;
 
-        appendLogLine(
-          `Starter [${d},${d}] → waiting for an adjacent different pair`,
-          "#64748b"
-        );
+          if (prevDigit === sa && d === sb) {
+            chainId = i;
+            phase = "waiting";
 
-        return;
+            const [wa] = CHAINS[i].second;
+            const [, wb] = CHAINS[i].second;
+
+            appendLogLine(
+              `Starter [${sa},${sb}] → waiting for [${wa},${wb}]`,
+              "#64748b"
+            );
+
+            // Consume the starter pair so it cannot overlap.
+            // For example, (3,3,3) is not two separate pairs.
+            // The next pair must begin on a later tick.
+            prevDigit = null;
+            return;
+          }
+        }
       }
 
-      prevDigit = isAllowedChainDigit(d) ? d : null;
-
     } else if (phase === "waiting") {
-      if (secondPairDigit === null) {
-        if (
-          !isAllowedChainDigit(d) ||
-          d === firstPairDigit
-        ) {
+      const chain = CHAINS[chainId];
+      const [wa, wb] = chain.second;
+
+      if (prevDigit === wa) {
+        if (d === wb) {
+          phase = "rolling";
+          rollingPairCount = 0;
+
+          // Keep the final digit of the second non-overlapping pair.
+          // This also allows the next pair to overlap it by one tick.
+          prevDigit = wb;
+
           appendLogLine(
-            `[${firstPairDigit},${firstPairDigit},${d}] invalidates chain — Scanning...`,
+            `[${chain.starter[0]},${chain.starter[1]} → ${wa},${wb}] Armed | watching for 2 overlapping pairs [${chain.targets[0]},${chain.targets[0]}] before DIGITDIFF ${chain.targets[0]}`,
+            "#f59e0b"
+          );
+
+          return;
+        } else {
+          appendLogLine(
+            `[${wa},${d}] invalidates chain — Scanning...`,
             "#64748b"
           );
 
           phase = "scan";
-          firstPairDigit = null;
-          secondPairDigit = null;
-          prevDigit = isAllowedChainDigit(d) ? d : null;
-          return;
+          chainId = null;
         }
-
-        secondPairDigit = d;
-        return;
       }
 
-      if (d === secondPairDigit) {
-        phase = "armed";
-        prevDigit = null;
+    } else if (phase === "rolling") {
+      const chain = CHAINS[chainId];
+      const targetDigit = chain.targets[0];
 
-        appendLogLine(
-          `Starter [${firstPairDigit},${firstPairDigit},${secondPairDigit},${secondPairDigit}] Armed | watching for an allowed pair followed by a different allowed digit`,
-          "#f59e0b"
-        );
-
-        return;
-      }
-
-      appendLogLine(
-        `[${secondPairDigit},${d}] invalidates chain — Scanning...`,
-        "#64748b"
-      );
-
-      phase = "scan";
-      firstPairDigit = null;
-      secondPairDigit = null;
-      prevDigit = isAllowedChainDigit(d) ? d : null;
-
-    } else if (
-      phase === "armed" ||
-      phase === "recovery"
-    ) {
-      if (triggerPairDigit === null) {
-        if (
-          prevDigit !== null &&
-          prevDigit === d &&
-          isAllowedChainDigit(d)
-        ) {
-          triggerPairDigit = d;
-          prevDigit = null;
-          return;
-        }
-
-        prevDigit = isAllowedChainDigit(d) ? d : null;
-        return;
-      }
-
+      // After the first two valid non-overlapping pairs, standalone target
+      // digits and arbitrary gaps are allowed. Only the next two target
+      // pairs matter. The rolling window still allows overlap.
       if (
-        isAllowedChainDigit(d) &&
-        d !== triggerPairDigit
+        prevDigit === targetDigit &&
+        d === targetDigit
       ) {
+        rollingPairCount += 1;
+
+        if (rollingPairCount < 2) {
+          appendLogLine(
+            `Overlapping pair ${rollingPairCount}/2 [${targetDigit},${targetDigit}] — watching next overlapping pair`,
+            "#64748b"
+          );
+
+          // Keep the last target digit so the next pair may overlap.
+          prevDigit = d;
+          return;
+        }
+
         appendLogLine(
-          phase === "recovery"
-            ? `Recovery pair [${triggerPairDigit},${triggerPairDigit}] → ${d} → DIGITDIFF ${d} (martingale)`
-            : `Pair [${triggerPairDigit},${triggerPairDigit}] → ${d} → DIGITDIFF ${d}`,
+          `Overlapping pair 2/2 [${targetDigit},${targetDigit}] → immediate DIGITDIFF ${targetDigit}`,
           "lime"
         );
 
-        triggerPairDigit = null;
-        prevDigit = null;
-        placeTrade(d);
-        return;
+        placeTrade(targetDigit);
       }
 
-      appendLogLine(
-        `[${triggerPairDigit},${d}] invalidates trade trigger — continuing to scan`,
-        "#64748b"
-      );
+    } else if (phase === "recovery") {
+      const chain = CHAINS[chainId];
 
-      triggerPairDigit = null;
+      if (
+        prevDigit === chain.targets[1] &&
+        d === chain.targets[1]
+      ) {
+        appendLogLine(
+          `Recovery pair [${chain.targets[1]},${chain.targets[1]}] → DIGITDIFF ${chain.targets[1]} (martingale)`,
+          "lime"
+        );
 
-      // Consume the invalidating tick so an overlapping triple such as
-      // 5,5,5 cannot be reused as a new pair.
-      prevDigit = null;
+        placeTrade(chain.targets[1]);
+      }
     }
+
+    prevDigit = d;
   }
 
   async function connect() {
@@ -937,9 +928,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 // Continue recovery after every loss while preserving
                 // the same chain. Level 3 is the maximum ladder level.
                 if (
-                  phase === "armed" ||
+                  phase === "rolling" ||
                   phase === "recovery"
                 ) {
+                  const chain = CHAINS[chainId];
+
                   phase = "recovery";
                   prevDigit = null;
                   clearContractState();
@@ -952,8 +945,9 @@ document.addEventListener("DOMContentLoaded", () => {
                       ` → recovery level=${Math.min(
                         ladder + 1,
                         3
-                      )}: watch an allowed pair followed by a ` +
-                      `different allowed digit ` +
+                      )}: watch pair [` +
+                      `${chain.targets[1]},${chain.targets[1]}] ` +
+                      `DIGITDIFF ${chain.targets[1]} ` +
                       `stake=${nextStake.toFixed(2)}`,
                     "red"
                   );
