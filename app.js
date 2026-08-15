@@ -1,5 +1,5 @@
 // Deriv DigitDiff bot — Chain-pair strategy
-// Modified: Implements 2-minute candle percentage-based scan for pair detection
+// Modified: 3-minute candle window, strict discovery, watcher skips 3 ticks then trades
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -157,13 +157,14 @@ document.addEventListener("DOMContentLoaded", () => {
   let tickBuffer = [];
   let tickFlushTimer = null;
 
-  // --- Two-minute candle scanning state (new) ---
-  const TWO_MIN_MS = 2 * 60 * 1000; // 120000ms
+  // --- Candle scanning state ---
+  const CANDLE_MS = 3 * 60 * 1000; // 180000ms (3 minutes)
   let candleStart = null; // timestamp ms when current candle started
   let candleTicks = []; // {time, digit}
   let lastCandlePair = null; // {digit, pct, candleStart}
   let triggeredThisWatcher = false; // whether we've placed trade in current watcher candle
-  let awaitingNextDigit = null; // when set, wait for next tick equal to this digit before trading (user requested B)
+  let awaitingNextDigit = null; // when set, digit to watch for after skip
+  let skipAfterPair = 0; // number of ticks to skip after detecting the pair (user requested 3)
   const PAIR_DIGITS = new Set([3,4,5,6]);
   // ---------------------------------------------
 
@@ -247,11 +248,6 @@ document.addEventListener("DOMContentLoaded", () => {
   function stake() {
     const baseStake = getBaseStake();
 
-    // Ladder 0 = base stake
-    // Ladder 1 = Martingale level 2
-    // Ladder 2+ = Martingale level 3
-    // Level 3 is capped so extended losses do not create unlimited stakes.
-
     if (ladder <= 0) {
       return baseStake;
     }
@@ -309,6 +305,7 @@ document.addEventListener("DOMContentLoaded", () => {
     lastCandlePair = null;
     triggeredThisWatcher = false;
     awaitingNextDigit = null;
+    skipAfterPair = 0;
   }
 
   function startHeartbeat() {
@@ -501,7 +498,7 @@ document.addEventListener("DOMContentLoaded", () => {
     sendNextProposalVariant();
   }
 
-  // --- Modified onTick: implement 2-minute candle percentage strategy with "B" behavior ---
+  // --- onTick: 3-minute candle, strict discovery, watcher skip-3-then-trade ---
   function onTick(price) {
     if (!running || paused) return;
 
@@ -532,6 +529,7 @@ document.addEventListener("DOMContentLoaded", () => {
       candleTicks.length = 0;
       triggeredThisWatcher = false;
       awaitingNextDigit = null;
+      skipAfterPair = 0;
     }
 
     // push tick into current candle
@@ -542,25 +540,36 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // If we are awaiting the next tick equal to a particular digit (user chose B),
-    // check that first and place trade when seen.
-    if (awaitingNextDigit && !triggeredThisWatcher) {
-      if (d === awaitingNextDigit) {
-        appendLogLine(
-          `Awaiting digit ${d} detected — placing DIGITDIFF ${d}`,
-          "lime"
-        );
-        placeTrade(d);
-        triggeredThisWatcher = true;
-        awaitingNextDigit = null;
-        return;
+    // If we are awaiting the next tick equal to a particular digit (after skipping),
+    // process skip counter first, then watch for matching digit.
+    if (awaitingNextDigit !== null && !triggeredThisWatcher) {
+      if (skipAfterPair > 0) {
+        // consume this tick as one of the skips
+        skipAfterPair -= 1;
+        appendLogLine(`Skipping tick for ${awaitingNextDigit} — ${skipAfterPair} skips remaining`, "#94a3b8");
+        return; // keep waiting
+      } else {
+        // skipping done; if this tick equals the awaited digit, trade immediately
+        if (d === awaitingNextDigit) {
+          appendLogLine(
+            `Post-skip matching digit ${d} detected — placing DIGITDIFF ${d}`,
+            "lime"
+          );
+          placeTrade(d);
+          triggeredThisWatcher = true;
+          awaitingNextDigit = null;
+          skipAfterPair = 0;
+          return;
+        } else {
+          // not matching yet; remain waiting until match or candle end
+          return;
+        }
       }
-      // otherwise continue waiting until candle end or trade conditions change
     }
 
     // If there's a lastCandlePair (from previous candle), act as watcher in this candle
-    if (lastCandlePair && !triggeredThisWatcher && !awaitingNextDigit) {
-      const pctElapsed = Math.min(100, ((now - candleStart) / TWO_MIN_MS) * 100);
+    if (lastCandlePair && !triggeredThisWatcher && awaitingNextDigit === null) {
+      const pctElapsed = Math.min(100, ((now - candleStart) / CANDLE_MS) * 100);
 
       if (pctElapsed >= lastCandlePair.pct) {
         // only after reaching percentage, monitor for any pair among {3,4,5,6}
@@ -570,14 +579,13 @@ document.addEventListener("DOMContentLoaded", () => {
           const cur = candleTicks[len - 1];
 
           if (prev.digit === cur.digit && PAIR_DIGITS.has(prev.digit)) {
-            // Found pair; per user instruction B, wait for the next tick equal to that digit,
-            // not trade immediately on the pair's second tick.
+            // Found pair; per your new rule: skip next 3 ticks, then wait for the next tick equal to that digit
             awaitingNextDigit = prev.digit;
+            skipAfterPair = 3; // skip 3 subsequent ticks, per your instruction
             appendLogLine(
-              `Watcher: detected pair [${prev.digit},${cur.digit}] at ${pctElapsed.toFixed(2)}% → waiting for next ${prev.digit} tick to trade`,
+              `Watcher: detected pair [${prev.digit},${cur.digit}] at ${pctElapsed.toFixed(2)}% → skipping 3 ticks then await ${prev.digit}`,
               "#f59e0b"
             );
-            // do not set triggeredThisWatcher yet; will set when trade actually placed
             return;
           }
         }
@@ -585,7 +593,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Candle end handling
-    if (now - candleStart >= TWO_MIN_MS) {
+    if (now - candleStart >= CANDLE_MS) {
       // analyze candleTicks for first TWO non-overlapping pairs of the SAME digit in {3,4,5,6}
       // Requirement: between the end of the first pair (index i+1) and the start of the second pair (index j),
       // there must be NO occurrence of that same digit. Any single occurrence of the pair digit in-between
@@ -622,7 +630,7 @@ document.addEventListener("DOMContentLoaded", () => {
               }
 
               const occurredAt = candleTicks[j + 1].time;
-              const pct = Math.max(0, Math.min(100, ((occurredAt - candleStart) / TWO_MIN_MS) * 100));
+              const pct = Math.max(0, Math.min(100, ((occurredAt - candleStart) / CANDLE_MS) * 100));
               pairFound = { digit, pct };
               break;
             }
@@ -649,6 +657,7 @@ document.addEventListener("DOMContentLoaded", () => {
       candleTicks.length = 0;
       triggeredThisWatcher = false;
       awaitingNextDigit = null;
+      skipAfterPair = 0;
     }
   }
 
