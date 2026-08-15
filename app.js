@@ -587,6 +587,9 @@ document.addEventListener("DOMContentLoaded", () => {
     // Candle end handling
     if (now - candleStart >= TWO_MIN_MS) {
       // analyze candleTicks for first TWO non-overlapping pairs of the SAME digit in {3,4,5,6}
+      // Requirement: between the end of the first pair (index i+1) and the start of the second pair (index j),
+      // there must be NO occurrence of that same digit. Any single occurrence of the pair digit in-between
+      // invalidates the second pair for this candle.
       let pairFound = null;
 
       for (let i = 0; i < candleTicks.length - 1; i++) {
@@ -604,6 +607,20 @@ document.addEventListener("DOMContentLoaded", () => {
             const d2 = candleTicks[j + 1].digit;
 
             if (c === d2 && c === digit) {
+              // ensure that between firstPairEnd+1 and j-1 there are NO occurrences of `digit`
+              let betweenHasSame = false;
+              for (let k = firstPairEnd + 1; k <= j - 1; k++) {
+                if (candleTicks[k].digit === digit) {
+                  betweenHasSame = true;
+                  break;
+                }
+              }
+
+              if (betweenHasSame) {
+                // this second pair is invalid due to intervening same-digit occurrences; continue searching
+                continue;
+              }
+
               const occurredAt = candleTicks[j + 1].time;
               const pct = Math.max(0, Math.min(100, ((occurredAt - candleStart) / TWO_MIN_MS) * 100));
               pairFound = { digit, pct };
@@ -611,7 +628,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
           }
 
-          if (pairFound) break; // found two non-overlapping pairs of same digit
+          if (pairFound) break; // found two non-overlapping pairs of same digit satisfying the strict rule
           // otherwise continue scanning for next possible first pair
         }
       }
