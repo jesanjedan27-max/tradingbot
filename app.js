@@ -163,6 +163,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let candleTicks = []; // {time, digit}
   let lastCandlePair = null; // {digit, pct, candleStart}
   let triggeredThisWatcher = false; // whether we've placed trade in current watcher candle
+  let awaitingNextDigit = null; // when set, wait for next tick equal to this digit before trading (user requested B)
   const PAIR_DIGITS = new Set([3,4,5,6]);
   // ---------------------------------------------
 
@@ -307,6 +308,7 @@ document.addEventListener("DOMContentLoaded", () => {
     candleTicks.length = 0;
     lastCandlePair = null;
     triggeredThisWatcher = false;
+    awaitingNextDigit = null;
   }
 
   function startHeartbeat() {
@@ -499,7 +501,7 @@ document.addEventListener("DOMContentLoaded", () => {
     sendNextProposalVariant();
   }
 
-  // --- Modified onTick: implement 2-minute candle percentage strategy ---
+  // --- Modified onTick: implement 2-minute candle percentage strategy with "B" behavior ---
   function onTick(price) {
     if (!running || paused) return;
 
@@ -529,6 +531,7 @@ document.addEventListener("DOMContentLoaded", () => {
       candleStart = now;
       candleTicks.length = 0;
       triggeredThisWatcher = false;
+      awaitingNextDigit = null;
     }
 
     // push tick into current candle
@@ -539,8 +542,24 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    // If we are awaiting the next tick equal to a particular digit (user chose B),
+    // check that first and place trade when seen.
+    if (awaitingNextDigit && !triggeredThisWatcher) {
+      if (d === awaitingNextDigit) {
+        appendLogLine(
+          `Awaiting digit ${d} detected — placing DIGITDIFF ${d}`,
+          "lime"
+        );
+        placeTrade(d);
+        triggeredThisWatcher = true;
+        awaitingNextDigit = null;
+        return;
+      }
+      // otherwise continue waiting until candle end or trade conditions change
+    }
+
     // If there's a lastCandlePair (from previous candle), act as watcher in this candle
-    if (lastCandlePair && !triggeredThisWatcher) {
+    if (lastCandlePair && !triggeredThisWatcher && !awaitingNextDigit) {
       const pctElapsed = Math.min(100, ((now - candleStart) / TWO_MIN_MS) * 100);
 
       if (pctElapsed >= lastCandlePair.pct) {
@@ -551,14 +570,14 @@ document.addEventListener("DOMContentLoaded", () => {
           const cur = candleTicks[len - 1];
 
           if (prev.digit === cur.digit && PAIR_DIGITS.has(prev.digit)) {
-            // found pair — trade on first digit
+            // Found pair; per user instruction B, wait for the next tick equal to that digit,
+            // not trade immediately on the pair's second tick.
+            awaitingNextDigit = prev.digit;
             appendLogLine(
-              `Watcher: detected pair [${prev.digit},${cur.digit}] at ${pctElapsed.toFixed(2)}% → trading ${prev.digit}`,
-              "lime"
+              `Watcher: detected pair [${prev.digit},${cur.digit}] at ${pctElapsed.toFixed(2)}% → waiting for next ${prev.digit} tick to trade`,
+              "#f59e0b"
             );
-
-            placeTrade(prev.digit);
-            triggeredThisWatcher = true;
+            // do not set triggeredThisWatcher yet; will set when trade actually placed
             return;
           }
         }
@@ -567,34 +586,52 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Candle end handling
     if (now - candleStart >= TWO_MIN_MS) {
-      // analyze candleTicks for first non-overlapping pair of {3,4,5,6}
+      // analyze candleTicks for first TWO non-overlapping pairs of the SAME digit in {3,4,5,6}
       let pairFound = null;
+
       for (let i = 0; i < candleTicks.length - 1; i++) {
         const a = candleTicks[i].digit;
         const b = candleTicks[i + 1].digit;
+
         if (a === b && PAIR_DIGITS.has(a)) {
-          const occurredAt = candleTicks[i + 1].time;
-          const pct = Math.max(0, Math.min(100, ((occurredAt - candleStart) / TWO_MIN_MS) * 100));
-          pairFound = { digit: a, pct };
-          break;
+          // first pair ends at index i+1
+          const firstPairEnd = i + 1;
+          const digit = a;
+
+          // search for a second non-overlapping pair of the same digit
+          for (let j = firstPairEnd + 1; j < candleTicks.length - 1; j++) {
+            const c = candleTicks[j].digit;
+            const d2 = candleTicks[j + 1].digit;
+
+            if (c === d2 && c === digit) {
+              const occurredAt = candleTicks[j + 1].time;
+              const pct = Math.max(0, Math.min(100, ((occurredAt - candleStart) / TWO_MIN_MS) * 100));
+              pairFound = { digit, pct };
+              break;
+            }
+          }
+
+          if (pairFound) break; // found two non-overlapping pairs of same digit
+          // otherwise continue scanning for next possible first pair
         }
       }
 
       if (pairFound) {
         lastCandlePair = pairFound;
         appendLogLine(
-          `Candle finished: found pair [${pairFound.digit}] at ${pairFound.pct.toFixed(2)}% — next candle will watch`,
+          `Candle finished: found 2 non-overlapping pairs [${pairFound.digit}] at ${pairFound.pct.toFixed(2)}% — next candle will watch`,
           "#f59e0b"
         );
       } else {
         lastCandlePair = null;
-        appendLogLine("Candle finished: no qualifying pair — resetting watcher", "#64748b");
+        appendLogLine("Candle finished: no qualifying 2-pair non-overlapping result — resetting watcher", "#64748b");
       }
 
       // reset for next candle
       candleStart = now;
       candleTicks.length = 0;
       triggeredThisWatcher = false;
+      awaitingNextDigit = null;
     }
   }
 
