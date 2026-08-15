@@ -1,9 +1,5 @@
 // Deriv DigitDiff bot — Chain-pair strategy
-// Chains: (3,3→3,3)→(3,3)→(3,3)→digit3 ddf3
-//         (4,4→4,4)→(4,4)→(4,4)→digit4 ddf4
-//         (5,5→5,5)→(5,5)→(5,5)→digit5 ddf5
-//         (6,6→6,6)→(6,6)→(6,6)→digit6 ddf6
-
+// Modified: Implements 2-minute candle percentage-based scan for pair detection
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -161,6 +157,15 @@ document.addEventListener("DOMContentLoaded", () => {
   let tickBuffer = [];
   let tickFlushTimer = null;
 
+  // --- Two-minute candle scanning state (new) ---
+  const TWO_MIN_MS = 2 * 60 * 1000; // 120000ms
+  let candleStart = null; // timestamp ms when current candle started
+  let candleTicks = []; // {time, digit}
+  let lastCandlePair = null; // {digit, pct, candleStart}
+  let triggeredThisWatcher = false; // whether we've placed trade in current watcher candle
+  const PAIR_DIGITS = new Set([3,4,5,6]);
+  // ---------------------------------------------
+
   function appendLogLine(message, color = "#fff") {
     const entry = document.createElement("div");
     entry.style.color = color;
@@ -296,6 +301,12 @@ document.addEventListener("DOMContentLoaded", () => {
     lastBalance = null;
     ladder = 0;
     tickBuffer.length = 0;
+
+    // reset candle state
+    candleStart = null;
+    candleTicks.length = 0;
+    lastCandlePair = null;
+    triggeredThisWatcher = false;
   }
 
   function startHeartbeat() {
@@ -488,11 +499,14 @@ document.addEventListener("DOMContentLoaded", () => {
     sendNextProposalVariant();
   }
 
+  // --- Modified onTick: implement 2-minute candle percentage strategy ---
   function onTick(price) {
     if (!running || paused) return;
 
     const d = digitFromPrice(price);
     if (d === null) return;
+
+    const now = Date.now();
 
     if (priceEl) {
       priceEl.textContent =
@@ -503,128 +517,85 @@ document.addEventListener("DOMContentLoaded", () => {
       lastDigitEl.textContent = d;
     }
 
-    tickBuffer.push({
-      price,
-      digit: d
-    });
+    tickBuffer.push({ price, digit: d });
 
     if (captureNextTick) {
       settlementDigit = d;
       captureNextTick = false;
     }
 
-    // Ignore all tick-based triggers while any trade stage is active.
-    // This prevents duplicate proposals during rapid ticks.
+    // start candle if needed
+    if (!candleStart) {
+      candleStart = now;
+      candleTicks.length = 0;
+      triggeredThisWatcher = false;
+    }
+
+    // push tick into current candle
+    candleTicks.push({ time: now, digit: d });
+
+    // If a proposal or trade active, ignore triggers
     if (waitingProposal || tradeInFlight || activeContractId) {
-      prevDigit = null;
       return;
     }
 
-    if (phase === "scan") {
-      if (prevDigit !== null) {
-        for (let i = 0; i < CHAINS.length; i++) {
-          const [sa, sb] = CHAINS[i].starter;
+    // If there's a lastCandlePair (from previous candle), act as watcher in this candle
+    if (lastCandlePair && !triggeredThisWatcher) {
+      const pctElapsed = Math.min(100, ((now - candleStart) / TWO_MIN_MS) * 100);
 
-          if (prevDigit === sa && d === sb) {
-            chainId = i;
-            phase = "waiting";
+      if (pctElapsed >= lastCandlePair.pct) {
+        // only after reaching percentage, monitor for any pair among {3,4,5,6}
+        const len = candleTicks.length;
+        if (len >= 2) {
+          const prev = candleTicks[len - 2];
+          const cur = candleTicks[len - 1];
 
-            const [wa] = CHAINS[i].second;
-            const [, wb] = CHAINS[i].second;
-
+          if (prev.digit === cur.digit && PAIR_DIGITS.has(prev.digit)) {
+            // found pair — trade on first digit
             appendLogLine(
-              `Starter [${sa},${sb}] → waiting for [${wa},${wb}]`,
-              "#64748b"
+              `Watcher: detected pair [${prev.digit},${cur.digit}] at ${pctElapsed.toFixed(2)}% → trading ${prev.digit}`,
+              "lime"
             );
 
-            // Consume the starter pair so it cannot overlap.
-            // For example, (3,3,3) is not two separate pairs.
-            // The next pair must begin on a later tick.
-            prevDigit = null;
+            placeTrade(prev.digit);
+            triggeredThisWatcher = true;
             return;
           }
         }
       }
-
-    } else if (phase === "waiting") {
-      const chain = CHAINS[chainId];
-      const [wa, wb] = chain.second;
-
-      if (prevDigit === wa) {
-        if (d === wb) {
-          phase = "rolling";
-          rollingPairCount = 0;
-
-          // Keep the final digit of the second non-overlapping pair.
-          // This also allows the next pair to overlap it by one tick.
-          prevDigit = wb;
-
-          appendLogLine(
-            `[${chain.starter[0]},${chain.starter[1]} → ${wa},${wb}] Armed | watching for 2 overlapping pairs [${chain.targets[0]},${chain.targets[0]}] before DIGITDIFF ${chain.targets[0]}`,
-            "#f59e0b"
-          );
-
-          return;
-        } else {
-          appendLogLine(
-            `[${wa},${d}] invalidates chain — Scanning...`,
-            "#64748b"
-          );
-
-          phase = "scan";
-          chainId = null;
-        }
-      }
-
-    } else if (phase === "rolling") {
-      const chain = CHAINS[chainId];
-      const targetDigit = chain.targets[0];
-
-      // After the first two valid non-overlapping pairs, standalone target
-      // digits and arbitrary gaps are allowed. Only the next two target
-      // pairs matter. The rolling window still allows overlap.
-      if (
-        prevDigit === targetDigit &&
-        d === targetDigit
-      ) {
-        rollingPairCount += 1;
-
-        if (rollingPairCount < 2) {
-          appendLogLine(
-            `Overlapping pair ${rollingPairCount}/2 [${targetDigit},${targetDigit}] — watching next overlapping pair`,
-            "#64748b"
-          );
-
-          // Keep the last target digit so the next pair may overlap.
-          prevDigit = d;
-          return;
-        }
-
-        appendLogLine(
-          `Overlapping pair 2/2 [${targetDigit},${targetDigit}] → immediate DIGITDIFF ${targetDigit}`,
-          "lime"
-        );
-
-        placeTrade(targetDigit);
-      }
-
-    } else if (phase === "recovery") {
-      const chain = CHAINS[chainId];
-
-      if (
-        prevDigit === chain.targets[1] &&
-        d === chain.targets[1]
-      ) {
-        appendLogLine(
-          `Recovery pair [${chain.targets[1]},${chain.targets[1]}] → DIGITDIFF ${chain.targets[1]} (martingale)`,
-          "lime"
-        );
-
-        placeTrade(chain.targets[1]);
-      }
     }
 
-    prevDigit = d;
+    // Candle end handling
+    if (now - candleStart >= TWO_MIN_MS) {
+      // analyze candleTicks for first non-overlapping pair of {3,4,5,6}
+      let pairFound = null;
+      for (let i = 0; i < candleTicks.length - 1; i++) {
+        const a = candleTicks[i].digit;
+        const b = candleTicks[i + 1].digit;
+        if (a === b && PAIR_DIGITS.has(a)) {
+          const occurredAt = candleTicks[i + 1].time;
+          const pct = Math.max(0, Math.min(100, ((occurredAt - candleStart) / TWO_MIN_MS) * 100));
+          pairFound = { digit: a, pct };
+          break;
+        }
+      }
+
+      if (pairFound) {
+        lastCandlePair = pairFound;
+        appendLogLine(
+          `Candle finished: found pair [${pairFound.digit}] at ${pairFound.pct.toFixed(2)}% — next candle will watch`,
+          "#f59e0b"
+        );
+      } else {
+        lastCandlePair = null;
+        appendLogLine("Candle finished: no qualifying pair — resetting watcher", "#64748b");
+      }
+
+      // reset for next candle
+      candleStart = now;
+      candleTicks.length = 0;
+      triggeredThisWatcher = false;
+    }
   }
 
   async function connect() {
@@ -925,8 +896,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
                 const nextStake = stake();
 
-                // Continue recovery after every loss while preserving
-                // the same chain. Level 3 is the maximum ladder level.
                 if (
                   phase === "rolling" ||
                   phase === "recovery"
