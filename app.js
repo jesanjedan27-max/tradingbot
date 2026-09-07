@@ -1,5 +1,5 @@
-// Deriv DigitDiff bot — Chain-pair strategy
-// Modified: 3-minute candle window, strict discovery, watcher skips 3 ticks then trades
+// Deriv DigitUnder bot — rolling sequence strategy
+// Modified: immediate 8,9,9 / 9,8,8 trigger; one-tick DIGITUNDER 8 contract
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -73,9 +73,9 @@ document.addEventListener("DOMContentLoaded", () => {
   ];
 
   const DEFAULT_PAYOUT_RATIO = 1.09;
-  const DIGITDIFF_DURATION_TICKS = 1;
-  const MARTINGALE_LEVEL_2_MULTIPLIER = 17.49;
-  const MARTINGALE_LEVEL_3_MULTIPLIER = 16.99;
+  const DIGITUNDER_DURATION_TICKS = 1;
+  const MARTINGALE_LEVEL_2_RATIO = 2 / 0.35;
+  const MARTINGALE_LEVEL_3_RATIO = 9.5 / 0.35;
 
   function roundStake(value) {
     return Number(value.toFixed(2));
@@ -143,6 +143,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let activeContractId = null;
   let settlementDigit = null;
   let captureNextTick = false;
+  let rollingDigits = [];
 
   // phase: "scan" | "waiting" | "rolling" | "recovery"
   let phase = "scan";
@@ -153,20 +154,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
   const TICK_BATCH_LIMIT = 200;
+  const TARGET_SEQUENCES = new Set(["8,9,9", "9,8,8"]);
 
   let tickBuffer = [];
   let tickFlushTimer = null;
-
-  // --- Candle scanning state ---
-  const CANDLE_MS = 3 * 60 * 1000; // 180000ms (3 minutes)
-  let candleStart = null; // timestamp ms when current candle started
-  let candleTicks = []; // {time, digit}
-  let lastCandlePair = null; // {digit, pct, candleStart}
-  let triggeredThisWatcher = false; // whether we've placed trade in current watcher candle
-  let awaitingNextDigit = null; // when set, digit to watch for after skip
-  let skipAfterPair = 0; // number of ticks to skip after detecting the pair (user requested 3)
-  const PAIR_DIGITS = new Set([3,4,5,6]);
-  // ---------------------------------------------
 
   function appendLogLine(message, color = "#fff") {
     const entry = document.createElement("div");
@@ -252,15 +243,13 @@ document.addEventListener("DOMContentLoaded", () => {
       return baseStake;
     }
 
-    const levelTwoStake =
-      baseStake * MARTINGALE_LEVEL_2_MULTIPLIER;
+    const levelTwoStake = baseStake * MARTINGALE_LEVEL_2_RATIO;
 
     if (ladder === 1) {
       return roundStake(levelTwoStake);
     }
 
-    const levelThreeStake =
-      levelTwoStake * MARTINGALE_LEVEL_3_MULTIPLIER;
+    const levelThreeStake = baseStake * MARTINGALE_LEVEL_3_RATIO;
 
     return roundStake(levelThreeStake);
   }
@@ -274,6 +263,7 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalAttempt = 0;
     activeContractId = null;
     rollingPairCount = 0;
+    rollingDigits.length = 0;
   }
 
   function resetToScan() {
@@ -298,14 +288,7 @@ document.addEventListener("DOMContentLoaded", () => {
     lastBalance = null;
     ladder = 0;
     tickBuffer.length = 0;
-
-    // reset candle state
-    candleStart = null;
-    candleTicks.length = 0;
-    lastCandlePair = null;
-    triggeredThisWatcher = false;
-    awaitingNextDigit = null;
-    skipAfterPair = 0;
+    rollingDigits.length = 0;
   }
 
   function startHeartbeat() {
@@ -372,6 +355,7 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalAttempt = 0;
     tickBuffer.length = 0;
     lastPayoutRatio = null;
+    rollingDigits.length = 0;
 
     if (ws && ws.readyState === WebSocket.OPEN) {
       sendMessage({ forget_all: "ticks" });
@@ -401,11 +385,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const base = {
       proposal: 1,
-      contract_type: "DIGITDIFF",
+      contract_type: "DIGITUNDER",
       currency: "USD",
       amount,
       basis: "stake",
-      duration: DIGITDIFF_DURATION_TICKS,
+      duration: DIGITUNDER_DURATION_TICKS,
       duration_unit: "t",
       barrier
     };
@@ -491,21 +475,19 @@ document.addEventListener("DOMContentLoaded", () => {
     waitingProposal = true;
 
     appendLogLine(
-      `TRADE DIGITDIFF barrier=${barrier} stake=${proposalVariants[0].amount}`,
+      `TRADE DIGITUNDER barrier=${barrier} stake=${proposalVariants[0].amount}`,
       "lime"
     );
 
     sendNextProposalVariant();
   }
 
-  // --- onTick: 3-minute candle, strict discovery, watcher skip-3-then-trade ---
+  // --- onTick: immediate rolling sequence trigger ---
   function onTick(price) {
     if (!running || paused) return;
 
     const d = digitFromPrice(price);
     if (d === null) return;
-
-    const now = Date.now();
 
     if (priceEl) {
       priceEl.textContent =
@@ -523,141 +505,29 @@ document.addEventListener("DOMContentLoaded", () => {
       captureNextTick = false;
     }
 
-    // start candle if needed
-    if (!candleStart) {
-      candleStart = now;
-      candleTicks.length = 0;
-      triggeredThisWatcher = false;
-      awaitingNextDigit = null;
-      skipAfterPair = 0;
-    }
-
-    // push tick into current candle
-    candleTicks.push({ time: now, digit: d });
-
-    // If a proposal or trade active, ignore triggers
+    // If a proposal or trade is active, ignore new triggers
     if (waitingProposal || tradeInFlight || activeContractId) {
       return;
     }
 
-    // If we are awaiting the next tick equal to a particular digit (after skipping),
-    // process skip counter first, then watch for matching digit.
-    if (awaitingNextDigit !== null && !triggeredThisWatcher) {
-      if (skipAfterPair > 0) {
-        // consume this tick as one of the skips
-        skipAfterPair -= 1;
-        appendLogLine(`Skipping tick for ${awaitingNextDigit} — ${skipAfterPair} skips remaining`, "#94a3b8");
-        return; // keep waiting
-      } else {
-        // skipping done; if this tick equals the awaited digit, trade immediately
-        if (d === awaitingNextDigit) {
-          appendLogLine(
-            `Post-skip matching digit ${d} detected — placing DIGITDIFF ${d}`,
-            "lime"
-          );
-          placeTrade(d);
-          triggeredThisWatcher = true;
-          awaitingNextDigit = null;
-          skipAfterPair = 0;
-          return;
-        } else {
-          // not matching yet; remain waiting until match or candle end
-          return;
-        }
-      }
+    rollingDigits.push(d);
+
+    if (rollingDigits.length > 3) {
+      rollingDigits.shift();
     }
 
-    // If there's a lastCandlePair (from previous candle), act as watcher in this candle
-    if (lastCandlePair && !triggeredThisWatcher && awaitingNextDigit === null) {
-      const pctElapsed = Math.min(100, ((now - candleStart) / CANDLE_MS) * 100);
+    if (rollingDigits.length === 3) {
+      const sequence = rollingDigits.join(",");
 
-      if (pctElapsed >= lastCandlePair.pct) {
-        // only after reaching percentage, monitor for any pair among {3,4,5,6}
-        const len = candleTicks.length;
-        if (len >= 2) {
-          const prev = candleTicks[len - 2];
-          const cur = candleTicks[len - 1];
-
-          if (prev.digit === cur.digit && PAIR_DIGITS.has(prev.digit)) {
-            // Found pair; per your new rule: skip next 3 ticks, then wait for the next tick equal to that digit
-            awaitingNextDigit = prev.digit;
-            skipAfterPair = 3; // skip 3 subsequent ticks, per your instruction
-            appendLogLine(
-              `Watcher: detected pair [${prev.digit},${cur.digit}] at ${pctElapsed.toFixed(2)}% → skipping 3 ticks then await ${prev.digit}`,
-              "#f59e0b"
-            );
-            return;
-          }
-        }
-      }
-    }
-
-    // Candle end handling
-    if (now - candleStart >= CANDLE_MS) {
-      // analyze candleTicks for first TWO non-overlapping pairs of the SAME digit in {3,4,5,6}
-      // Requirement: between the end of the first pair (index i+1) and the start of the second pair (index j),
-      // there must be NO occurrence of that same digit. Any single occurrence of the pair digit in-between
-      // invalidates the second pair for this candle.
-      let pairFound = null;
-
-      for (let i = 0; i < candleTicks.length - 1; i++) {
-        const a = candleTicks[i].digit;
-        const b = candleTicks[i + 1].digit;
-
-        if (a === b && PAIR_DIGITS.has(a)) {
-          // first pair ends at index i+1
-          const firstPairEnd = i + 1;
-          const digit = a;
-
-          // search for a second non-overlapping pair of the same digit
-          for (let j = firstPairEnd + 1; j < candleTicks.length - 1; j++) {
-            const c = candleTicks[j].digit;
-            const d2 = candleTicks[j + 1].digit;
-
-            if (c === d2 && c === digit) {
-              // ensure that between firstPairEnd+1 and j-1 there are NO occurrences of `digit`
-              let betweenHasSame = false;
-              for (let k = firstPairEnd + 1; k <= j - 1; k++) {
-                if (candleTicks[k].digit === digit) {
-                  betweenHasSame = true;
-                  break;
-                }
-              }
-
-              if (betweenHasSame) {
-                // this second pair is invalid due to intervening same-digit occurrences; continue searching
-                continue;
-              }
-
-              const occurredAt = candleTicks[j + 1].time;
-              const pct = Math.max(0, Math.min(100, ((occurredAt - candleStart) / CANDLE_MS) * 100));
-              pairFound = { digit, pct };
-              break;
-            }
-          }
-
-          if (pairFound) break; // found two non-overlapping pairs of same digit satisfying the strict rule
-          // otherwise continue scanning for next possible first pair
-        }
-      }
-
-      if (pairFound) {
-        lastCandlePair = pairFound;
+      if (TARGET_SEQUENCES.has(sequence)) {
         appendLogLine(
-          `Candle finished: found 2 non-overlapping pairs [${pairFound.digit}] at ${pairFound.pct.toFixed(2)}% — next candle will watch`,
-          "#f59e0b"
+          `Sequence ${sequence} detected — placing DIGITUNDER 8`,
+          "lime"
         );
-      } else {
-        lastCandlePair = null;
-        appendLogLine("Candle finished: no qualifying 2-pair non-overlapping result — resetting watcher", "#64748b");
-      }
 
-      // reset for next candle
-      candleStart = now;
-      candleTicks.length = 0;
-      triggeredThisWatcher = false;
-      awaitingNextDigit = null;
-      skipAfterPair = 0;
+        rollingDigits.length = 0;
+        placeTrade(8);
+      }
     }
   }
 
@@ -979,7 +849,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         3
                       )}: watch pair [` +
                       `${chain.targets[1]},${chain.targets[1]}] ` +
-                      `DIGITDIFF ${chain.targets[1]} ` +
+                      `DIGITUNDER 8 ` +
                       `stake=${nextStake.toFixed(2)}`,
                     "red"
                   );
