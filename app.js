@@ -20,6 +20,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const tokenInput = $("tokenInput");
 
   let selectedBaseStake = Number(stakeInput.value || 0.35);
+  let activeBaseStake = selectedBaseStake;
+  let stakeIndex = 0;
 
   stakeInput.addEventListener("change", () => {
     const nextBaseStake = Number(stakeInput.value || 0.35);
@@ -28,13 +30,15 @@ document.addEventListener("DOMContentLoaded", () => {
     if (nextBaseStake === selectedBaseStake) return;
 
     selectedBaseStake = nextBaseStake;
+    activeBaseStake = nextBaseStake;
+    stakeIndex = 0;
     recoveryLoss = 0;
-    ladder = 0;
+    setActiveBaseStake(nextBaseStake);
 
     if (levelEl) levelEl.textContent = "0";
 
     appendLogLine(
-      `Base stake changed to ${nextBaseStake.toFixed(2)} — fresh ladder started.`,
+      `Base stake changed to ${nextBaseStake.toFixed(2)} — fresh stake sequence started.`,
       "#f59e0b"
     );
   });
@@ -74,12 +78,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const DEFAULT_PAYOUT_RATIO = 1.09;
   const DIGITUNDER_DURATION_TICKS = 1;
-  const MARTINGALE_LEVEL_2_RATIO = 2 / 0.35;
-  const MARTINGALE_LEVEL_3_RATIO = 9.5 / 0.35;
 
-  function roundStake(value) {
-    return Number(value.toFixed(2));
-  }
+  // Reference stake ladder. The user's selected starting stake scales this
+  // ladder, so 0.80 produces 0.80 -> 4.57 -> 21.71.
+  const STAKE_LADDER_TEMPLATE = [0.35, 2.00, 9.50];
 
   let symbol = "R_100";
   const symbolDecimals = {};
@@ -89,6 +91,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   const savedToken = localStorage.getItem("access_token");
+
   if (tokenInput && savedToken) {
     tokenInput.value = savedToken;
   }
@@ -123,6 +126,8 @@ document.addEventListener("DOMContentLoaded", () => {
   let heartbeatTimer = null;
   let reconnectTimer = null;
   let reconnectAttempts = 0;
+  let restartingAfterStakeReset = false;
+  let pendingRestartStake = null;
 
   const HEARTBEAT_MS = 20000;
   const RECONNECT_BASE_MS = 2000;
@@ -133,7 +138,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let currentStake = 0;
   let lastBalance = null;
   let paused = false;
-  let ladder = 0;
   let totalProfit = 0;
 
   let waitingProposal = false;
@@ -226,32 +230,52 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function getBaseStake() {
-    const enteredStake = Number(stakeInput.value || 0.35);
+  function roundStake(value) {
+    return Number(
+      (
+        Math.round((Number(value) + Number.EPSILON) * 100) / 100
+      ).toFixed(2)
+    );
+  }
 
-    if (!Number.isFinite(enteredStake) || enteredStake <= 0) {
-      return 0.35;
+  function getStakeSequence() {
+    const baseStake =
+      Number.isFinite(selectedBaseStake) && selectedBaseStake > 0
+        ? selectedBaseStake
+        : STAKE_LADDER_TEMPLATE[0];
+
+    const scaleFactor =
+      baseStake / STAKE_LADDER_TEMPLATE[0];
+
+    return STAKE_LADDER_TEMPLATE.map(referenceStake =>
+      roundStake(referenceStake * scaleFactor)
+    );
+  }
+
+  function getBaseStake() {
+    if (!Number.isFinite(activeBaseStake) || activeBaseStake <= 0) {
+      return getStakeSequence()[0];
     }
 
-    return Number(enteredStake.toFixed(2));
+    return roundStake(activeBaseStake);
+  }
+
+  function setActiveBaseStake(value) {
+    const nextStake = Number(value);
+
+    if (!Number.isFinite(nextStake) || nextStake <= 0) {
+      return;
+    }
+
+    activeBaseStake = roundStake(nextStake);
+
+    if (stakeInput) {
+      stakeInput.value = activeBaseStake.toFixed(2);
+    }
   }
 
   function stake() {
-    const baseStake = getBaseStake();
-
-    if (ladder <= 0) {
-      return baseStake;
-    }
-
-    const levelTwoStake = baseStake * MARTINGALE_LEVEL_2_RATIO;
-
-    if (ladder === 1) {
-      return roundStake(levelTwoStake);
-    }
-
-    const levelThreeStake = baseStake * MARTINGALE_LEVEL_3_RATIO;
-
-    return roundStake(levelThreeStake);
+    return getBaseStake();
   }
 
   function clearContractState() {
@@ -286,7 +310,8 @@ document.addEventListener("DOMContentLoaded", () => {
     lastPayoutRatio = null;
     currentStake = 0;
     lastBalance = null;
-    ladder = 0;
+    stakeIndex = 0;
+    setActiveBaseStake(getStakeSequence()[0]);
     tickBuffer.length = 0;
     rollingDigits.length = 0;
   }
@@ -336,6 +361,29 @@ document.addEventListener("DOMContentLoaded", () => {
         connect();
       }
     }, delay);
+  }
+
+  function restartMarketAfterStakeReset(nextStake) {
+    if (manualStop || !running) return;
+
+    restartingAfterStakeReset = true;
+    pendingRestartStake = nextStake;
+    cancelReconnect();
+    stopHeartbeat();
+    stopTickFlush();
+
+    if (ws && ws.readyState !== WebSocket.CLOSED) {
+      ws.close();
+      return;
+    }
+
+    ws = null;
+    restartingAfterStakeReset = false;
+    resetToScan();
+    setActiveBaseStake(pendingRestartStake);
+    pendingRestartStake = null;
+    connect();
+    startTickFlush();
   }
 
   function switchMarket(newSymbol) {
@@ -537,7 +585,6 @@ document.addEventListener("DOMContentLoaded", () => {
       phase !== "scan"
     ) {
       recoveryLoss += currentStake > 0 ? currentStake : 0;
-      ladder += 1;
     }
 
     resetToScan();
@@ -809,67 +856,56 @@ document.addEventListener("DOMContentLoaded", () => {
                   : exitDigit;
 
               if (pnl >= 0) {
+                const wonAfterLoss = stakeIndex > 0;
+                const baseStake = getStakeSequence()[0];
+
                 recoveryLoss = 0;
                 currentStake = 0;
-                ladder = 0;
+                stakeIndex = 0;
 
                 appendLogLine(
                   `WIN +${pnl.toFixed(2)}` +
                     (resultDigit !== null
                       ? ` (digit=${resultDigit})`
+                      : "") +
+                    (wonAfterLoss
+                      ? ` | market stopped and reset` +
+                        ` | fresh scan will use ${baseStake.toFixed(2)}`
                       : ""),
                   "lime"
                 );
 
-                resetToScan();
+                if (wonAfterLoss) {
+                  restartMarketAfterStakeReset(baseStake);
+                } else {
+                  setActiveBaseStake(baseStake);
+                  resetToScan();
+                }
 
               } else {
                 recoveryLoss += Math.abs(pnl);
-                ladder += 1;
+                const stakeSequence = getStakeSequence();
 
-                const nextStake = stake();
+                stakeIndex =
+                  (stakeIndex + 1) % stakeSequence.length;
 
-                if (
-                  phase === "rolling" ||
-                  phase === "recovery"
-                ) {
-                  const chain = CHAINS[chainId];
+                const nextStake = stakeSequence[stakeIndex];
 
-                  phase = "recovery";
-                  prevDigit = null;
-                  clearContractState();
+                appendLogLine(
+                  `LOSS ${pnl.toFixed(2)} | next base stake=${nextStake.toFixed(2)}` +
+                    (resultDigit !== null
+                      ? ` (digit=${resultDigit})`
+                      : "") +
+                    ` | market stopped and reset` +
+                    ` | fresh scan will use ${nextStake.toFixed(2)}`,
+                  "red"
+                );
 
-                  appendLogLine(
-                    `LOSS ${pnl.toFixed(2)} | ladder=${ladder}` +
-                      (resultDigit !== null
-                        ? ` (digit=${resultDigit})`
-                        : "") +
-                      ` → recovery level=${Math.min(
-                        ladder + 1,
-                        3
-                      )}: watch pair [` +
-                      `${chain.targets[1]},${chain.targets[1]}] ` +
-                      `DIGITUNDER 8 ` +
-                      `stake=${nextStake.toFixed(2)}`,
-                    "red"
-                  );
-
-                } else {
-                  appendLogLine(
-                    `LOSS ${pnl.toFixed(2)} | ladder=${ladder}` +
-                      (resultDigit !== null
-                        ? ` (digit=${resultDigit})`
-                        : "") +
-                      ` | next stake=${nextStake.toFixed(2)}`,
-                    "red"
-                  );
-
-                  resetToScan();
-                }
+                restartMarketAfterStakeReset(nextStake);
               }
 
               if (levelEl) {
-                levelEl.textContent = ladder;
+                levelEl.textContent = stakeIndex;
               }
 
               if (
@@ -893,6 +929,21 @@ document.addEventListener("DOMContentLoaded", () => {
       ws.onclose = () => {
         stopTickFlush();
         stopHeartbeat();
+
+        if (restartingAfterStakeReset) {
+          restartingAfterStakeReset = false;
+          ws = null;
+          resetToScan();
+          setActiveBaseStake(pendingRestartStake);
+          pendingRestartStake = null;
+
+          if (!manualStop && running) {
+            connect();
+            startTickFlush();
+          }
+
+          return;
+        }
 
         if (!manualStop && running) {
           scheduleReconnect();
