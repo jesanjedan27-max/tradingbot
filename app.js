@@ -148,7 +148,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let settlementDigit = null;
   let captureNextTick = false;
   let rollingDigits = [];
-  let pendingStrategyLogFinalCount = null;
 
   // phase: "scan" | "waiting" | "rolling" | "recovery"
   let phase = "scan";
@@ -189,34 +188,32 @@ document.addEventListener("DOMContentLoaded", () => {
     console.log(message);
   }
 
-  function flushTickBuffer() {
-    if (!tickBuffer.length) return;
-
-    const fragment = document.createDocumentFragment();
-
-    tickBuffer
-      .splice(0, TICK_BATCH_LIMIT)
-      .forEach(({ price, digit, suffix = "" }) => {
-        const row = document.createElement("div");
-        row.style.color = "#7dd3fc";
-        row.textContent =
-          `Tick ${Number(price).toFixed(decimalsForSymbol(symbol))} → ${digit}${suffix}`;
-        fragment.appendChild(row);
-      });
-
-    logEl.appendChild(fragment);
-
-    while (logEl.children.length > LOG_MAX_ENTRIES) {
-      logEl.removeChild(logEl.firstChild);
-    }
-
-    logEl.scrollTop = logEl.scrollHeight;
-  }
-
   function startTickFlush() {
     if (tickFlushTimer) return;
 
-    tickFlushTimer = setInterval(flushTickBuffer, TICK_FLUSH_MS);
+    tickFlushTimer = setInterval(() => {
+      if (!tickBuffer.length) return;
+
+      const fragment = document.createDocumentFragment();
+
+      tickBuffer
+        .splice(0, TICK_BATCH_LIMIT)
+        .forEach(({ price, digit }) => {
+          const row = document.createElement("div");
+          row.style.color = "#7dd3fc";
+          row.textContent =
+            `Tick ${Number(price).toFixed(decimalsForSymbol(symbol))} → ${digit}`;
+          fragment.appendChild(row);
+        });
+
+      logEl.appendChild(fragment);
+
+      while (logEl.children.length > LOG_MAX_ENTRIES) {
+        logEl.removeChild(logEl.firstChild);
+      }
+
+      logEl.scrollTop = logEl.scrollHeight;
+    }, TICK_FLUSH_MS);
   }
 
   function stopTickFlush() {
@@ -310,64 +307,6 @@ document.addEventListener("DOMContentLoaded", () => {
     strategyCandidateY = null;
   }
 
-  function strategyLogSuffix(digit) {
-    if (pendingStrategyLogFinalCount !== null) {
-      const finalCount = pendingStrategyLogFinalCount;
-      pendingStrategyLogFinalCount = null;
-      return `_${finalCount}`;
-    }
-
-    switch (strategyStage) {
-      case 0:
-        if (
-          strategyCandidateY === null &&
-          isStrategyY(digit)
-        ) {
-          return "(y)";
-        }
-
-        if (
-          strategyCandidateY !== null &&
-          isStrategyX(digit)
-        ) {
-          return "(x)_1";
-        }
-
-        return "";
-
-      case 1:
-      case 3: {
-        const nextCount = strategyCount + 1;
-
-        if (
-          nextCount === strategyTarget &&
-          isStrategyY(digit)
-        ) {
-          return `(y)_${nextCount}`;
-        }
-
-        return `_${nextCount}`;
-      }
-
-      case 2:
-      case 4:
-        return isStrategyX(digit) ? "(x)_1" : "";
-
-      case 5: {
-        const nextCount = strategyCount + 1;
-
-        if (nextCount === strategyTarget - 1) {
-          pendingStrategyLogFinalCount = strategyTarget;
-        }
-
-        return `_${nextCount}`;
-      }
-
-      default:
-        return "";
-    }
-  }
-
   function processStrategyDigit(digit) {
     switch (strategyStage) {
       case 0:
@@ -439,10 +378,8 @@ document.addEventListener("DOMContentLoaded", () => {
         // The current digit is count X - 1. Submit now so the
         // one-tick contract settles on the final count X digit.
         if (strategyCount === strategyTarget - 1) {
-          flushTickBuffer();
-
           appendLogLine(
-            "execute digit under 8",
+            `Yx-Yx-Yx detected — placing DIGITUNDER 8 before count ${strategyTarget}`,
             "lime"
           );
 
@@ -464,7 +401,6 @@ document.addEventListener("DOMContentLoaded", () => {
   function clearContractState() {
     settlementDigit = null;
     captureNextTick = false;
-    pendingStrategyLogFinalCount = null;
     tradeInFlight = false;
     waitingProposal = false;
     proposalVariants = null;
@@ -732,11 +668,7 @@ document.addEventListener("DOMContentLoaded", () => {
       lastDigitEl.textContent = d;
     }
 
-    tickBuffer.push({
-      price,
-      digit: d,
-      suffix: strategyLogSuffix(d)
-    });
+    tickBuffer.push({ price, digit: d });
 
     if (captureNextTick) {
       settlementDigit = d;
@@ -1194,6 +1126,46 @@ document.addEventListener("DOMContentLoaded", () => {
     account = "demo";
 
     demoBtn.classList.add("active");
-    liveBtn.classList.remove("active"); **…**
+    liveBtn.classList.remove("active");
 
-_This response is too long to display in full._
+    appendLogLine("DEMO MODE", "blue");
+
+    const mi = $("modeIndicator");
+
+    if (mi) {
+      mi.textContent = "JESAN 💲 MODE - DEMO";
+      mi.classList.add("demo");
+      mi.classList.remove("live");
+    }
+  };
+
+  liveBtn.onclick = () => {
+    account = "live";
+
+    liveBtn.classList.add("active");
+    demoBtn.classList.remove("active");
+
+    appendLogLine("LIVE MODE", "red");
+
+    const mi = $("modeIndicator");
+
+    if (mi) {
+      mi.textContent = "JESAN 💲 MODE - LIVE";
+      mi.classList.add("live");
+      mi.classList.remove("demo");
+    }
+  };
+
+  window.addEventListener("beforeunload", () => {
+    manualStop = true;
+
+    cancelReconnect();
+    stopHeartbeat();
+
+    if (ws) {
+      ws.close();
+    }
+
+    stopTickFlush();
+  });
+});
