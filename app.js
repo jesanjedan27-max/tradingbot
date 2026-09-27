@@ -104,7 +104,27 @@ document.addEventListener("DOMContentLoaded", () => {
   let account = "demo";
   demoBtn.classList.add("active");
 
-  const marketSelect = $("marketSelect");
+  let marketSelect = $("marketSelect");
+
+  if (!marketSelect) {
+    marketSelect = document.createElement("select");
+    marketSelect.id = "marketSelect";
+    marketSelect.setAttribute("aria-label", "Volatility market");
+
+    const marketLabel = document.createElement("label");
+    marketLabel.htmlFor = "marketSelect";
+    marketLabel.textContent = "Volatility market";
+
+    const marketContainer =
+      $("controls") ||
+      $("settings") ||
+      $("topBar") ||
+      document.body;
+
+    marketContainer.appendChild(marketLabel);
+    marketContainer.appendChild(marketSelect);
+  }
+
   marketSelect.innerHTML = "";
 
   MARKETS.forEach(m => {
@@ -1172,28 +1192,6 @@ document.addEventListener("DOMContentLoaded", () => {
     demoBtn.classList.add("active");
     liveBtn.classList.remove("active");
 
-    appendLogLine("DEMO MODE", "blue");
-
-    const mi = $("modeIndicator");
-
-    if (mi) {
-      mi.textContent = "JESAN 💲 MODE - DEMO";
-      mi.classList.add("demo");
-      mi.classList.remove("live");
-    }
-  };
-
-  liveBtn.onclick = () => {
-    account = "live";
-
-    liveBtn.classList.add("active");
-    demoBtn.classList.remove("active");
-
-    appendLogLine("LIVE MODE", "red");
-
-    const mi = $("modeIndicator");
-
-    if (mi) {
-      mi.textContent = "JESAN 💲 MODE - LIVE"; **…**
+    appendLogLine("DEMO MODE", "blue"); **…**
 
 _This response is too long to display in full._
