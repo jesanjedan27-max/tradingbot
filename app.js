@@ -164,6 +164,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // 5 = count the final X and enter before its last count digit
   let strategyStage = 0;
   let strategyCandidateY = null;
+  let strategyPendingY = null;
   let strategyCount = 0;
   let strategyTarget = 0;
 
@@ -298,6 +299,7 @@ document.addEventListener("DOMContentLoaded", () => {
     strategyCount = 0;
     strategyTarget = 0;
     strategyCandidateY = isStrategyY(seedDigit) ? seedDigit : null;
+    strategyPendingY = null;
   }
 
   function startStrategyCount(nextStage, countDigit) {
@@ -314,35 +316,78 @@ document.addEventListener("DOMContentLoaded", () => {
           strategyCandidateY !== null &&
           isStrategyX(digit)
         ) {
+          appendLogLine(
+            `Stage 1 started: ${strategyCandidateY},${digit} | count 1/${digit}`,
+            "#60a5fa"
+          );
+
           startStrategyCount(1, digit);
+        } else if (isStrategyY(digit)) {
+          appendLogLine(
+            `Y detected: ${digit} | waiting for X digit 3-9`,
+            "#60a5fa"
+          );
+
+          strategyCandidateY = digit;
         } else {
-          strategyCandidateY = isStrategyY(digit)
-            ? digit
-            : null;
+          if (strategyCandidateY !== null) {
+            appendLogLine(
+              `Y ${strategyCandidateY} followed by ${digit} | invalid X, scanning`,
+              "#f59e0b"
+            );
+          }
+
+          strategyCandidateY = null;
         }
         break;
 
       case 1:
         strategyCount += 1;
 
+        appendLogLine(
+          `Stage 1 count ${strategyCount}/${strategyTarget}: digit=${digit}`,
+          "#60a5fa"
+        );
+
         if (strategyCount < strategyTarget) {
           break;
         }
 
         if (!isStrategyY(digit)) {
+          appendLogLine(
+            `Stage 1 invalid: count ${strategyTarget} landed on ${digit}, expected 8 or 9 | scanning`,
+            "#f59e0b"
+          );
+
           resetStrategyScan(digit);
           break;
         }
 
+        strategyPendingY = digit;
         strategyStage = 2;
         strategyCount = 0;
         strategyTarget = 0;
+
+        appendLogLine(
+          `Stage 1 valid: landed on ${digit} | waiting for Stage 2 X digit`,
+          "#34d399"
+        );
         break;
 
       case 2:
         if (isStrategyX(digit)) {
+          appendLogLine(
+            `Stage 2 started: ${strategyPendingY},${digit} | count 1/${digit}`,
+            "#60a5fa"
+          );
+
           startStrategyCount(3, digit);
         } else {
+          appendLogLine(
+            `Stage 2 invalid: expected X digit 3-9, got ${digit} | scanning`,
+            "#f59e0b"
+          );
+
           resetStrategyScan(digit);
         }
         break;
@@ -350,24 +395,50 @@ document.addEventListener("DOMContentLoaded", () => {
       case 3:
         strategyCount += 1;
 
+        appendLogLine(
+          `Stage 2 count ${strategyCount}/${strategyTarget}: digit=${digit}`,
+          "#60a5fa"
+        );
+
         if (strategyCount < strategyTarget) {
           break;
         }
 
         if (!isStrategyY(digit)) {
+          appendLogLine(
+            `Stage 2 invalid: count ${strategyTarget} landed on ${digit}, expected 8 or 9 | scanning`,
+            "#f59e0b"
+          );
+
           resetStrategyScan(digit);
           break;
         }
 
+        strategyPendingY = digit;
         strategyStage = 4;
         strategyCount = 0;
         strategyTarget = 0;
+
+        appendLogLine(
+          `Stage 2 valid: landed on ${digit} | waiting for Stage 3 X digit`,
+          "#34d399"
+        );
         break;
 
       case 4:
         if (isStrategyX(digit)) {
+          appendLogLine(
+            `Stage 3 started: ${strategyPendingY},${digit} | count 1/${digit}`,
+            "#60a5fa"
+          );
+
           startStrategyCount(5, digit);
         } else {
+          appendLogLine(
+            `Stage 3 invalid: expected X digit 3-9, got ${digit} | scanning`,
+            "#f59e0b"
+          );
+
           resetStrategyScan(digit);
         }
         break;
@@ -375,11 +446,16 @@ document.addEventListener("DOMContentLoaded", () => {
       case 5:
         strategyCount += 1;
 
+        appendLogLine(
+          `Stage 3 count ${strategyCount}/${strategyTarget}: digit=${digit}`,
+          "#60a5fa"
+        );
+
         // The current digit is count X - 1. Submit now so the
         // one-tick contract settles on the final count X digit.
         if (strategyCount === strategyTarget - 1) {
           appendLogLine(
-            `Yx-Yx-Yx detected — placing DIGITUNDER 8 before count ${strategyTarget}`,
+            `Yx-Yx-Yx detected — placing DIGITUNDER 8 before final count ${strategyTarget}; next digit will be the result`,
             "lime"
           );
 
@@ -1117,55 +1193,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (balanceEl) {
       balanceEl.textContent = "-";
-    }
+    } **…**
 
-    appendLogLine("RESET DONE", "orange");
-  };
-
-  demoBtn.onclick = () => {
-    account = "demo";
-
-    demoBtn.classList.add("active");
-    liveBtn.classList.remove("active");
-
-    appendLogLine("DEMO MODE", "blue");
-
-    const mi = $("modeIndicator");
-
-    if (mi) {
-      mi.textContent = "JESAN 💲 MODE - DEMO";
-      mi.classList.add("demo");
-      mi.classList.remove("live");
-    }
-  };
-
-  liveBtn.onclick = () => {
-    account = "live";
-
-    liveBtn.classList.add("active");
-    demoBtn.classList.remove("active");
-
-    appendLogLine("LIVE MODE", "red");
-
-    const mi = $("modeIndicator");
-
-    if (mi) {
-      mi.textContent = "JESAN 💲 MODE - LIVE";
-      mi.classList.add("live");
-      mi.classList.remove("demo");
-    }
-  };
-
-  window.addEventListener("beforeunload", () => {
-    manualStop = true;
-
-    cancelReconnect();
-    stopHeartbeat();
-
-    if (ws) {
-      ws.close();
-    }
-
-    stopTickFlush();
-  });
-});
+_This response is too long to display in full._
