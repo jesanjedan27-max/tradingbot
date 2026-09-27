@@ -1,5 +1,5 @@
 // Deriv DigitUnder bot — rolling sequence strategy
-// Modified: immediate 8,9,9 / 9,8,8 trigger; one-tick DIGITUNDER 8 contract
+// Modified: immediate pre-final-count entry; one-tick DIGITUNDER 8 contract
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -155,10 +155,21 @@ document.addEventListener("DOMContentLoaded", () => {
   let prevDigit = null;
   let rollingPairCount = 0;
 
+  // Strategy state:
+  // 0 = scan for the first Yx pair
+  // 1 = count the first X
+  // 2 = wait for the second X
+  // 3 = count the second X
+  // 4 = wait for the third X
+  // 5 = count the final X and enter before its last count digit
+  let strategyStage = 0;
+  let strategyCandidateY = null;
+  let strategyCount = 0;
+  let strategyTarget = 0;
+
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
   const TICK_BATCH_LIMIT = 200;
-  const TARGET_SEQUENCES = new Set(["8,9,9", "9,8,8"]);
 
   let tickBuffer = [];
   let tickFlushTimer = null;
@@ -274,6 +285,115 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function isStrategyY(digit) {
+    return digit === 8 || digit === 9;
+  }
+
+  function isStrategyX(digit) {
+    return digit >= 3 && digit <= 9;
+  }
+
+  function resetStrategyScan(seedDigit = null) {
+    strategyStage = 0;
+    strategyCount = 0;
+    strategyTarget = 0;
+    strategyCandidateY = isStrategyY(seedDigit) ? seedDigit : null;
+  }
+
+  function startStrategyCount(nextStage, countDigit) {
+    strategyStage = nextStage;
+    strategyCount = 1;
+    strategyTarget = countDigit;
+    strategyCandidateY = null;
+  }
+
+  function processStrategyDigit(digit) {
+    switch (strategyStage) {
+      case 0:
+        if (
+          strategyCandidateY !== null &&
+          isStrategyX(digit)
+        ) {
+          startStrategyCount(1, digit);
+        } else {
+          strategyCandidateY = isStrategyY(digit)
+            ? digit
+            : null;
+        }
+        break;
+
+      case 1:
+        strategyCount += 1;
+
+        if (strategyCount < strategyTarget) {
+          break;
+        }
+
+        if (!isStrategyY(digit)) {
+          resetStrategyScan(digit);
+          break;
+        }
+
+        strategyStage = 2;
+        strategyCount = 0;
+        strategyTarget = 0;
+        break;
+
+      case 2:
+        if (isStrategyX(digit)) {
+          startStrategyCount(3, digit);
+        } else {
+          resetStrategyScan(digit);
+        }
+        break;
+
+      case 3:
+        strategyCount += 1;
+
+        if (strategyCount < strategyTarget) {
+          break;
+        }
+
+        if (!isStrategyY(digit)) {
+          resetStrategyScan(digit);
+          break;
+        }
+
+        strategyStage = 4;
+        strategyCount = 0;
+        strategyTarget = 0;
+        break;
+
+      case 4:
+        if (isStrategyX(digit)) {
+          startStrategyCount(5, digit);
+        } else {
+          resetStrategyScan(digit);
+        }
+        break;
+
+      case 5:
+        strategyCount += 1;
+
+        // The current digit is count X - 1. Submit now so the
+        // one-tick contract settles on the final count X digit.
+        if (strategyCount === strategyTarget - 1) {
+          appendLogLine(
+            `Yx-Yx-Yx detected — placing DIGITUNDER 8 before count ${strategyTarget}`,
+            "lime"
+          );
+
+          resetStrategyScan();
+          placeTrade(8);
+        }
+        break;
+
+      default:
+        resetStrategyScan(digit);
+        break;
+    }
+  }
+
   function stake() {
     return getBaseStake();
   }
@@ -288,6 +408,7 @@ document.addEventListener("DOMContentLoaded", () => {
     activeContractId = null;
     rollingPairCount = 0;
     rollingDigits.length = 0;
+    resetStrategyScan();
   }
 
   function resetToScan() {
@@ -404,6 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
     tickBuffer.length = 0;
     lastPayoutRatio = null;
     rollingDigits.length = 0;
+    resetStrategyScan();
 
     if (ws && ws.readyState === WebSocket.OPEN) {
       sendMessage({ forget_all: "ticks" });
@@ -530,7 +652,7 @@ document.addEventListener("DOMContentLoaded", () => {
     sendNextProposalVariant();
   }
 
-  // --- onTick: immediate rolling sequence trigger ---
+  // --- onTick: rolling Yx-Yx-Yx strategy trigger ---
   function onTick(price) {
     if (!running || paused) return;
 
@@ -558,25 +680,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    rollingDigits.push(d);
-
-    if (rollingDigits.length > 3) {
-      rollingDigits.shift();
-    }
-
-    if (rollingDigits.length === 3) {
-      const sequence = rollingDigits.join(",");
-
-      if (TARGET_SEQUENCES.has(sequence)) {
-        appendLogLine(
-          `Sequence ${sequence} detected — placing DIGITUNDER 8`,
-          "lime"
-        );
-
-        rollingDigits.length = 0;
-        placeTrade(8);
-      }
-    }
+    processStrategyDigit(d);
   }
 
   async function connect() {
@@ -869,18 +973,13 @@ document.addEventListener("DOMContentLoaded", () => {
                       ? ` (digit=${resultDigit})`
                       : "") +
                     (wonAfterLoss
-                      ? ` | market stopped and reset` +
-                        ` | fresh scan will use ${baseStake.toFixed(2)}`
+                      ? ` | fresh scan will use ${baseStake.toFixed(2)}`
                       : ""),
                   "lime"
                 );
 
-                if (wonAfterLoss) {
-                  restartMarketAfterStakeReset(baseStake);
-                } else {
-                  setActiveBaseStake(baseStake);
-                  resetToScan();
-                }
+                setActiveBaseStake(baseStake);
+                resetToScan();
 
               } else {
                 recoveryLoss += Math.abs(pnl);
@@ -896,12 +995,14 @@ document.addEventListener("DOMContentLoaded", () => {
                     (resultDigit !== null
                       ? ` (digit=${resultDigit})`
                       : "") +
-                    ` | market stopped and reset` +
+                    ` | continuing market` +
                     ` | fresh scan will use ${nextStake.toFixed(2)}`,
                   "red"
                 );
 
-                restartMarketAfterStakeReset(nextStake);
+                setActiveBaseStake(nextStake);
+                currentStake = 0;
+                resetToScan();
               }
 
               if (levelEl) {
