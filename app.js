@@ -104,27 +104,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let account = "demo";
   demoBtn.classList.add("active");
 
-  let marketSelect = $("marketSelect");
-
-  if (!marketSelect) {
-    marketSelect = document.createElement("select");
-    marketSelect.id = "marketSelect";
-    marketSelect.setAttribute("aria-label", "Volatility market");
-
-    const marketLabel = document.createElement("label");
-    marketLabel.htmlFor = "marketSelect";
-    marketLabel.textContent = "Volatility market";
-
-    const marketContainer =
-      $("controls") ||
-      $("settings") ||
-      $("topBar") ||
-      document.body;
-
-    marketContainer.appendChild(marketLabel);
-    marketContainer.appendChild(marketSelect);
-  }
-
+  const marketSelect = $("marketSelect");
   marketSelect.innerHTML = "";
 
   MARKETS.forEach(m => {
@@ -186,7 +166,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let strategyCandidateY = null;
   let strategyCount = 0;
   let strategyTarget = 0;
-  let pendingFinalCount = null;
 
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
@@ -219,18 +198,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
       tickBuffer
         .splice(0, TICK_BATCH_LIMIT)
-        .forEach(entry => {
+        .forEach(({ price, digit }) => {
           const row = document.createElement("div");
-
-          if (entry.kind === "message") {
-            row.style.color = entry.color || "#fff";
-            row.textContent = entry.message;
-          } else {
-            row.style.color = "#7dd3fc";
-            row.textContent =
-              `Tick ${Number(entry.price).toFixed(decimalsForSymbol(symbol))} → ${entry.digit}${entry.suffix || ""}`;
-          }
-
+          row.style.color = "#7dd3fc";
+          row.textContent =
+            `Tick ${Number(price).toFixed(decimalsForSymbol(symbol))} → ${digit}`;
           fragment.appendChild(row);
         });
 
@@ -326,7 +298,6 @@ document.addEventListener("DOMContentLoaded", () => {
     strategyCount = 0;
     strategyTarget = 0;
     strategyCandidateY = isStrategyY(seedDigit) ? seedDigit : null;
-    pendingFinalCount = null;
   }
 
   function startStrategyCount(nextStage, countDigit) {
@@ -336,15 +307,7 @@ document.addEventListener("DOMContentLoaded", () => {
     strategyCandidateY = null;
   }
 
-  function queueStrategyMessage(message, color = "#fff") {
-    tickBuffer.push({
-      kind: "message",
-      message,
-      color
-    });
-  }
-
-  function processStrategyDigit(digit, tickEntry) {
+  function processStrategyDigit(digit) {
     switch (strategyStage) {
       case 0:
         if (
@@ -371,7 +334,6 @@ document.addEventListener("DOMContentLoaded", () => {
           break;
         }
 
-        tickEntry.suffix = "(y)";
         strategyStage = 2;
         strategyCount = 0;
         strategyTarget = 0;
@@ -379,7 +341,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
       case 2:
         if (isStrategyX(digit)) {
-          tickEntry.suffix = "(x)_1";
           startStrategyCount(3, digit);
         } else {
           resetStrategyScan(digit);
@@ -388,7 +349,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
       case 3:
         strategyCount += 1;
-        tickEntry.suffix = `_${strategyCount}`;
 
         if (strategyCount < strategyTarget) {
           break;
@@ -399,7 +359,6 @@ document.addEventListener("DOMContentLoaded", () => {
           break;
         }
 
-        tickEntry.suffix = `(y)_${strategyCount}`;
         strategyStage = 4;
         strategyCount = 0;
         strategyTarget = 0;
@@ -407,7 +366,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
       case 4:
         if (isStrategyX(digit)) {
-          tickEntry.suffix = "(x)_1";
           startStrategyCount(5, digit);
         } else {
           resetStrategyScan(digit);
@@ -416,21 +374,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
       case 5:
         strategyCount += 1;
-        tickEntry.suffix = `_${strategyCount}`;
 
         // The current digit is count X - 1. Submit now so the
         // one-tick contract settles on the final count X digit.
         if (strategyCount === strategyTarget - 1) {
-          const finalCount = strategyTarget;
-
-          queueStrategyMessage(
-            "execute digit under 8",
+          appendLogLine(
+            `Yx-Yx-Yx detected — placing DIGITUNDER 8 before count ${strategyTarget}`,
             "lime"
           );
 
-          pendingFinalCount = finalCount;
           resetStrategyScan();
-          pendingFinalCount = finalCount;
           placeTrade(8);
         }
         break;
@@ -439,15 +392,6 @@ document.addEventListener("DOMContentLoaded", () => {
         resetStrategyScan(digit);
         break;
     }
-  }
-
-  function annotateSettlementTick(tickEntry) {
-    if (pendingFinalCount === null) {
-      return;
-    }
-
-    tickEntry.suffix = `_${pendingFinalCount}`;
-    pendingFinalCount = null;
   }
 
   function stake() {
@@ -724,19 +668,11 @@ document.addEventListener("DOMContentLoaded", () => {
       lastDigitEl.textContent = d;
     }
 
-    const tickEntry = {
-      kind: "tick",
-      price,
-      digit: d,
-      suffix: ""
-    };
-
-    tickBuffer.push(tickEntry);
+    tickBuffer.push({ price, digit: d });
 
     if (captureNextTick) {
       settlementDigit = d;
       captureNextTick = false;
-      annotateSettlementTick(tickEntry);
     }
 
     // If a proposal or trade is active, ignore new triggers
@@ -744,7 +680,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    processStrategyDigit(d, tickEntry);
+    processStrategyDigit(d);
   }
 
   async function connect() {
@@ -1192,6 +1128,44 @@ document.addEventListener("DOMContentLoaded", () => {
     demoBtn.classList.add("active");
     liveBtn.classList.remove("active");
 
-    appendLogLine("DEMO MODE", "blue"); **…**
+    appendLogLine("DEMO MODE", "blue");
 
-_This response is too long to display in full._
+    const mi = $("modeIndicator");
+
+    if (mi) {
+      mi.textContent = "JESAN 💲 MODE - DEMO";
+      mi.classList.add("demo");
+      mi.classList.remove("live");
+    }
+  };
+
+  liveBtn.onclick = () => {
+    account = "live";
+
+    liveBtn.classList.add("active");
+    demoBtn.classList.remove("active");
+
+    appendLogLine("LIVE MODE", "red");
+
+    const mi = $("modeIndicator");
+
+    if (mi) {
+      mi.textContent = "JESAN 💲 MODE - LIVE";
+      mi.classList.add("live");
+      mi.classList.remove("demo");
+    }
+  };
+
+  window.addEventListener("beforeunload", () => {
+    manualStop = true;
+
+    cancelReconnect();
+    stopHeartbeat();
+
+    if (ws) {
+      ws.close();
+    }
+
+    stopTickFlush();
+  });
+});
