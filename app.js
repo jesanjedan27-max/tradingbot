@@ -164,9 +164,9 @@ document.addEventListener("DOMContentLoaded", () => {
   // 5 = count the final X and enter before its last count digit
   let strategyStage = 0;
   let strategyCandidateY = null;
-  let strategyPendingY = null;
   let strategyCount = 0;
   let strategyTarget = 0;
+  let pendingFinalCount = null;
 
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
@@ -199,11 +199,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
       tickBuffer
         .splice(0, TICK_BATCH_LIMIT)
-        .forEach(({ price, digit }) => {
+        .forEach(entry => {
           const row = document.createElement("div");
-          row.style.color = "#7dd3fc";
-          row.textContent =
-            `Tick ${Number(price).toFixed(decimalsForSymbol(symbol))} → ${digit}`;
+
+          if (entry.kind === "message") {
+            row.style.color = entry.color || "#fff";
+            row.textContent = entry.message;
+          } else {
+            row.style.color = "#7dd3fc";
+            row.textContent =
+              `Tick ${Number(entry.price).toFixed(decimalsForSymbol(symbol))} → ${entry.digit}${entry.suffix || ""}`;
+          }
+
           fragment.appendChild(row);
         });
 
@@ -299,7 +306,7 @@ document.addEventListener("DOMContentLoaded", () => {
     strategyCount = 0;
     strategyTarget = 0;
     strategyCandidateY = isStrategyY(seedDigit) ? seedDigit : null;
-    strategyPendingY = null;
+    pendingFinalCount = null;
   }
 
   function startStrategyCount(nextStage, countDigit) {
@@ -309,157 +316,101 @@ document.addEventListener("DOMContentLoaded", () => {
     strategyCandidateY = null;
   }
 
-  function processStrategyDigit(digit) {
+  function queueStrategyMessage(message, color = "#fff") {
+    tickBuffer.push({
+      kind: "message",
+      message,
+      color
+    });
+  }
+
+  function processStrategyDigit(digit, tickEntry) {
     switch (strategyStage) {
       case 0:
         if (
           strategyCandidateY !== null &&
           isStrategyX(digit)
         ) {
-          appendLogLine(
-            `Stage 1 started: ${strategyCandidateY},${digit} | count 1/${digit}`,
-            "#60a5fa"
-          );
-
           startStrategyCount(1, digit);
-        } else if (isStrategyY(digit)) {
-          appendLogLine(
-            `Y detected: ${digit} | waiting for X digit 3-9`,
-            "#60a5fa"
-          );
-
-          strategyCandidateY = digit;
         } else {
-          if (strategyCandidateY !== null) {
-            appendLogLine(
-              `Y ${strategyCandidateY} followed by ${digit} | invalid X, scanning`,
-              "#f59e0b"
-            );
-          }
-
-          strategyCandidateY = null;
+          strategyCandidateY = isStrategyY(digit)
+            ? digit
+            : null;
         }
         break;
 
       case 1:
         strategyCount += 1;
 
-        appendLogLine(
-          `Stage 1 count ${strategyCount}/${strategyTarget}: digit=${digit}`,
-          "#60a5fa"
-        );
-
         if (strategyCount < strategyTarget) {
           break;
         }
 
         if (!isStrategyY(digit)) {
-          appendLogLine(
-            `Stage 1 invalid: count ${strategyTarget} landed on ${digit}, expected 8 or 9 | scanning`,
-            "#f59e0b"
-          );
-
           resetStrategyScan(digit);
           break;
         }
 
-        strategyPendingY = digit;
+        tickEntry.suffix = "(y)";
         strategyStage = 2;
         strategyCount = 0;
         strategyTarget = 0;
-
-        appendLogLine(
-          `Stage 1 valid: landed on ${digit} | waiting for Stage 2 X digit`,
-          "#34d399"
-        );
         break;
 
       case 2:
         if (isStrategyX(digit)) {
-          appendLogLine(
-            `Stage 2 started: ${strategyPendingY},${digit} | count 1/${digit}`,
-            "#60a5fa"
-          );
-
+          tickEntry.suffix = "(x)_1";
           startStrategyCount(3, digit);
         } else {
-          appendLogLine(
-            `Stage 2 invalid: expected X digit 3-9, got ${digit} | scanning`,
-            "#f59e0b"
-          );
-
           resetStrategyScan(digit);
         }
         break;
 
       case 3:
         strategyCount += 1;
-
-        appendLogLine(
-          `Stage 2 count ${strategyCount}/${strategyTarget}: digit=${digit}`,
-          "#60a5fa"
-        );
+        tickEntry.suffix = `_${strategyCount}`;
 
         if (strategyCount < strategyTarget) {
           break;
         }
 
         if (!isStrategyY(digit)) {
-          appendLogLine(
-            `Stage 2 invalid: count ${strategyTarget} landed on ${digit}, expected 8 or 9 | scanning`,
-            "#f59e0b"
-          );
-
           resetStrategyScan(digit);
           break;
         }
 
-        strategyPendingY = digit;
+        tickEntry.suffix = `(y)_${strategyCount}`;
         strategyStage = 4;
         strategyCount = 0;
         strategyTarget = 0;
-
-        appendLogLine(
-          `Stage 2 valid: landed on ${digit} | waiting for Stage 3 X digit`,
-          "#34d399"
-        );
         break;
 
       case 4:
         if (isStrategyX(digit)) {
-          appendLogLine(
-            `Stage 3 started: ${strategyPendingY},${digit} | count 1/${digit}`,
-            "#60a5fa"
-          );
-
+          tickEntry.suffix = "(x)_1";
           startStrategyCount(5, digit);
         } else {
-          appendLogLine(
-            `Stage 3 invalid: expected X digit 3-9, got ${digit} | scanning`,
-            "#f59e0b"
-          );
-
           resetStrategyScan(digit);
         }
         break;
 
       case 5:
         strategyCount += 1;
-
-        appendLogLine(
-          `Stage 3 count ${strategyCount}/${strategyTarget}: digit=${digit}`,
-          "#60a5fa"
-        );
+        tickEntry.suffix = `_${strategyCount}`;
 
         // The current digit is count X - 1. Submit now so the
         // one-tick contract settles on the final count X digit.
         if (strategyCount === strategyTarget - 1) {
-          appendLogLine(
-            `Yx-Yx-Yx detected — placing DIGITUNDER 8 before final count ${strategyTarget}; next digit will be the result`,
+          const finalCount = strategyTarget;
+
+          queueStrategyMessage(
+            "execute digit under 8",
             "lime"
           );
 
+          pendingFinalCount = finalCount;
           resetStrategyScan();
+          pendingFinalCount = finalCount;
           placeTrade(8);
         }
         break;
@@ -468,6 +419,15 @@ document.addEventListener("DOMContentLoaded", () => {
         resetStrategyScan(digit);
         break;
     }
+  }
+
+  function annotateSettlementTick(tickEntry) {
+    if (pendingFinalCount === null) {
+      return;
+    }
+
+    tickEntry.suffix = `_${pendingFinalCount}`;
+    pendingFinalCount = null;
   }
 
   function stake() {
@@ -744,11 +704,19 @@ document.addEventListener("DOMContentLoaded", () => {
       lastDigitEl.textContent = d;
     }
 
-    tickBuffer.push({ price, digit: d });
+    const tickEntry = {
+      kind: "tick",
+      price,
+      digit: d,
+      suffix: ""
+    };
+
+    tickBuffer.push(tickEntry);
 
     if (captureNextTick) {
       settlementDigit = d;
       captureNextTick = false;
+      annotateSettlementTick(tickEntry);
     }
 
     // If a proposal or trade is active, ignore new triggers
@@ -756,7 +724,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    processStrategyDigit(d);
+    processStrategyDigit(d, tickEntry);
   }
 
   async function connect() {
@@ -1193,6 +1161,39 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (balanceEl) {
       balanceEl.textContent = "-";
-    } **…**
+    }
+
+    appendLogLine("RESET DONE", "orange");
+  };
+
+  demoBtn.onclick = () => {
+    account = "demo";
+
+    demoBtn.classList.add("active");
+    liveBtn.classList.remove("active");
+
+    appendLogLine("DEMO MODE", "blue");
+
+    const mi = $("modeIndicator");
+
+    if (mi) {
+      mi.textContent = "JESAN 💲 MODE - DEMO";
+      mi.classList.add("demo");
+      mi.classList.remove("live");
+    }
+  };
+
+  liveBtn.onclick = () => {
+    account = "live";
+
+    liveBtn.classList.add("active");
+    demoBtn.classList.remove("active");
+
+    appendLogLine("LIVE MODE", "red");
+
+    const mi = $("modeIndicator");
+
+    if (mi) {
+      mi.textContent = "JESAN 💲 MODE - LIVE"; **…**
 
 _This response is too long to display in full._
