@@ -1,5 +1,5 @@
 // Deriv DigitUnder bot — rolling sequence strategy
-// Modified: repeated fixed YX confirmations; one-tick DIGITUNDER 8 contract
+// Modified: one YX confirmation, then one-tick DIGITUNDER 8 contract
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -147,12 +147,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Strategy state:
   // 0 = scan for the first Yx pair
-  // 1 = count the first X sequence
+  // 1 = count the first X sequence and confirm it ends on Y
   // 2 = search for the same Yx pair again
-  // 3 = count the second X sequence
-  // 4 = search for the same Yx pair a third time
-  // 5 = count the final X sequence and enter before its last count digit
-  // 6 = after a loss, search for the same Yx pair as the new starting pair
+  // 3 = count the second X sequence and enter before its last count digit
   let strategyStage = 0;
   let strategyCandidateY = null;
   let strategyY = null;
@@ -304,25 +301,18 @@ document.addEventListener("DOMContentLoaded", () => {
     strategyCandidateY = null;
   }
 
-  function startRepeatedPairSearch(nextStage) {
-    strategyStage = nextStage;
-    strategyCandidateY = null;
+  function startRepeatedPairSearch(seedDigit = null) {
+    strategyStage = 2;
+    strategyCandidateY = seedDigit === strategyY ? strategyY : null;
     strategyCount = 0;
     strategyTarget = 0;
   }
 
-  function startRepeatedPairCount(nextStage) {
-    strategyStage = nextStage;
+  function startRepeatedPairCount() {
+    strategyStage = 3;
     strategyCandidateY = null;
     strategyCount = 1;
     strategyTarget = strategyX;
-  }
-
-  function resetStrategyForRecovery() {
-    strategyStage = 6;
-    strategyCandidateY = null;
-    strategyCount = 0;
-    strategyTarget = 0;
   }
 
   function processStrategyDigit(digit) {
@@ -333,10 +323,10 @@ document.addEventListener("DOMContentLoaded", () => {
           isStrategyX(digit)
         ) {
           startInitialStrategyCount(strategyCandidateY, digit);
-        } else if (isStrategyY(digit)) {
-          strategyCandidateY = digit;
         } else {
-          strategyCandidateY = null;
+          strategyCandidateY = isStrategyY(digit)
+            ? digit
+            : null;
         }
         break;
 
@@ -352,7 +342,7 @@ document.addEventListener("DOMContentLoaded", () => {
           break;
         }
 
-        startRepeatedPairSearch(2);
+        startRepeatedPairSearch(digit);
         break;
 
       case 2:
@@ -360,67 +350,27 @@ document.addEventListener("DOMContentLoaded", () => {
           strategyCandidateY !== null &&
           digit === strategyX
         ) {
-          startRepeatedPairCount(3);
-        } else if (digit === strategyY) {
-          strategyCandidateY = strategyY;
+          startRepeatedPairCount();
         } else {
-          strategyCandidateY = null;
+          strategyCandidateY =
+            digit === strategyY
+              ? strategyY
+              : null;
         }
         break;
 
       case 3:
         strategyCount += 1;
 
-        if (strategyCount < strategyTarget) {
-          break;
-        }
-
-        if (!isStrategyY(digit)) {
-          resetStrategyScan(digit);
-          break;
-        }
-
-        startRepeatedPairSearch(4);
-        break;
-
-      case 4:
-        if (
-          strategyCandidateY !== null &&
-          digit === strategyX
-        ) {
-          startRepeatedPairCount(5);
-        } else if (digit === strategyY) {
-          strategyCandidateY = strategyY;
-        } else {
-          strategyCandidateY = null;
-        }
-        break;
-
-      case 5:
-        strategyCount += 1;
-
         // Enter immediately before the final counted X digit.
         if (strategyCount === strategyTarget - 1) {
           appendLogLine(
-            `Yx-Yx-Yx confirmed with (${strategyY},${strategyX}) — placing DIGITUNDER 8 before count ${strategyTarget}`,
+            `Yx-Yx confirmed with (${strategyY},${strategyX}) — placing DIGITUNDER 8 before count ${strategyTarget}`,
             "lime"
           );
 
           resetStrategyScan();
           placeTrade(8);
-        }
-        break;
-
-      case 6:
-        if (
-          strategyCandidateY !== null &&
-          digit === strategyX
-        ) {
-          startRepeatedPairCount(1);
-        } else if (digit === strategyY) {
-          strategyCandidateY = strategyY;
-        } else {
-          strategyCandidateY = null;
         }
         break;
 
@@ -434,7 +384,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return getBaseStake();
   }
 
-  function clearContractState(preserveStrategyPair = false) {
+  function clearContractState() {
     settlementDigit = null;
     captureNextTick = false;
     tradeInFlight = false;
@@ -444,16 +394,11 @@ document.addEventListener("DOMContentLoaded", () => {
     activeContractId = null;
     rollingPairCount = 0;
     rollingDigits.length = 0;
-
-    if (preserveStrategyPair) {
-      resetStrategyForRecovery();
-    } else {
-      resetStrategyScan();
-    }
+    resetStrategyScan();
   }
 
-  function resetToScan(preserveStrategyPair = false) {
-    clearContractState(preserveStrategyPair);
+  function resetToScan() {
+    clearContractState();
     phase = "scan";
     chainId = null;
     prevDigit = null;
@@ -715,6 +660,7 @@ document.addEventListener("DOMContentLoaded", () => {
       captureNextTick = false;
     }
 
+    // If a proposal or trade is active, ignore new triggers
     if (waitingProposal || tradeInFlight || activeContractId) {
       return;
     }
@@ -1034,14 +980,14 @@ document.addEventListener("DOMContentLoaded", () => {
                     (resultDigit !== null
                       ? ` (digit=${resultDigit})`
                       : "") +
-                    ` | continuing same (${strategyY},${strategyX}) search` +
+                    ` | starting a fresh strategy search` +
                     ` | fresh scan will use ${nextStake.toFixed(2)}`,
                   "red"
                 );
 
                 setActiveBaseStake(nextStake);
                 currentStake = 0;
-                resetToScan(true);
+                resetToScan();
               }
 
               if (levelEl) {
