@@ -156,16 +156,19 @@ document.addEventListener("DOMContentLoaded", () => {
   let rollingPairCount = 0;
 
   // Strategy state:
-  // 0 = scan for the first Yx pair
-  // 1 = count the first X
-  // 2 = wait for the second X
-  // 3 = count the second X
-  // 4 = wait for the third X
-  // 5 = count the final X and enter before its last count digit
+  // 0 = find the initial Yx pair and lock its exact Y and X digits
+  // 1 = count X ticks; the last digit must be 8 or 9
+  // 2 = find the same Yx pair for confirmation 2
+  // 3 = count X ticks; the last digit must be 8 or 9
+  // 4 = find the same Yx pair for the trade
+  // 5 = count X ticks and enter before the final count tick
+  // 6 = a trade is being attempted
   let strategyStage = 0;
   let strategyCandidateY = null;
   let strategyCount = 0;
   let strategyTarget = 0;
+  let strategyPairY = null;
+  let strategyPairX = null;
 
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
@@ -293,18 +296,56 @@ document.addEventListener("DOMContentLoaded", () => {
     return digit >= 3 && digit <= 9;
   }
 
-  function resetStrategyScan(seedDigit = null) {
+  function resetStrategyScan() {
     strategyStage = 0;
     strategyCount = 0;
     strategyTarget = 0;
-    strategyCandidateY = isStrategyY(seedDigit) ? seedDigit : null;
+    strategyCandidateY = null;
+    strategyPairY = null;
+    strategyPairX = null;
   }
 
-  function startStrategyCount(nextStage, countDigit) {
+  function startStrategyCount(nextStage, countDigit, startY = null) {
     strategyStage = nextStage;
     strategyCount = 1;
     strategyTarget = countDigit;
     strategyCandidateY = null;
+
+    if (nextStage === 1) {
+      strategyPairY = startY;
+      strategyPairX = countDigit;
+    }
+  }
+
+  function findPinnedStrategyPair(digit, nextStage) {
+    if (
+      strategyCandidateY === strategyPairY &&
+      digit === strategyPairX
+    ) {
+      startStrategyCount(nextStage, strategyPairX);
+      return;
+    }
+
+    strategyCandidateY =
+      digit === strategyPairY
+        ? digit
+        : null;
+  }
+
+  function restartPinnedStrategy(pairY, pairX) {
+    if (!isStrategyY(pairY) || !isStrategyX(pairX)) {
+      resetStrategyScan();
+      return;
+    }
+
+    // After a loss, repeat the two confirmations and trade using the same
+    // exact Y/X pair, but only look at ticks after the settlement tick.
+    strategyStage = 2;
+    strategyCandidateY = null;
+    strategyCount = 0;
+    strategyTarget = 0;
+    strategyPairY = pairY;
+    strategyPairX = pairX;
   }
 
   function processStrategyDigit(digit) {
@@ -314,7 +355,7 @@ document.addEventListener("DOMContentLoaded", () => {
           strategyCandidateY !== null &&
           isStrategyX(digit)
         ) {
-          startStrategyCount(1, digit);
+          startStrategyCount(1, digit, strategyCandidateY);
         } else {
           strategyCandidateY = isStrategyY(digit)
             ? digit
@@ -330,21 +371,18 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         if (!isStrategyY(digit)) {
-          resetStrategyScan(digit);
+          resetStrategyScan();
           break;
         }
 
         strategyStage = 2;
         strategyCount = 0;
         strategyTarget = 0;
+        strategyCandidateY = null;
         break;
 
       case 2:
-        if (isStrategyX(digit)) {
-          startStrategyCount(3, digit);
-        } else {
-          resetStrategyScan(digit);
-        }
+        findPinnedStrategyPair(digit, 3);
         break;
 
       case 3:
@@ -355,21 +393,18 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         if (!isStrategyY(digit)) {
-          resetStrategyScan(digit);
+          resetStrategyScan();
           break;
         }
 
         strategyStage = 4;
         strategyCount = 0;
         strategyTarget = 0;
+        strategyCandidateY = null;
         break;
 
       case 4:
-        if (isStrategyX(digit)) {
-          startStrategyCount(5, digit);
-        } else {
-          resetStrategyScan(digit);
-        }
+        findPinnedStrategyPair(digit, 5);
         break;
 
       case 5:
@@ -379,17 +414,21 @@ document.addEventListener("DOMContentLoaded", () => {
         // one-tick contract settles on the final count X digit.
         if (strategyCount === strategyTarget - 1) {
           appendLogLine(
-            `Yx-Yx-Yx detected — placing DIGITUNDER 8 before count ${strategyTarget}`,
+            `Same Yx pair confirmed twice — placing DIGITUNDER 8 before count ${strategyTarget}`,
             "lime"
           );
 
-          resetStrategyScan();
+          strategyStage = 6;
           placeTrade(8);
         }
         break;
 
+      case 6:
+        // Keep the locked pair while a proposal or contract is in progress.
+        break;
+
       default:
-        resetStrategyScan(digit);
+        resetStrategyScan();
         break;
     }
   }
@@ -626,6 +665,7 @@ document.addEventListener("DOMContentLoaded", () => {
       waitingProposal = false;
       proposalVariants = null;
       proposalAttempt = 0;
+      restartPinnedStrategy(strategyPairY, strategyPairX);
 
       return;
     }
@@ -814,6 +854,10 @@ document.addEventListener("DOMContentLoaded", () => {
             waitingProposal = false;
             proposalVariants = null;
             proposalAttempt = 0;
+
+            if (strategyStage === 6) {
+              restartPinnedStrategy(strategyPairY, strategyPairX);
+            }
           }
 
           return;
@@ -876,6 +920,7 @@ document.addEventListener("DOMContentLoaded", () => {
               );
 
               tradeInFlight = false;
+              restartPinnedStrategy(strategyPairY, strategyPairX);
               break;
             }
 
@@ -904,6 +949,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             if (!activeContractId) {
               tradeInFlight = false;
+              restartPinnedStrategy(strategyPairY, strategyPairX);
               break;
             }
 
@@ -982,6 +1028,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 resetToScan();
 
               } else {
+                const retryPairY = strategyPairY;
+                const retryPairX = strategyPairX;
                 recoveryLoss += Math.abs(pnl);
                 const stakeSequence = getStakeSequence();
 
@@ -991,18 +1039,19 @@ document.addEventListener("DOMContentLoaded", () => {
                 const nextStake = stakeSequence[stakeIndex];
 
                 appendLogLine(
-                  `LOSS ${pnl.toFixed(2)} | next base stake=${nextStake.toFixed(2)}` +
+                  `LOSS ${pnl.toFixed(2)}` +
                     (resultDigit !== null
                       ? ` (digit=${resultDigit})`
                       : "") +
-                    ` | continuing market` +
-                    ` | fresh scan will use ${nextStake.toFixed(2)}`,
+                    ` | retrying (${retryPairY},${retryPairX}) pattern` +
+                    ` | next stake=${nextStake.toFixed(2)}`,
                   "red"
                 );
 
                 setActiveBaseStake(nextStake);
                 currentStake = 0;
                 resetToScan();
+                restartPinnedStrategy(retryPairY, retryPairX);
               }
 
               if (levelEl) {
@@ -1145,27 +1194,6 @@ document.addEventListener("DOMContentLoaded", () => {
     liveBtn.classList.add("active");
     demoBtn.classList.remove("active");
 
-    appendLogLine("LIVE MODE", "red");
+    appendLogLine("LIVE MODE", "red"); **…**
 
-    const mi = $("modeIndicator");
-
-    if (mi) {
-      mi.textContent = "JESAN 💲 MODE - LIVE";
-      mi.classList.add("live");
-      mi.classList.remove("demo");
-    }
-  };
-
-  window.addEventListener("beforeunload", () => {
-    manualStop = true;
-
-    cancelReconnect();
-    stopHeartbeat();
-
-    if (ws) {
-      ws.close();
-    }
-
-    stopTickFlush();
-  });
-});
+_This response is too long to display in full._
