@@ -73,7 +73,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const DIGIT_CONTRACT_DURATION_TICKS = 1;
 
   const STAKE_LADDER_TEMPLATE = [
-    0.35, 0.40, 0.80, 1.65, 3.40, 7.00, 14.50, 30.00
+    0.35, 0.45, 0.85, 1.70, 3.45, 7.05, 14.55, 30.05
   ];
 
   let symbol = "R_100";
