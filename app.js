@@ -1,5 +1,5 @@
 // Deriv DigitEven/Odd bot — consecutive matching digit strategy
-// Modified: immediate one-tick DIGITEVEN or DIGITODD contract
+// Modified: trade opposite parity with a one-tick contract
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -278,8 +278,8 @@ document.addEventListener("DOMContentLoaded", () => {
     ) {
       const contractType =
         digit % 2 === 0
-          ? "DIGITEVEN"
-          : "DIGITODD";
+          ? "DIGITODD"
+          : "DIGITEVEN";
 
       appendLogLine(
         `Pair ${digit},${digit} detected — placing ${contractType}`,
