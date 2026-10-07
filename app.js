@@ -1,5 +1,5 @@
-// Deriv DigitUnder bot — rolling sequence strategy
-// Modified: one YX confirmation, then one-tick DIGITUNDER 8 contract
+// Deriv DigitEven/Odd bot — consecutive matching digit strategy
+// Modified: immediate one-tick DIGITEVEN or DIGITODD contract
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -70,9 +70,11 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   const DEFAULT_PAYOUT_RATIO = 1.09;
-  const DIGITUNDER_DURATION_TICKS = 1;
+  const DIGIT_CONTRACT_DURATION_TICKS = 1;
 
-  const STAKE_LADDER_TEMPLATE = [0.35, 2.00, 9.50];
+  const STAKE_LADDER_TEMPLATE = [
+    0.35, 0.40, 0.80, 1.65, 3.40, 7.00, 14.50, 30.00
+  ];
 
   let symbol = "R_100";
   const symbolDecimals = {};
@@ -145,17 +147,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let prevDigit = null;
   let rollingPairCount = 0;
 
-  // Strategy state:
-  // 0 = scan for the first Yx pair
-  // 1 = count the first X sequence and confirm it ends on Y
-  // 2 = search for the same Yx pair again
-  // 3 = count the second X sequence and enter before its last count digit
-  let strategyStage = 0;
-  let strategyCandidateY = null;
-  let strategyY = null;
-  let strategyX = null;
-  let strategyCount = 0;
-  let strategyTarget = 0;
+  let previousStrategyDigit = null;
 
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
@@ -275,109 +267,31 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function isStrategyY(digit) {
-    return digit === 8 || digit === 9;
-  }
-
-  function isStrategyX(digit) {
-    return digit >= 3 && digit <= 9;
-  }
-
-  function resetStrategyScan(seedDigit = null) {
-    strategyStage = 0;
-    strategyCandidateY = isStrategyY(seedDigit) ? seedDigit : null;
-    strategyY = null;
-    strategyX = null;
-    strategyCount = 0;
-    strategyTarget = 0;
-  }
-
-  function startInitialStrategyCount(yDigit, xDigit) {
-    strategyY = yDigit;
-    strategyX = xDigit;
-    strategyStage = 1;
-    strategyCount = 1;
-    strategyTarget = xDigit;
-    strategyCandidateY = null;
-  }
-
-  function startRepeatedPairSearch(seedDigit = null) {
-    strategyStage = 2;
-    strategyCandidateY = seedDigit === strategyY ? strategyY : null;
-    strategyCount = 0;
-    strategyTarget = 0;
-  }
-
-  function startRepeatedPairCount() {
-    strategyStage = 3;
-    strategyCandidateY = null;
-    strategyCount = 1;
-    strategyTarget = strategyX;
+  function resetStrategyScan() {
+    previousStrategyDigit = null;
   }
 
   function processStrategyDigit(digit) {
-    switch (strategyStage) {
-      case 0:
-        if (
-          strategyCandidateY !== null &&
-          isStrategyX(digit)
-        ) {
-          startInitialStrategyCount(strategyCandidateY, digit);
-        } else {
-          strategyCandidateY = isStrategyY(digit)
-            ? digit
-            : null;
-        }
-        break;
+    if (
+      previousStrategyDigit !== null &&
+      digit === previousStrategyDigit
+    ) {
+      const contractType =
+        digit % 2 === 0
+          ? "DIGITEVEN"
+          : "DIGITODD";
 
-      case 1:
-        strategyCount += 1;
+      appendLogLine(
+        `Pair ${digit},${digit} detected — placing ${contractType}`,
+        "lime"
+      );
 
-        if (strategyCount < strategyTarget) {
-          break;
-        }
-
-        if (!isStrategyY(digit)) {
-          resetStrategyScan(digit);
-          break;
-        }
-
-        startRepeatedPairSearch(digit);
-        break;
-
-      case 2:
-        if (
-          strategyCandidateY !== null &&
-          digit === strategyX
-        ) {
-          startRepeatedPairCount();
-        } else {
-          strategyCandidateY =
-            digit === strategyY
-              ? strategyY
-              : null;
-        }
-        break;
-
-      case 3:
-        strategyCount += 1;
-
-        // Enter immediately before the final counted X digit.
-        if (strategyCount === strategyTarget - 1) {
-          appendLogLine(
-            `Yx-Yx confirmed with (${strategyY},${strategyX}) — placing DIGITUNDER 8 before count ${strategyTarget}`,
-            "lime"
-          );
-
-          resetStrategyScan();
-          placeTrade(8);
-        }
-        break;
-
-      default:
-        resetStrategyScan(digit);
-        break;
+      resetStrategyScan();
+      placeTrade(contractType);
+      return;
     }
+
+    previousStrategyDigit = digit;
   }
 
   function stake() {
@@ -536,18 +450,17 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function buildProposalVariants(barrier) {
+  function buildProposalVariants(contractType) {
     const amount = stake();
 
     const base = {
       proposal: 1,
-      contract_type: "DIGITUNDER",
+      contract_type: contractType,
       currency: "USD",
       amount,
       basis: "stake",
-      duration: DIGITUNDER_DURATION_TICKS,
-      duration_unit: "t",
-      barrier
+      duration: DIGIT_CONTRACT_DURATION_TICKS,
+      duration_unit: "t"
     };
 
     return [
@@ -619,19 +532,19 @@ document.addEventListener("DOMContentLoaded", () => {
     sendMessage(proposalVariants[proposalAttempt++]);
   }
 
-  function placeTrade(barrier) {
+  function placeTrade(contractType) {
     if (waitingProposal || tradeInFlight || activeContractId) {
       appendLogLine("Trade already in progress.", "orange");
       return;
     }
 
     tradeInFlight = true;
-    proposalVariants = buildProposalVariants(String(barrier));
+    proposalVariants = buildProposalVariants(contractType);
     proposalAttempt = 0;
     waitingProposal = true;
 
     appendLogLine(
-      `TRADE DIGITUNDER barrier=${barrier} stake=${proposalVariants[0].amount}`,
+      `TRADE ${contractType} stake=${proposalVariants[0].amount}`,
       "lime"
     );
 
@@ -980,7 +893,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     (resultDigit !== null
                       ? ` (digit=${resultDigit})`
                       : "") +
-                    ` | starting a fresh strategy search` +
+                    ` | continuing market` +
                     ` | fresh scan will use ${nextStake.toFixed(2)}`,
                   "red"
                 );
