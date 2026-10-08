@@ -150,7 +150,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Strategy state:
   // 0 = scan for the first YX pair
   // 1 = count X digits from the first X; endpoint must be Y
-  // 2 = count from that endpoint Y and trade before count X
+  // 2 = count digits after that endpoint and trade before count X
   let strategyStage = 0;
   let strategyCandidateY = null;
   let strategyY = null;
@@ -282,7 +282,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function isStrategyX(digit) {
-    return digit >= 3 && digit <= 9;
+    return digit === 3 || digit === 4 || digit === 5;
   }
 
   function resetStrategyScan(seedDigit = null) {
@@ -330,8 +330,9 @@ document.addEventListener("DOMContentLoaded", () => {
           break;
         }
 
+        // The second count begins on the next tick, not this Y endpoint.
         strategyStage = 2;
-        strategyCount = 1;
+        strategyCount = 0;
         strategyTarget = strategyX;
         strategyCandidateY = null;
         break;
@@ -339,7 +340,7 @@ document.addEventListener("DOMContentLoaded", () => {
       case 2:
         strategyCount += 1;
 
-        // The endpoint Y is count 1; enter before count X.
+        // Submit after count X-1 so the next tick is count X and settles the contract.
         if (strategyCount === strategyTarget - 1) {
           appendLogLine(
             `Y(${strategyX})-Y(${strategyX}) confirmed with (${strategyY},${strategyX}) — placing ${nextTradeType} before count ${strategyTarget}`,
@@ -637,7 +638,6 @@ document.addEventListener("DOMContentLoaded", () => {
       captureNextTick = false;
     }
 
-    // If a proposal or trade is active, ignore new triggers
     if (waitingProposal || tradeInFlight || activeContractId) {
       return;
     }
@@ -936,7 +936,8 @@ document.addEventListener("DOMContentLoaded", () => {
                       : "") +
                     (wonAfterLoss
                       ? ` | fresh scan will use ${baseStake.toFixed(2)}`
-                      : ""),
+                      : "") +
+                    ` | keeping next contract=${nextTradeType}`,
                   "lime"
                 );
 
@@ -961,8 +962,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     (resultDigit !== null
                       ? ` (digit=${resultDigit})`
                       : "") +
-                    ` | next contract=${nextTradeType}` +
-                    ` | continuing market` +
+                    ` | switching to ${nextTradeType}` +
                     ` | fresh scan will use ${nextStake.toFixed(2)}`,
                   "red"
                 );
