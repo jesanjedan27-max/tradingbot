@@ -1,5 +1,5 @@
-// Deriv DigitEven/Odd bot — consecutive matching digit strategy
-// Modified: trade opposite parity with a one-tick contract
+// Deriv DigitEven/Odd bot — YX count strategy
+// Modified: even-first direction; switch direction after a loss
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -147,7 +147,17 @@ document.addEventListener("DOMContentLoaded", () => {
   let prevDigit = null;
   let rollingPairCount = 0;
 
-  let previousStrategyDigit = null;
+  // Strategy state:
+  // 0 = scan for the first YX pair
+  // 1 = count X digits from the first X; endpoint must be Y
+  // 2 = count from that endpoint Y and trade before count X
+  let strategyStage = 0;
+  let strategyCandidateY = null;
+  let strategyY = null;
+  let strategyX = null;
+  let strategyCount = 0;
+  let strategyTarget = 0;
+  let nextTradeType = "DIGITEVEN";
 
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
@@ -267,31 +277,84 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function resetStrategyScan() {
-    previousStrategyDigit = null;
+  function isStrategyY(digit) {
+    return digit === 8 || digit === 9;
+  }
+
+  function isStrategyX(digit) {
+    return digit >= 3 && digit <= 9;
+  }
+
+  function resetStrategyScan(seedDigit = null) {
+    strategyStage = 0;
+    strategyCandidateY = isStrategyY(seedDigit) ? seedDigit : null;
+    strategyY = null;
+    strategyX = null;
+    strategyCount = 0;
+    strategyTarget = 0;
+  }
+
+  function startInitialStrategyCount(yDigit, xDigit) {
+    strategyY = yDigit;
+    strategyX = xDigit;
+    strategyStage = 1;
+    strategyCount = 1;
+    strategyTarget = xDigit;
+    strategyCandidateY = null;
   }
 
   function processStrategyDigit(digit) {
-    if (
-      previousStrategyDigit !== null &&
-      digit === previousStrategyDigit
-    ) {
-      const contractType =
-        digit % 2 === 0
-          ? "DIGITODD"
-          : "DIGITEVEN";
+    switch (strategyStage) {
+      case 0:
+        if (
+          strategyCandidateY !== null &&
+          isStrategyX(digit)
+        ) {
+          startInitialStrategyCount(strategyCandidateY, digit);
+        } else {
+          strategyCandidateY = isStrategyY(digit)
+            ? digit
+            : null;
+        }
+        break;
 
-      appendLogLine(
-        `Pair ${digit},${digit} detected — placing ${contractType}`,
-        "lime"
-      );
+      case 1:
+        strategyCount += 1;
 
-      resetStrategyScan();
-      placeTrade(contractType);
-      return;
+        if (strategyCount < strategyTarget) {
+          break;
+        }
+
+        if (!isStrategyY(digit)) {
+          resetStrategyScan(digit);
+          break;
+        }
+
+        strategyStage = 2;
+        strategyCount = 1;
+        strategyTarget = strategyX;
+        strategyCandidateY = null;
+        break;
+
+      case 2:
+        strategyCount += 1;
+
+        // The endpoint Y is count 1; enter before count X.
+        if (strategyCount === strategyTarget - 1) {
+          appendLogLine(
+            `Y(${strategyX})-Y(${strategyX}) confirmed with (${strategyY},${strategyX}) — placing ${nextTradeType} before count ${strategyTarget}`,
+            "lime"
+          );
+
+          resetStrategyScan();
+          placeTrade(nextTradeType);
+        }
+        break;
+
+      default:
+        resetStrategyScan(digit);
+        break;
     }
-
-    previousStrategyDigit = digit;
   }
 
   function stake() {
@@ -332,6 +395,7 @@ document.addEventListener("DOMContentLoaded", () => {
     currentStake = 0;
     lastBalance = null;
     stakeIndex = 0;
+    nextTradeType = "DIGITEVEN";
     setActiveBaseStake(getStakeSequence()[0]);
     tickBuffer.length = 0;
     rollingDigits.length = 0;
@@ -887,12 +951,17 @@ document.addEventListener("DOMContentLoaded", () => {
                   (stakeIndex + 1) % stakeSequence.length;
 
                 const nextStake = stakeSequence[stakeIndex];
+                nextTradeType =
+                  nextTradeType === "DIGITEVEN"
+                    ? "DIGITODD"
+                    : "DIGITEVEN";
 
                 appendLogLine(
                   `LOSS ${pnl.toFixed(2)} | next base stake=${nextStake.toFixed(2)}` +
                     (resultDigit !== null
                       ? ` (digit=${resultDigit})`
                       : "") +
+                    ` | next contract=${nextTradeType}` +
                     ` | continuing market` +
                     ` | fresh scan will use ${nextStake.toFixed(2)}`,
                   "red"
