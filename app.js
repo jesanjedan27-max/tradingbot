@@ -73,7 +73,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const DIGIT_CONTRACT_DURATION_TICKS = 1;
 
   const STAKE_LADDER_TEMPLATE = [
-    0.35, 0.45, 0.85, 1.70, 3.45, 7.05, 14.55, 30.05
+    0.35, 1.10, 6.30, 35.00, 190
   ];
 
   let symbol = "R_100";
@@ -157,7 +157,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let strategyX = null;
   let strategyCount = 0;
   let strategyTarget = 0;
-  let nextTradeType = "DIGITEVEN";
+  let nextTradeType = "DIGITUNDER";
 
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
@@ -277,84 +277,84 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function isStrategyY(digit) {
-    return digit === 8 || digit === 9;
+  const STRATEGY_PAIR_DIGITS = new Set([5, 6, 7, 8, 9]);
+  const STRATEGY_UPPER_DIGITS = new Set([6, 7, 8, 9]);
+
+  let strategyPendingDigits = [];
+  let strategyAwaitingFinalPair = false;
+
+  function isValidFourDigitPattern(digits) {
+    if (!Array.isArray(digits) || digits.length !== 4) return false;
+    if (!digits.every(d => STRATEGY_PAIR_DIGITS.has(d))) return false;
+    if (!STRATEGY_UPPER_DIGITS.has(digits[digits.length - 1])) return false;
+
+    const hasPair = digits.some(
+      (d, index) => index < digits.length - 1 && d === digits[index + 1]
+    );
+    const upperCount = digits.filter(d => STRATEGY_UPPER_DIGITS.has(d)).length;
+
+    return hasPair && upperCount >= 2;
   }
 
-  function isStrategyX(digit) {
-    return digit === 3 || digit === 4 || digit === 5;
+  function isValidThreeDigitPattern(digits) {
+    if (!Array.isArray(digits) || digits.length !== 3) return false;
+    if (!digits.every(d => STRATEGY_PAIR_DIGITS.has(d))) return false;
+    if (!STRATEGY_UPPER_DIGITS.has(digits[digits.length - 1])) return false;
+
+    const hasPair = digits.some(
+      (d, index) => index < digits.length - 1 && d === digits[index + 1]
+    );
+
+    return hasPair;
   }
 
   function resetStrategyScan(seedDigit = null) {
     strategyStage = 0;
-    strategyCandidateY = isStrategyY(seedDigit) ? seedDigit : null;
+    strategyCandidateY = null;
     strategyY = null;
     strategyX = null;
     strategyCount = 0;
     strategyTarget = 0;
-  }
-
-  function startInitialStrategyCount(yDigit, xDigit) {
-    strategyY = yDigit;
-    strategyX = xDigit;
-    strategyStage = 1;
-    strategyCount = 1;
-    strategyTarget = xDigit;
-    strategyCandidateY = null;
+    strategyPendingDigits = [];
+    strategyAwaitingFinalPair = false;
   }
 
   function processStrategyDigit(digit) {
-    switch (strategyStage) {
-      case 0:
-        if (
-          strategyCandidateY !== null &&
-          isStrategyX(digit)
-        ) {
-          startInitialStrategyCount(strategyCandidateY, digit);
-        } else {
-          strategyCandidateY = isStrategyY(digit)
-            ? digit
-            : null;
-        }
-        break;
+    strategyPendingDigits.push(digit);
 
-      case 1:
-        strategyCount += 1;
+    if (strategyPendingDigits.length > 7) {
+      strategyPendingDigits.shift();
+    }
 
-        if (strategyCount < strategyTarget) {
-          break;
-        }
+    const lastFour = strategyPendingDigits.slice(-4);
+    const lastThree = strategyPendingDigits.slice(-3);
 
-        if (!isStrategyY(digit)) {
-          resetStrategyScan(digit);
-          break;
-        }
+    if (!strategyAwaitingFinalPair) {
+      if (isValidFourDigitPattern(lastFour)) {
+        strategyAwaitingFinalPair = true;
+        strategyPendingDigits = [];
+        appendLogLine(
+          `4-digit pattern found (${lastFour.join(",")}) — waiting for final 3-digit pair + upper`,
+          "lime"
+        );
+      }
+      return;
+    }
 
-        // The second count begins on the next tick, not this Y endpoint.
-        strategyStage = 2;
-        strategyCount = 0;
-        strategyTarget = strategyX;
-        strategyCandidateY = null;
-        break;
+    if (isValidThreeDigitPattern(lastThree)) {
+      appendLogLine(
+        `Final 3-digit pattern found (${lastThree.join(",")}) — placing DIGITUNDER`,
+        "lime"
+      );
 
-      case 2:
-        strategyCount += 1;
+      resetStrategyScan();
+      placeTrade("DIGITUNDER");
+      return;
+    }
 
-        // Submit after count X-1 so the next tick is count X and settles the contract.
-        if (strategyCount === strategyTarget - 1) {
-          appendLogLine(
-            `Y(${strategyX})-Y(${strategyX}) confirmed with (${strategyY},${strategyX}) — placing ${nextTradeType} before count ${strategyTarget}`,
-            "lime"
-          );
-
-          resetStrategyScan();
-          placeTrade(nextTradeType);
-        }
-        break;
-
-      default:
-        resetStrategyScan(digit);
-        break;
+    if (strategyPendingDigits.length >= 3) {
+      strategyAwaitingFinalPair = false;
+      strategyPendingDigits = [];
     }
   }
 
@@ -396,7 +396,7 @@ document.addEventListener("DOMContentLoaded", () => {
     currentStake = 0;
     lastBalance = null;
     stakeIndex = 0;
-    nextTradeType = "DIGITEVEN";
+    nextTradeType = "DIGITUNDER";
     setActiveBaseStake(getStakeSequence()[0]);
     tickBuffer.length = 0;
     rollingDigits.length = 0;
@@ -952,10 +952,7 @@ document.addEventListener("DOMContentLoaded", () => {
                   (stakeIndex + 1) % stakeSequence.length;
 
                 const nextStake = stakeSequence[stakeIndex];
-                nextTradeType =
-                  nextTradeType === "DIGITEVEN"
-                    ? "DIGITODD"
-                    : "DIGITEVEN";
+                nextTradeType = "DIGITUNDER";
 
                 appendLogLine(
                   `LOSS ${pnl.toFixed(2)} | next base stake=${nextStake.toFixed(2)}` +
