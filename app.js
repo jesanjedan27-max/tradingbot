@@ -1,5 +1,5 @@
-// Deriv DigitEven/Odd bot — YX count strategy
-// Modified: even-first direction; switch direction after a loss
+// Deriv Digit Under strategy
+// Pattern: pair first + upper digits, then final pair + upper digit
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -147,10 +147,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let prevDigit = null;
   let rollingPairCount = 0;
 
-  // Strategy state:
-  // 0 = scan for the first YX pair
-  // 1 = count X digits from the first X; endpoint must be Y
-  // 2 = count digits after that endpoint and trade before count X
   let strategyStage = 0;
   let strategyCandidateY = null;
   let strategyY = null;
@@ -288,17 +284,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const [a, b, c, d] = digits;
 
-    // MUST start with a pair first
-    if (a !== b) return false;
-
-    // Pair value must be 5..9
-    if (!STRATEGY_PAIR_DIGITS.has(a)) return false;
-
-    // Last 2 digits must be upper digits 6..9
-    if (!STRATEGY_UPPER_DIGITS.has(c)) return false;
-    if (!STRATEGY_UPPER_DIGITS.has(d)) return false;
-
-    return true;
+    return (
+      a === b &&
+      STRATEGY_PAIR_DIGITS.has(a) &&
+      STRATEGY_UPPER_DIGITS.has(c) &&
+      STRATEGY_UPPER_DIGITS.has(d)
+    );
   }
 
   function isValidThreeDigitPattern(digits) {
@@ -306,16 +297,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const [a, b, c] = digits;
 
-    // MUST start with a pair first
-    if (a !== b) return false;
-
-    // Pair value must be 5..9
-    if (!STRATEGY_PAIR_DIGITS.has(a)) return false;
-
-    // Final digit must be upper 6..9
-    if (!STRATEGY_UPPER_DIGITS.has(c)) return false;
-
-    return true;
+    return (
+      a === b &&
+      STRATEGY_PAIR_DIGITS.has(a) &&
+      STRATEGY_UPPER_DIGITS.has(c)
+    );
   }
 
   function resetStrategyScan(seedDigit = null) {
@@ -332,43 +318,38 @@ document.addEventListener("DOMContentLoaded", () => {
   function processStrategyDigit(digit) {
     strategyPendingDigits.push(digit);
 
-    if (strategyPendingDigits.length > 6) {
+    if (!strategyAwaitingFinalPair) {
+      if (strategyPendingDigits.length > 4) {
+        strategyPendingDigits.shift();
+      }
+
+      if (
+        strategyPendingDigits.length === 4 &&
+        isValidFourDigitPattern(strategyPendingDigits)
+      ) {
+        appendLogLine(
+          `VALID 4-DIGIT PATTERN: [${strategyPendingDigits.join(", ")}]`,
+          "lime"
+        );
+
+        strategyAwaitingFinalPair = true;
+        strategyPendingDigits = [];
+      }
+
+      return;
+    }
+
+    if (strategyPendingDigits.length > 3) {
       strategyPendingDigits.shift();
     }
 
-    const lastFour = strategyPendingDigits.slice(-4);
-    const lastThree = strategyPendingDigits.slice(-3);
-
-    if (!strategyAwaitingFinalPair) {
-      if (isValidFourDigitPattern(lastFour)) {
-        strategyAwaitingFinalPair = true;
-        strategyPendingDigits = [];
-        appendLogLine(
-          `4-digit pattern found (${lastFour.join(",")}) — waiting for final 3-digit pair + upper`,
-          "lime"
-        );
-      } else if (strategyPendingDigits.length >= 4) {
-        // invalid 4-digit sequence: restart search
-        strategyPendingDigits = [];
-        strategyAwaitingFinalPair = false;
-      }
-      return;
-    }
-
-    if (isValidThreeDigitPattern(lastThree)) {
-      appendLogLine(
-        `Final 3-digit pattern found (${lastThree.join(",")}) — placing DIGITUNDER`,
-        "lime"
-      );
-
+    if (
+      strategyPendingDigits.length === 3 &&
+      isValidThreeDigitPattern(strategyPendingDigits)
+    ) {
       resetStrategyScan();
       placeTrade("DIGITUNDER");
-      return;
     }
-
-    // if the final 3-digit check fails, restart and search again
-    strategyAwaitingFinalPair = false;
-    strategyPendingDigits = [];
   }
 
   function stake() {
@@ -533,7 +514,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const base = {
       proposal: 1,
-      contract_type: contractType,
+      contract_type: "DIGITUNDER",
+      barrier: "8",
       currency: "USD",
       amount,
       basis: "stake",
@@ -622,7 +604,7 @@ document.addEventListener("DOMContentLoaded", () => {
     waitingProposal = true;
 
     appendLogLine(
-      `TRADE ${contractType} stake=${proposalVariants[0].amount}`,
+      `TRADE DIGITUNDER barrier=8 stake=${proposalVariants[0].amount}`,
       "lime"
     );
 
