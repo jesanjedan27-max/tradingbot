@@ -285,27 +285,37 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function isValidFourDigitPattern(digits) {
     if (!Array.isArray(digits) || digits.length !== 4) return false;
-    if (!digits.every(d => STRATEGY_PAIR_DIGITS.has(d))) return false;
-    if (!STRATEGY_UPPER_DIGITS.has(digits[digits.length - 1])) return false;
 
-    const hasPair = digits.some(
-      (d, index) => index < digits.length - 1 && d === digits[index + 1]
-    );
-    const upperCount = digits.filter(d => STRATEGY_UPPER_DIGITS.has(d)).length;
+    const [a, b, c, d] = digits;
 
-    return hasPair && upperCount >= 2;
+    // MUST start with a pair first
+    if (a !== b) return false;
+
+    // Pair value must be 5..9
+    if (!STRATEGY_PAIR_DIGITS.has(a)) return false;
+
+    // Last 2 digits must be upper digits 6..9
+    if (!STRATEGY_UPPER_DIGITS.has(c)) return false;
+    if (!STRATEGY_UPPER_DIGITS.has(d)) return false;
+
+    return true;
   }
 
   function isValidThreeDigitPattern(digits) {
     if (!Array.isArray(digits) || digits.length !== 3) return false;
-    if (!digits.every(d => STRATEGY_PAIR_DIGITS.has(d))) return false;
-    if (!STRATEGY_UPPER_DIGITS.has(digits[digits.length - 1])) return false;
 
-    const hasPair = digits.some(
-      (d, index) => index < digits.length - 1 && d === digits[index + 1]
-    );
+    const [a, b, c] = digits;
 
-    return hasPair;
+    // MUST start with a pair first
+    if (a !== b) return false;
+
+    // Pair value must be 5..9
+    if (!STRATEGY_PAIR_DIGITS.has(a)) return false;
+
+    // Final digit must be upper 6..9
+    if (!STRATEGY_UPPER_DIGITS.has(c)) return false;
+
+    return true;
   }
 
   function resetStrategyScan(seedDigit = null) {
@@ -322,7 +332,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function processStrategyDigit(digit) {
     strategyPendingDigits.push(digit);
 
-    if (strategyPendingDigits.length > 7) {
+    if (strategyPendingDigits.length > 6) {
       strategyPendingDigits.shift();
     }
 
@@ -337,6 +347,10 @@ document.addEventListener("DOMContentLoaded", () => {
           `4-digit pattern found (${lastFour.join(",")}) — waiting for final 3-digit pair + upper`,
           "lime"
         );
+      } else if (strategyPendingDigits.length >= 4) {
+        // invalid 4-digit sequence: restart search
+        strategyPendingDigits = [];
+        strategyAwaitingFinalPair = false;
       }
       return;
     }
@@ -352,10 +366,9 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    if (strategyPendingDigits.length >= 3) {
-      strategyAwaitingFinalPair = false;
-      strategyPendingDigits = [];
-    }
+    // if the final 3-digit check fails, restart and search again
+    strategyAwaitingFinalPair = false;
+    strategyPendingDigits = [];
   }
 
   function stake() {
