@@ -347,7 +347,7 @@ document.addEventListener("DOMContentLoaded", () => {
       strategyPendingDigits.length === 3 &&
       isValidThreeDigitPattern(strategyPendingDigits)
     ) {
-      resetStrategyScan();
+      strategyPendingDigits = [];
       placeTrade("DIGITUNDER");
     }
   }
@@ -376,6 +376,28 @@ document.addEventListener("DOMContentLoaded", () => {
     prevDigit = null;
     rollingPairCount = 0;
     appendLogLine("Scanning...", "#a78bfa");
+  }
+
+  function resumeFinalPatternSearchAfterLoss() {
+    settlementDigit = null;
+    captureNextTick = false;
+    tradeInFlight = false;
+    waitingProposal = false;
+    proposalVariants = null;
+    proposalAttempt = 0;
+    activeContractId = null;
+    rollingPairCount = 0;
+    rollingDigits.length = 0;
+    strategyPendingDigits = [];
+
+    phase = "scan";
+    chainId = null;
+    prevDigit = null;
+
+    appendLogLine(
+      "Loss — continuing search for another final 3-digit pattern",
+      "#a78bfa"
+    );
   }
 
   function fullReset() {
@@ -954,14 +976,14 @@ document.addEventListener("DOMContentLoaded", () => {
                     (resultDigit !== null
                       ? ` (digit=${resultDigit})`
                       : "") +
-                    ` | switching to ${nextTradeType}` +
-                    ` | fresh scan will use ${nextStake.toFixed(2)}`,
+                    ` | continuing final-pattern search with ${nextTradeType}` +
+                    ` | next stake=${nextStake.toFixed(2)}`,
                   "red"
                 );
 
                 setActiveBaseStake(nextStake);
                 currentStake = 0;
-                resetToScan();
+                resumeFinalPatternSearchAfterLoss();
               }
 
               if (levelEl) {
