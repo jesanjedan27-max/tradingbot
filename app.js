@@ -1,5 +1,5 @@
 // Deriv Digit Under strategy
-// Pattern: pair first + upper digits, then final pair + upper digit
+// Patterns: 5,X,X,J,Z or X,X,5,J,Z
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -73,7 +73,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const DIGIT_CONTRACT_DURATION_TICKS = 1;
 
   const STAKE_LADDER_TEMPLATE = [
-    0.35, 1.10, 6.30, 35.00, 190
+    0.35, 2.00, 9.50, 52.00, 280
   ];
 
   let symbol = "R_100";
@@ -147,6 +147,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let prevDigit = null;
   let rollingPairCount = 0;
 
+  // Retained strategy state variables from the original script.
   let strategyStage = 0;
   let strategyCandidateY = null;
   let strategyY = null;
@@ -273,34 +274,36 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  const STRATEGY_PAIR_DIGITS = new Set([5, 6, 7, 8, 9]);
-  const STRATEGY_UPPER_DIGITS = new Set([6, 7, 8, 9]);
+  const STRATEGY_X_DIGITS = new Set([5, 6, 7, 8, 9]);
+  const STRATEGY_J_DIGITS = new Set([6, 7, 8, 9]);
+  const STRATEGY_Z_DIGITS = new Set([8, 9]);
 
   let strategyPendingDigits = [];
-  let strategyAwaitingFinalPair = false;
 
-  function isValidFourDigitPattern(digits) {
-    if (!Array.isArray(digits) || digits.length !== 4) return false;
+  function isValidStrategyPattern(digits) {
+    if (!Array.isArray(digits) || digits.length !== 5) return false;
 
-    const [a, b, c, d] = digits;
+    const [first, second, third, jDigit, zDigit] = digits;
+
+    const yxxPattern =
+      first === 5 &&
+      STRATEGY_X_DIGITS.has(second) &&
+      second === third;
+
+    const xxyPattern =
+      STRATEGY_X_DIGITS.has(first) &&
+      first === second &&
+      third === 5;
+
+    if (!yxxPattern && !xxyPattern) return false;
+
+    const xDigit = yxxPattern ? second : first;
 
     return (
-      a === b &&
-      STRATEGY_PAIR_DIGITS.has(a) &&
-      STRATEGY_UPPER_DIGITS.has(c) &&
-      STRATEGY_UPPER_DIGITS.has(d)
-    );
-  }
-
-  function isValidThreeDigitPattern(digits) {
-    if (!Array.isArray(digits) || digits.length !== 3) return false;
-
-    const [a, b, c] = digits;
-
-    return (
-      a === b &&
-      STRATEGY_PAIR_DIGITS.has(a) &&
-      STRATEGY_UPPER_DIGITS.has(c)
+      STRATEGY_J_DIGITS.has(jDigit) &&
+      jDigit !== 5 &&
+      jDigit !== xDigit &&
+      STRATEGY_Z_DIGITS.has(zDigit)
     );
   }
 
@@ -312,42 +315,27 @@ document.addEventListener("DOMContentLoaded", () => {
     strategyCount = 0;
     strategyTarget = 0;
     strategyPendingDigits = [];
-    strategyAwaitingFinalPair = false;
   }
 
   function processStrategyDigit(digit) {
     strategyPendingDigits.push(digit);
 
-    if (!strategyAwaitingFinalPair) {
-      if (strategyPendingDigits.length > 4) {
-        strategyPendingDigits.shift();
-      }
-
-      if (
-        strategyPendingDigits.length === 4 &&
-        isValidFourDigitPattern(strategyPendingDigits)
-      ) {
-        appendLogLine(
-          `VALID 4-DIGIT PATTERN: [${strategyPendingDigits.join(", ")}]`,
-          "lime"
-        );
-
-        strategyAwaitingFinalPair = true;
-        strategyPendingDigits = [];
-      }
-
-      return;
-    }
-
-    if (strategyPendingDigits.length > 3) {
+    if (strategyPendingDigits.length > 5) {
       strategyPendingDigits.shift();
     }
 
     if (
-      strategyPendingDigits.length === 3 &&
-      isValidThreeDigitPattern(strategyPendingDigits)
+      strategyPendingDigits.length === 5 &&
+      isValidStrategyPattern(strategyPendingDigits)
     ) {
-      strategyPendingDigits = [];
+      const pattern = strategyPendingDigits.join(", ");
+
+      appendLogLine(
+        `VALID 5-DIGIT PATTERN: [${pattern}] — requesting DIGITUNDER barrier 8`,
+        "lime"
+      );
+
+      resetStrategyScan();
       placeTrade("DIGITUNDER");
     }
   }
@@ -376,28 +364,6 @@ document.addEventListener("DOMContentLoaded", () => {
     prevDigit = null;
     rollingPairCount = 0;
     appendLogLine("Scanning...", "#a78bfa");
-  }
-
-  function resumeFinalPatternSearchAfterLoss() {
-    settlementDigit = null;
-    captureNextTick = false;
-    tradeInFlight = false;
-    waitingProposal = false;
-    proposalVariants = null;
-    proposalAttempt = 0;
-    activeContractId = null;
-    rollingPairCount = 0;
-    rollingDigits.length = 0;
-    strategyPendingDigits = [];
-
-    phase = "scan";
-    chainId = null;
-    prevDigit = null;
-
-    appendLogLine(
-      "Loss — continuing search for another final 3-digit pattern",
-      "#a78bfa"
-    );
   }
 
   function fullReset() {
@@ -536,7 +502,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const base = {
       proposal: 1,
-      contract_type: "DIGITUNDER",
+      contract_type: contractType,
       barrier: "8",
       currency: "USD",
       amount,
@@ -547,13 +513,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
     return [
       Object.assign({}, base, {
+        symbol
+      }),
+      Object.assign({}, base, {
         underlying_symbol: symbol
       }),
       Object.assign({}, base, {
         underlying: symbol
-      }),
-      Object.assign({}, base, {
-        symbol
       }),
       Object.assign({}, base)
     ];
@@ -626,7 +592,7 @@ document.addEventListener("DOMContentLoaded", () => {
     waitingProposal = true;
 
     appendLogLine(
-      `TRADE DIGITUNDER barrier=8 stake=${proposalVariants[0].amount}`,
+      `TRADE ${contractType} barrier=8 stake=${proposalVariants[0].amount}`,
       "lime"
     );
 
@@ -954,7 +920,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     (wonAfterLoss
                       ? ` | fresh scan will use ${baseStake.toFixed(2)}`
                       : "") +
-                    ` | keeping next contract=${nextTradeType}`,
+                    ` | next contract=${nextTradeType}`,
                   "lime"
                 );
 
@@ -976,14 +942,14 @@ document.addEventListener("DOMContentLoaded", () => {
                     (resultDigit !== null
                       ? ` (digit=${resultDigit})`
                       : "") +
-                    ` | continuing final-pattern search with ${nextTradeType}` +
-                    ` | next stake=${nextStake.toFixed(2)}`,
+                    ` | next contract=${nextTradeType}` +
+                    ` | fresh pattern search`,
                   "red"
                 );
 
                 setActiveBaseStake(nextStake);
                 currentStake = 0;
-                resumeFinalPatternSearchAfterLoss();
+                resetToScan();
               }
 
               if (levelEl) {
