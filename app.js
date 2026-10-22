@@ -1,5 +1,5 @@
 // Deriv Digit Under strategy
-// Patterns: 5,X,X,J,Z or X,X,5,J,Z
+// Patterns: M,X,X,J,Z or X,X,M,J,Z
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -285,23 +285,24 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const [first, second, third, jDigit, zDigit] = digits;
 
-    const yxxPattern =
-      first === 5 &&
+    const mxxPattern =
+      STRATEGY_X_DIGITS.has(first) &&
       STRATEGY_X_DIGITS.has(second) &&
       second === third;
 
-    const xxyPattern =
+    const xxmPattern =
       STRATEGY_X_DIGITS.has(first) &&
       first === second &&
-      third === 5;
+      STRATEGY_X_DIGITS.has(third);
 
-    if (!yxxPattern && !xxyPattern) return false;
+    if (!mxxPattern && !xxmPattern) return false;
 
-    const xDigit = yxxPattern ? second : first;
+    const mDigit = mxxPattern ? first : third;
+    const xDigit = mxxPattern ? second : first;
 
     return (
       STRATEGY_J_DIGITS.has(jDigit) &&
-      jDigit !== 5 &&
+      jDigit !== mDigit &&
       jDigit !== xDigit &&
       STRATEGY_Z_DIGITS.has(zDigit)
     );
