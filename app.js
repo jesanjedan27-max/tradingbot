@@ -514,15 +514,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     return [
       Object.assign({}, base, {
-        symbol
-      }),
-      Object.assign({}, base, {
         underlying_symbol: symbol
-      }),
-      Object.assign({}, base, {
-        underlying: symbol
-      }),
-      Object.assign({}, base)
+      })
     ];
   }
 
@@ -553,12 +546,11 @@ document.addEventListener("DOMContentLoaded", () => {
       lower.includes("validation failed")
     ) {
       appendLogLine(
-        "Proposal validation failed; retrying next variant.",
-        "orange"
+        "Proposal validation failed; check the contract parameters.",
+        "red"
       );
 
-      sendNextProposalVariant();
-      return true;
+      return false;
     }
 
     return false;
@@ -892,8 +884,8 @@ document.addEventListener("DOMContentLoaded", () => {
               }
 
               const exitPrice =
-                contract.exit_tick ||
-                contract.exit_tick_display_value;
+                contract.exit_tick_display_value ??
+                contract.exit_tick;
 
               const exitDigit =
                 exitPrice !== undefined
@@ -901,9 +893,9 @@ document.addEventListener("DOMContentLoaded", () => {
                   : null;
 
               const resultDigit =
-                settlementDigit !== null
-                  ? settlementDigit
-                  : exitDigit;
+                exitDigit !== null
+                  ? exitDigit
+                  : settlementDigit;
 
               if (pnl >= 0) {
                 const wonAfterLoss = stakeIndex > 0;
