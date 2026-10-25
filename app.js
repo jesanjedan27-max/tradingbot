@@ -161,6 +161,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const TICK_BATCH_LIMIT = 200;
 
   let tickBuffer = [];
+  let previousLogPrice = null;
   let tickFlushTimer = null;
 
   function appendLogLine(message, color = "#fff") {
@@ -187,11 +188,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
       tickBuffer
         .splice(0, TICK_BATCH_LIMIT)
-        .forEach(({ price, digit }) => {
+        .forEach(({ price, digit, direction }) => {
           const row = document.createElement("div");
           row.style.color = "#7dd3fc";
           row.textContent =
-            `Tick ${Number(price).toFixed(decimalsForSymbol(symbol))} → ${digit}`;
+            `Tick ${Number(price).toFixed(decimalsForSymbol(symbol))}${direction} → ${digit}`;
           fragment.appendChild(row);
         });
 
@@ -607,7 +608,18 @@ document.addEventListener("DOMContentLoaded", () => {
       lastDigitEl.textContent = d;
     }
 
-    tickBuffer.push({ price, digit: d });
+    const currentPrice = Number(price);
+    const direction =
+      previousLogPrice === null
+        ? "·"
+        : currentPrice > previousLogPrice
+          ? "↑"
+          : currentPrice < previousLogPrice
+            ? "↓"
+            : "→";
+
+    tickBuffer.push({ price, digit: d, direction });
+    previousLogPrice = currentPrice;
 
     if (captureNextTick) {
       settlementDigit = d;
