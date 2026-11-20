@@ -72,7 +72,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const EMA_FAST_PERIOD = 6;
   const EMA_SLOW_PERIOD = 9;
   const EMA_SAMPLE_TICK_INTERVAL = 5;
-  const TOUCH_CANDLE_DURATION_MINUTES = 1;
+  const TOUCH_CONTRACT_DURATION_TICKS = 10;
   const CANDLE_INTERVAL_SECONDS = 60;
   const MIN_CANDLE_BODY_RANGE_RATIO = 0.20;
   const TOUCH_BARRIER_OFFSET = 0.50;
@@ -633,8 +633,8 @@ document.addEventListener("DOMContentLoaded", () => {
       currency: "USD",
       amount,
       basis: "stake",
-      duration: TOUCH_CANDLE_DURATION_MINUTES,
-      duration_unit: "m"
+      duration: TOUCH_CONTRACT_DURATION_TICKS,
+      duration_unit: "t"
     };
 
     return [
