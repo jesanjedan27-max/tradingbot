@@ -72,6 +72,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const EMA_FAST_PERIOD = 6;
   const EMA_SLOW_PERIOD = 9;
   const EMA_SAMPLE_TICK_INTERVAL = 5;
+  const TOUCH_CONTRACT_DURATION_TICKS = 10;
   const CANDLE_INTERVAL_SECONDS = 60;
   const MIN_CANDLE_BODY_RANGE_RATIO = 0.20;
   const TOUCH_BARRIER_OFFSET = 0.50;
@@ -140,6 +141,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let waitingProposal = false;
   let tradeInFlight = false;
   let proposalVariants = null;
+  let proposalBarrierDescription = "";
   let proposalAttempt = 0;
   let activeContractId = null;
   let settlementDigit = null;
@@ -160,9 +162,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let strategyCandle = null;
   let strategyCandleReady = false;
   let invalidEpochWarningLogged = false;
-  let touchContractSpec = null;
-  let pendingTouchTrade = null;
-  let contractsForRequestId = 0;
 
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
@@ -297,101 +296,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function average(values) {
     return values.reduce((sum, value) => sum + value, 0) / values.length;
-  }
-
-  function parseDurationLimit(rawValue, expiryType) {
-    const match = String(rawValue || "").match(/^(\d+)([smhdt])?$/i);
-    if (!match) return null;
-
-    const fallbackUnits = {
-      tick: "t",
-      intraday: "m",
-      daily: "d"
-    };
-    const unit =
-      (match[2] || fallbackUnits[String(expiryType || "").toLowerCase()] || "")
-        .toLowerCase();
-    const duration = Number(match[1]);
-    const secondsPerUnit = { s: 1, m: 60, h: 3600, d: 86400 };
-
-    if (!unit || !Number.isInteger(duration) || duration <= 0) return null;
-    return {
-      duration,
-      unit,
-      seconds: unit === "t" ? null : duration * secondsPerUnit[unit]
-    };
-  }
-
-  function requestTouchContractAvailability() {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
-    touchContractSpec = null;
-    contractsForRequestId += 1;
-    sendMessage({
-      contracts_for: symbol,
-      req_id: contractsForRequestId
-    });
-  }
-
-  function updateTouchContractAvailability(payload) {
-    if (
-      Number(payload.req_id) !== contractsForRequestId ||
-      payload.echo_req?.contracts_for !== symbol
-    ) {
-      return;
-    }
-
-    const available = payload.contracts_for?.available;
-    const contract = Array.isArray(available)
-      ? available.find(item =>
-          item.contract_type === "ONETOUCH" &&
-          item.underlying_symbol === symbol
-        )
-      : null;
-
-    const minimum = contract
-      ? parseDurationLimit(
-          contract.min_contract_duration,
-          contract.expiry_type
-        )
-      : null;
-    const maximum = contract
-      ? parseDurationLimit(
-          contract.max_contract_duration,
-          contract.expiry_type
-        )
-      : null;
-
-    if (
-      !minimum ||
-      !maximum ||
-      (
-        minimum.seconds !== null && maximum.seconds !== null
-          ? minimum.seconds > maximum.seconds
-          : minimum.unit !== maximum.unit ||
-            minimum.duration > maximum.duration
-      )
-    ) {
-      touchContractSpec = null;
-      pendingTouchTrade = null;
-      appendLogLine(
-        `Deriv did not return valid ONETOUCH duration limits for ${symbol}; no trade will be sent.`,
-        "red"
-      );
-      return;
-    }
-
-    touchContractSpec = minimum;
-    appendLogLine(
-      `Deriv currently offers ONETOUCH durations ${minimum.duration}${minimum.unit}–${maximum.duration}${maximum.unit} for ${symbol}; using the minimum.`,
-      "#a78bfa"
-    );
-
-    if (pendingTouchTrade) {
-      const pending = pendingTouchTrade;
-      pendingTouchTrade = null;
-      placeTrade(pending.contractType, pending.barrierOffset);
-    }
   }
 
   function createStrategyCandle(epoch, price) {
@@ -570,7 +474,6 @@ document.addEventListener("DOMContentLoaded", () => {
   function clearContractState() {
     settlementDigit = null;
     captureNextTick = false;
-    pendingTouchTrade = null;
     tradeInFlight = false;
     waitingProposal = false;
     proposalVariants = null;
@@ -696,16 +599,12 @@ document.addEventListener("DOMContentLoaded", () => {
     tickBuffer.length = 0;
     lastPayoutRatio = null;
     rollingDigits.length = 0;
-    touchContractSpec = null;
-    pendingTouchTrade = null;
     resetStrategyScan();
 
     if (ws && ws.readyState === WebSocket.OPEN) {
       sendMessage({ forget_all: "ticks" });
 
       symbol = newSymbol;
-      requestTouchContractAvailability();
-
       sendMessage({
         ticks: symbol,
         subscribe: 1
@@ -713,9 +612,6 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       symbol = newSymbol;
     }
-
-    touchContractSpec = null;
-    pendingTouchTrade = null;
 
     appendLogLine(
       `Market → ${marketMeta ? marketMeta.label : symbol}`,
@@ -728,11 +624,13 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function buildProposalVariants(contractType, barrierOffset) {
-    if (!touchContractSpec) {
-      throw new Error("ONETOUCH duration is not available for the selected market.");
+    const offsetMatch = String(barrierOffset).match(/^([+-])(\d+(?:\.\d+)?)$/);
+    if (!offsetMatch) {
+      throw new Error(`Invalid relative barrier offset: ${barrierOffset}`);
     }
 
     const amount = stake();
+    proposalBarrierDescription = "relative";
 
     const base = {
       proposal: 1,
@@ -741,8 +639,8 @@ document.addEventListener("DOMContentLoaded", () => {
       currency: "USD",
       amount,
       basis: "stake",
-      duration: touchContractSpec.duration,
-      duration_unit: touchContractSpec.unit
+      duration: TOUCH_CONTRACT_DURATION_TICKS,
+      duration_unit: "t"
     };
 
     return [
@@ -812,16 +710,6 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    if (!touchContractSpec) {
-      pendingTouchTrade = { contractType, barrierOffset };
-      appendLogLine(
-        "Waiting for Deriv to confirm a valid ONETOUCH duration for this market.",
-        "orange"
-      );
-      requestTouchContractAvailability();
-      return;
-    }
-
     tradeInFlight = true;
     try {
       proposalVariants = buildProposalVariants(contractType, barrierOffset);
@@ -834,7 +722,7 @@ document.addEventListener("DOMContentLoaded", () => {
     waitingProposal = true;
 
     appendLogLine(
-      `TRADE ${contractType} barrier=${barrierOffset} stake=${proposalVariants[0].amount}`,
+      `TRADE ${contractType} barrier=${proposalVariants[0].barrier} (${proposalBarrierDescription}) duration=${proposalVariants[0].duration}${proposalVariants[0].duration_unit} stake=${proposalVariants[0].amount}`,
       "lime"
     );
 
@@ -874,7 +762,7 @@ document.addEventListener("DOMContentLoaded", () => {
       captureNextTick = false;
     }
 
-    if (waitingProposal || tradeInFlight || activeContractId || pendingTouchTrade) {
+    if (waitingProposal || tradeInFlight || activeContractId) {
       return;
     }
 
@@ -986,8 +874,6 @@ document.addEventListener("DOMContentLoaded", () => {
           subscribe: 1
         });
 
-        requestTouchContractAvailability();
-
         sendMessage({
           balance: 1
         });
@@ -1009,15 +895,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
           appendLogLine(`Error: ${message}`, "red");
 
-          if (payload.echo_req?.contracts_for === symbol) {
-            touchContractSpec = null;
-            pendingTouchTrade = null;
-            appendLogLine(
-              "Could not verify an available ONETOUCH duration; trading is paused for safety.",
-              "red"
-            );
-          }
-
           if (!handleValidationError(message)) {
             tradeInFlight = false;
             waitingProposal = false;
@@ -1031,10 +908,6 @@ document.addEventListener("DOMContentLoaded", () => {
         switch (payload.msg_type) {
           case "tick":
             onTick(payload.tick.quote, payload.tick.epoch);
-            break;
-
-          case "contracts_for":
-            updateTouchContractAvailability(payload);
             break;
 
           case "balance":
