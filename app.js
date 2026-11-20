@@ -78,7 +78,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const TOUCH_BARRIER_OFFSET = 0.50;
 
   const STAKE_LADDER_TEMPLATE = [
-    0.35, 2.00, 9.50, 52.00, 280
+    0.35, 0.37, 0.40, 0.55, 0.80, 1.20, 3.10, 7.00, 13.00
   ];
 
   let symbol = "R_100";
