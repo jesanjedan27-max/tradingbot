@@ -75,7 +75,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const TOUCH_CONTRACT_DURATION_TICKS = 10;
   const CANDLE_INTERVAL_SECONDS = 60;
   const MIN_CANDLE_BODY_RANGE_RATIO = 0.20;
-  const TOUCH_BARRIER_OFFSET = 0.30;
+  const TOUCH_BARRIER_OFFSET = 0.20;
 
   const STAKE_LADDER_TEMPLATE = [
     0.35, 0.35, 0.70, 1.40, 2.80, 5.60, 11.20, 22.40, 44.80
