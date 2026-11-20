@@ -1,5 +1,4 @@
-// Deriv Digit Under strategy
-// Patterns: M,X,X,J,Z or X,X,M,J,Z
+// Deriv EMA 6/9 Touch strategy
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -70,7 +69,13 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   const DEFAULT_PAYOUT_RATIO = 1.09;
-  const DIGIT_CONTRACT_DURATION_TICKS = 1;
+  const EMA_FAST_PERIOD = 6;
+  const EMA_SLOW_PERIOD = 9;
+  const EMA_SAMPLE_TICK_INTERVAL = 5;
+  const TOUCH_CANDLE_DURATION_MINUTES = 1;
+  const CANDLE_INTERVAL_SECONDS = 60;
+  const MIN_CANDLE_BODY_RANGE_RATIO = 0.20;
+  const TOUCH_BARRIER_OFFSET = 0.50;
 
   const STAKE_LADDER_TEMPLATE = [
     0.35, 2.00, 9.50, 52.00, 280
@@ -146,15 +151,16 @@ document.addEventListener("DOMContentLoaded", () => {
   let chainId = null;
   let prevDigit = null;
   let rollingPairCount = 0;
-
-  // Retained strategy state variables from the original script.
-  let strategyStage = 0;
-  let strategyCandidateY = null;
-  let strategyY = null;
-  let strategyX = null;
-  let strategyCount = 0;
-  let strategyTarget = 0;
-  let nextTradeType = "DIGITUNDER";
+  let nextTradeType = "ONETOUCH";
+  let emaSourceTickCount = 0;
+  let emaSeedSamples = [];
+  let fastEma = null;
+  let slowEma = null;
+  let pendingEmaSignal = null;
+  let pendingEmaSignalCandleEpoch = null;
+  let strategyCandle = null;
+  let strategyCandleReady = false;
+  let invalidEpochWarningLogged = false;
 
   const LOG_MAX_ENTRIES = 1200;
   const TICK_FLUSH_MS = 60;
@@ -275,70 +281,188 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  const STRATEGY_X_DIGITS = new Set([5, 6, 7, 8, 9]);
-  const STRATEGY_J_DIGITS = new Set([6, 7, 8, 9]);
-  const STRATEGY_Z_DIGITS = new Set([8, 9]);
+  function resetStrategyScan() {
+    emaSourceTickCount = 0;
+    emaSeedSamples = [];
+    fastEma = null;
+    slowEma = null;
+    pendingEmaSignal = null;
+    pendingEmaSignalCandleEpoch = null;
+    strategyCandle = null;
+    strategyCandleReady = false;
+    invalidEpochWarningLogged = false;
+  }
 
-  let strategyPendingDigits = [];
+  function average(values) {
+    return values.reduce((sum, value) => sum + value, 0) / values.length;
+  }
 
-  function isValidStrategyPattern(digits) {
-    if (!Array.isArray(digits) || digits.length !== 5) return false;
+  function createStrategyCandle(epoch, price) {
+    return {
+      epoch,
+      open: price,
+      high: price,
+      low: price,
+      close: price
+    };
+  }
 
-    const [first, second, third, jDigit, zDigit] = digits;
-
-    const mxxPattern =
-      STRATEGY_X_DIGITS.has(first) &&
-      STRATEGY_X_DIGITS.has(second) &&
-      second === third;
-
-    const xxmPattern =
-      STRATEGY_X_DIGITS.has(first) &&
-      first === second &&
-      STRATEGY_X_DIGITS.has(third);
-
-    if (!mxxPattern && !xxmPattern) return false;
-
-    const mDigit = mxxPattern ? first : third;
-    const xDigit = mxxPattern ? second : first;
+  function confirmStrategyCandle(candle, direction) {
+    const range = candle.high - candle.low;
+    const body = Math.abs(candle.close - candle.open);
+    const bodyRatio = range > 0 ? body / range : 0;
+    const directionMatches =
+      direction === "bullish"
+        ? candle.close > candle.open
+        : candle.close < candle.open;
 
     return (
-      STRATEGY_J_DIGITS.has(jDigit) &&
-      jDigit !== mDigit &&
-      jDigit !== xDigit &&
-      STRATEGY_Z_DIGITS.has(zDigit)
+      directionMatches &&
+      bodyRatio > MIN_CANDLE_BODY_RANGE_RATIO + 1e-12
     );
   }
 
-  function resetStrategyScan(seedDigit = null) {
-    strategyStage = 0;
-    strategyCandidateY = null;
-    strategyY = null;
-    strategyX = null;
-    strategyCount = 0;
-    strategyTarget = 0;
-    strategyPendingDigits = [];
-  }
-
-  function processStrategyDigit(digit) {
-    strategyPendingDigits.push(digit);
-
-    if (strategyPendingDigits.length > 5) {
-      strategyPendingDigits.shift();
+  function closeStrategyCandle(candle, nextEpoch) {
+    if (
+      !pendingEmaSignal ||
+      pendingEmaSignalCandleEpoch !== candle.epoch
+    ) {
+      return false;
     }
 
-    if (
-      strategyPendingDigits.length === 5 &&
-      isValidStrategyPattern(strategyPendingDigits)
-    ) {
-      const pattern = strategyPendingDigits.join(", ");
+    const signal = pendingEmaSignal;
+    pendingEmaSignal = null;
+    pendingEmaSignalCandleEpoch = null;
+
+    if (nextEpoch - candle.epoch !== CANDLE_INTERVAL_SECONDS) {
+      appendLogLine(
+        "EMA signal discarded: candle data had a time gap, so confirmation is unreliable.",
+        "orange"
+      );
+      return false;
+    }
+
+    if (!confirmStrategyCandle(candle, signal)) {
+      appendLogLine(
+        `EMA ${signal} signal rejected: confirmation candle was opposite, doji, or had a body at/below 20% of its range.`,
+        "orange"
+      );
+      return false;
+    }
+
+    const barrier =
+      signal === "bullish"
+        ? `+${TOUCH_BARRIER_OFFSET.toFixed(2)}`
+        : `-${TOUCH_BARRIER_OFFSET.toFixed(2)}`;
+
+    appendLogLine(
+      `EMA ${signal} confirmed by closed 1-minute candle (body >20% of range) — requesting ONETOUCH barrier ${barrier}.`,
+      "lime"
+    );
+    placeTrade("ONETOUCH", barrier);
+    return true;
+  }
+
+  function processStrategyTick(price, tickEpoch) {
+    const epoch = Number(tickEpoch);
+
+    if (!Number.isFinite(epoch)) {
+      if (!invalidEpochWarningLogged) {
+        appendLogLine(
+          "EMA/candle analysis paused: tick data has no valid epoch.",
+          "red"
+        );
+        invalidEpochWarningLogged = true;
+      }
+      return;
+    }
+
+    invalidEpochWarningLogged = false;
+    const candleEpoch =
+      Math.floor(epoch / CANDLE_INTERVAL_SECONDS) * CANDLE_INTERVAL_SECONDS;
+
+    if (!strategyCandle) {
+      strategyCandle = createStrategyCandle(candleEpoch, price);
+    } else if (candleEpoch !== strategyCandle.epoch) {
+      const completedCandle = strategyCandle;
+      const candleGap = candleEpoch - completedCandle.epoch;
+      let enteredTrade = false;
+
+      if (strategyCandleReady && candleGap === CANDLE_INTERVAL_SECONDS) {
+        enteredTrade = closeStrategyCandle(completedCandle, candleEpoch);
+      } else if (
+        pendingEmaSignal &&
+        pendingEmaSignalCandleEpoch === completedCandle.epoch
+      ) {
+        pendingEmaSignal = null;
+        pendingEmaSignalCandleEpoch = null;
+        appendLogLine(
+          "EMA signal discarded: candle was partial or tick data had a time gap.",
+          "orange"
+        );
+      }
+
+      strategyCandleReady = candleGap === CANDLE_INTERVAL_SECONDS;
+      strategyCandle = createStrategyCandle(candleEpoch, price);
+
+      if (enteredTrade) return;
+    } else {
+      strategyCandle.high = Math.max(strategyCandle.high, price);
+      strategyCandle.low = Math.min(strategyCandle.low, price);
+      strategyCandle.close = price;
+    }
+
+    emaSourceTickCount += 1;
+    if (emaSourceTickCount % EMA_SAMPLE_TICK_INTERVAL !== 0) return;
+
+    if (fastEma === null || slowEma === null) {
+      emaSeedSamples.push(price);
+
+      if (emaSeedSamples.length < EMA_SLOW_PERIOD) return;
+
+      fastEma = average(emaSeedSamples.slice(0, EMA_FAST_PERIOD));
+      const fastMultiplier = 2 / (EMA_FAST_PERIOD + 1);
+      for (const sample of emaSeedSamples.slice(EMA_FAST_PERIOD)) {
+        fastEma = (sample - fastEma) * fastMultiplier + fastEma;
+      }
+      slowEma = average(emaSeedSamples);
+      emaSeedSamples = [];
 
       appendLogLine(
-        `VALID 5-DIGIT PATTERN: [${pattern}] — requesting DIGITUNDER barrier 8`,
-        "lime"
+        `EMA 6/9 ready from every 5th tick; waiting for a fresh crossover.`,
+        "#a78bfa"
       );
+      return;
+    }
 
-      resetStrategyScan();
-      placeTrade("DIGITUNDER");
+    const previousFastEma = fastEma;
+    const previousSlowEma = slowEma;
+    const fastMultiplier = 2 / (EMA_FAST_PERIOD + 1);
+    const slowMultiplier = 2 / (EMA_SLOW_PERIOD + 1);
+
+    fastEma = (price - fastEma) * fastMultiplier + fastEma;
+    slowEma = (price - slowEma) * slowMultiplier + slowEma;
+
+    if (
+      previousFastEma <= previousSlowEma &&
+      fastEma > slowEma
+    ) {
+      pendingEmaSignal = "bullish";
+      pendingEmaSignalCandleEpoch = strategyCandle.epoch;
+      appendLogLine(
+        "Fresh bullish EMA 6/9 crossover — waiting for this candle to close.",
+        "#38bdf8"
+      );
+    } else if (
+      previousFastEma >= previousSlowEma &&
+      fastEma < slowEma
+    ) {
+      pendingEmaSignal = "bearish";
+      pendingEmaSignalCandleEpoch = strategyCandle.epoch;
+      appendLogLine(
+        "Fresh bearish EMA 6/9 crossover — waiting for this candle to close.",
+        "#38bdf8"
+      );
     }
   }
 
@@ -380,7 +504,7 @@ document.addEventListener("DOMContentLoaded", () => {
     currentStake = 0;
     lastBalance = null;
     stakeIndex = 0;
-    nextTradeType = "DIGITUNDER";
+    nextTradeType = "ONETOUCH";
     setActiveBaseStake(getStakeSequence()[0]);
     tickBuffer.length = 0;
     rollingDigits.length = 0;
@@ -499,18 +623,18 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function buildProposalVariants(contractType) {
+  function buildProposalVariants(contractType, barrierOffset) {
     const amount = stake();
 
     const base = {
       proposal: 1,
       contract_type: contractType,
-      barrier: "8",
+      barrier: barrierOffset,
       currency: "USD",
       amount,
       basis: "stake",
-      duration: DIGIT_CONTRACT_DURATION_TICKS,
-      duration_unit: "t"
+      duration: TOUCH_CANDLE_DURATION_MINUTES,
+      duration_unit: "m"
     };
 
     return [
@@ -574,26 +698,26 @@ document.addEventListener("DOMContentLoaded", () => {
     sendMessage(proposalVariants[proposalAttempt++]);
   }
 
-  function placeTrade(contractType) {
+  function placeTrade(contractType, barrierOffset) {
     if (waitingProposal || tradeInFlight || activeContractId) {
       appendLogLine("Trade already in progress.", "orange");
       return;
     }
 
     tradeInFlight = true;
-    proposalVariants = buildProposalVariants(contractType);
+    proposalVariants = buildProposalVariants(contractType, barrierOffset);
     proposalAttempt = 0;
     waitingProposal = true;
 
     appendLogLine(
-      `TRADE ${contractType} barrier=8 stake=${proposalVariants[0].amount}`,
+      `TRADE ${contractType} barrier=${barrierOffset} stake=${proposalVariants[0].amount}`,
       "lime"
     );
 
     sendNextProposalVariant();
   }
 
-  function onTick(price) {
+  function onTick(price, tickEpoch) {
     if (!running || paused) return;
 
     const d = digitFromPrice(price);
@@ -630,7 +754,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    processStrategyDigit(d);
+    processStrategyTick(currentPrice, tickEpoch);
   }
 
   async function connect() {
@@ -771,7 +895,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         switch (payload.msg_type) {
           case "tick":
-            onTick(payload.tick.quote);
+            onTick(payload.tick.quote, payload.tick.epoch);
             break;
 
           case "balance":
@@ -940,7 +1064,7 @@ document.addEventListener("DOMContentLoaded", () => {
                   (stakeIndex + 1) % stakeSequence.length;
 
                 const nextStake = stakeSequence[stakeIndex];
-                nextTradeType = "DIGITUNDER";
+                nextTradeType = "ONETOUCH";
 
                 appendLogLine(
                   `LOSS ${pnl.toFixed(2)} | next base stake=${nextStake.toFixed(2)}` +
