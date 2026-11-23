@@ -74,7 +74,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const TURBO_CONTRACT_DURATION_MINUTES = 1;
   const CANDLE_INTERVAL_SECONDS = 60;
   const MIN_CANDLE_BODY_RANGE_RATIO = 0.20;
-  const TURBO_PAYOUT_PER_POINT = 0.09;
+  const TURBO_REFERENCE_STAKE = 0.35;
+  const TURBO_REFERENCE_PAYOUT_PER_POINT = 0.09;
 
   const STAKE_LADDER_TEMPLATE = [
     0.35, 0.35, 0.70, 1.40, 2.80, 5.60, 11.20, 22.40, 44.80
@@ -350,10 +351,11 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     const contractType = signal === "bullish" ? "TURBOSLONG" : "TURBOSSHORT";
+    const payoutPerPoint = getPayoutPerPoint(stake());
     nextTradeType = contractType;
 
     appendLogLine(
-      `EMA ${signal} confirmed by closed 1-minute candle (body >20% of range) — requesting ${contractType} with payout/point $${TURBO_PAYOUT_PER_POINT.toFixed(2)}; Deriv will calculate the barrier.`,
+      `EMA ${signal} confirmed by closed 1-minute candle (body >20% of range) — requesting ${contractType} with payout/point $${payoutPerPoint.toFixed(2)}; Deriv will calculate the barrier.`,
       "lime"
     );
     placeTrade(contractType);
@@ -465,6 +467,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function stake() {
     return getBaseStake();
+  }
+
+  function getPayoutPerPoint(amount) {
+    if (symbol !== "R_100") {
+      return TURBO_REFERENCE_PAYOUT_PER_POINT;
+    }
+
+    return Number(
+      (
+        (amount * TURBO_REFERENCE_PAYOUT_PER_POINT) /
+        TURBO_REFERENCE_STAKE
+      ).toFixed(2)
+    );
   }
 
   function clearContractState() {
@@ -621,6 +636,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function buildProposalVariants(contractType) {
     const amount = stake();
+    const payoutPerPoint = getPayoutPerPoint(amount);
 
     const base = {
       proposal: 1,
@@ -628,7 +644,7 @@ document.addEventListener("DOMContentLoaded", () => {
       currency: "USD",
       amount,
       basis: "stake",
-      payout_per_point: TURBO_PAYOUT_PER_POINT,
+      payout_per_point: payoutPerPoint,
       duration: TURBO_CONTRACT_DURATION_MINUTES,
       duration_unit: "m"
     };
@@ -767,7 +783,19 @@ document.addEventListener("DOMContentLoaded", () => {
       recoveryLoss += currentStake > 0 ? currentStake : 0;
     }
 
-    resetToScan();
+    if (activeContractId) {
+      waitingProposal = false;
+      proposalVariants = null;
+      proposalAttempt = 0;
+      tradeInFlight = true;
+      resetStrategyScan();
+      appendLogLine(
+        `Reconnecting to active contract ${activeContractId}; waiting for settlement before scanning again.`,
+        "orange"
+      );
+    } else {
+      resetToScan();
+    }
 
     if (ws) {
       ws.close();
@@ -867,6 +895,14 @@ document.addEventListener("DOMContentLoaded", () => {
         sendMessage({
           balance: 1
         });
+
+        if (activeContractId) {
+          sendMessage({
+            proposal_open_contract: 1,
+            contract_id: activeContractId,
+            subscribe: 1
+          });
+        }
       };
 
       ws.onmessage = e => {
