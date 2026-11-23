@@ -74,7 +74,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const TURBO_CONTRACT_DURATION_MINUTES = 1;
   const CANDLE_INTERVAL_SECONDS = 60;
   const MIN_CANDLE_BODY_RANGE_RATIO = 0.20;
-  const TURBO_BARRIER_OFFSET = 3.72;
   const TURBO_PAYOUT_PER_POINT = 0.09;
 
   const STAKE_LADDER_TEMPLATE = [
@@ -141,7 +140,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let waitingProposal = false;
   let tradeInFlight = false;
   let proposalVariants = null;
-  let proposalBarrierDescription = "";
   let proposalAttempt = 0;
   let activeContractId = null;
   let settlementDigit = null;
@@ -352,17 +350,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     const contractType = signal === "bullish" ? "TURBOSLONG" : "TURBOSSHORT";
-    const barrier =
-      signal === "bullish"
-        ? `-${TURBO_BARRIER_OFFSET.toFixed(2)}`
-        : `+${TURBO_BARRIER_OFFSET.toFixed(2)}`;
     nextTradeType = contractType;
 
     appendLogLine(
-      `EMA ${signal} confirmed by closed 1-minute candle (body >20% of range) — requesting ${contractType} barrier ${barrier}, payout/point $${TURBO_PAYOUT_PER_POINT.toFixed(2)}.`,
+      `EMA ${signal} confirmed by closed 1-minute candle (body >20% of range) — requesting ${contractType} with payout/point $${TURBO_PAYOUT_PER_POINT.toFixed(2)}; Deriv will calculate the barrier.`,
       "lime"
     );
-    placeTrade(contractType, barrier);
+    placeTrade(contractType);
     return true;
   }
 
@@ -625,19 +619,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function buildProposalVariants(contractType, barrierOffset) {
-    const offsetMatch = String(barrierOffset).match(/^([+-])(\d+(?:\.\d+)?)$/);
-    if (!offsetMatch) {
-      throw new Error(`Invalid relative barrier offset: ${barrierOffset}`);
-    }
-
+  function buildProposalVariants(contractType) {
     const amount = stake();
-    proposalBarrierDescription = "relative";
 
     const base = {
       proposal: 1,
       contract_type: contractType,
-      barrier: barrierOffset,
       currency: "USD",
       amount,
       basis: "stake",
@@ -707,7 +694,7 @@ document.addEventListener("DOMContentLoaded", () => {
     sendMessage(proposalVariants[proposalAttempt++]);
   }
 
-  function placeTrade(contractType, barrierOffset) {
+  function placeTrade(contractType) {
     if (waitingProposal || tradeInFlight || activeContractId) {
       appendLogLine("Trade already in progress.", "orange");
       return;
@@ -715,7 +702,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     tradeInFlight = true;
     try {
-      proposalVariants = buildProposalVariants(contractType, barrierOffset);
+      proposalVariants = buildProposalVariants(contractType);
     } catch (error) {
       tradeInFlight = false;
       appendLogLine(`Cannot build Turbo proposal: ${error.message}`, "red");
@@ -725,7 +712,7 @@ document.addEventListener("DOMContentLoaded", () => {
     waitingProposal = true;
 
     appendLogLine(
-      `TRADE ${contractType} barrier=${proposalVariants[0].barrier} (${proposalBarrierDescription}) duration=${proposalVariants[0].duration}${proposalVariants[0].duration_unit} payout/point=$${proposalVariants[0].payout_per_point.toFixed(2)} stake=${proposalVariants[0].amount}`,
+      `TRADE ${contractType} duration=${proposalVariants[0].duration}${proposalVariants[0].duration_unit} payout/point=$${proposalVariants[0].payout_per_point.toFixed(2)} stake=${proposalVariants[0].amount}; barrier calculated by Deriv`,
       "lime"
     );
 
