@@ -1,4 +1,3 @@
-// Deriv EMA 6/9 Touch strategy
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -72,10 +71,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const EMA_FAST_PERIOD = 6;
   const EMA_SLOW_PERIOD = 9;
   const EMA_SAMPLE_TICK_INTERVAL = 5;
-  const TOUCH_CONTRACT_DURATION_TICKS = 10;
+  const TURBO_CONTRACT_DURATION_MINUTES = 1;
   const CANDLE_INTERVAL_SECONDS = 60;
   const MIN_CANDLE_BODY_RANGE_RATIO = 0.20;
-  const TOUCH_BARRIER_OFFSET = 0.20;
+  const TURBO_BARRIER_OFFSET = 3.72;
+  const TURBO_PAYOUT_PER_POINT = 0.09;
 
   const STAKE_LADDER_TEMPLATE = [
     0.35, 0.35, 0.70, 1.40, 2.80, 5.60, 11.20, 22.40, 44.80
@@ -152,7 +152,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let chainId = null;
   let prevDigit = null;
   let rollingPairCount = 0;
-  let nextTradeType = "ONETOUCH";
+  let nextTradeType = "TURBOSLONG/TURBOSSHORT";
   let emaSourceTickCount = 0;
   let emaSeedSamples = [];
   let fastEma = null;
@@ -351,16 +351,18 @@ document.addEventListener("DOMContentLoaded", () => {
       return false;
     }
 
+    const contractType = signal === "bullish" ? "TURBOSLONG" : "TURBOSSHORT";
     const barrier =
       signal === "bullish"
-        ? `+${TOUCH_BARRIER_OFFSET.toFixed(2)}`
-        : `-${TOUCH_BARRIER_OFFSET.toFixed(2)}`;
+        ? `-${TURBO_BARRIER_OFFSET.toFixed(2)}`
+        : `+${TURBO_BARRIER_OFFSET.toFixed(2)}`;
+    nextTradeType = contractType;
 
     appendLogLine(
-      `EMA ${signal} confirmed by closed 1-minute candle (body >20% of range) — requesting ONETOUCH barrier ${barrier}.`,
+      `EMA ${signal} confirmed by closed 1-minute candle (body >20% of range) — requesting ${contractType} barrier ${barrier}, payout/point $${TURBO_PAYOUT_PER_POINT.toFixed(2)}.`,
       "lime"
     );
-    placeTrade("ONETOUCH", barrier);
+    placeTrade(contractType, barrier);
     return true;
   }
 
@@ -505,7 +507,7 @@ document.addEventListener("DOMContentLoaded", () => {
     currentStake = 0;
     lastBalance = null;
     stakeIndex = 0;
-    nextTradeType = "ONETOUCH";
+    nextTradeType = "TURBOSLONG/TURBOSSHORT";
     setActiveBaseStake(getStakeSequence()[0]);
     tickBuffer.length = 0;
     rollingDigits.length = 0;
@@ -639,8 +641,9 @@ document.addEventListener("DOMContentLoaded", () => {
       currency: "USD",
       amount,
       basis: "stake",
-      duration: TOUCH_CONTRACT_DURATION_TICKS,
-      duration_unit: "t"
+      payout_per_point: TURBO_PAYOUT_PER_POINT,
+      duration: TURBO_CONTRACT_DURATION_MINUTES,
+      duration_unit: "m"
     };
 
     return [
@@ -715,14 +718,14 @@ document.addEventListener("DOMContentLoaded", () => {
       proposalVariants = buildProposalVariants(contractType, barrierOffset);
     } catch (error) {
       tradeInFlight = false;
-      appendLogLine(`Cannot build Touch proposal: ${error.message}`, "red");
+      appendLogLine(`Cannot build Turbo proposal: ${error.message}`, "red");
       return;
     }
     proposalAttempt = 0;
     waitingProposal = true;
 
     appendLogLine(
-      `TRADE ${contractType} barrier=${proposalVariants[0].barrier} (${proposalBarrierDescription}) duration=${proposalVariants[0].duration}${proposalVariants[0].duration_unit} stake=${proposalVariants[0].amount}`,
+      `TRADE ${contractType} barrier=${proposalVariants[0].barrier} (${proposalBarrierDescription}) duration=${proposalVariants[0].duration}${proposalVariants[0].duration_unit} payout/point=$${proposalVariants[0].payout_per_point.toFixed(2)} stake=${proposalVariants[0].amount}`,
       "lime"
     );
 
@@ -1076,7 +1079,7 @@ document.addEventListener("DOMContentLoaded", () => {
                   (stakeIndex + 1) % stakeSequence.length;
 
                 const nextStake = stakeSequence[stakeIndex];
-                nextTradeType = "ONETOUCH";
+                nextTradeType = "TURBOSLONG/TURBOSSHORT";
 
                 appendLogLine(
                   `LOSS ${pnl.toFixed(2)} | next base stake=${nextStake.toFixed(2)}` +
