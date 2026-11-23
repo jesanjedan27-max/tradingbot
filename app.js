@@ -1,3 +1,4 @@
+// Deriv EMA 5/10 Rise/Fall strategy
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
@@ -67,30 +68,18 @@ document.addEventListener("DOMContentLoaded", () => {
     "1HZ100V": 2
   };
 
-  const DEFAULT_PAYOUT_RATIO = 1.09;
-  const EMA_FAST_PERIOD = 6;
-  const EMA_SLOW_PERIOD = 9;
+  const EMA_FAST_PERIOD = 5;
+  const EMA_SLOW_PERIOD = 10;
   const EMA_SAMPLE_TICK_INTERVAL = 5;
-  const TURBO_CONTRACT_DURATION_MINUTES = 1;
+  const CONTRACT_DURATION_MINUTES = 1;
   const CANDLE_INTERVAL_SECONDS = 60;
   const MIN_CANDLE_BODY_RANGE_RATIO = 0.20;
-  const TURBO_PAYOUT_PER_POINT_BY_STAKE = [
-    { stake: 0.35, payoutPerPoint: 0.09 },
-    { stake: 0.70, payoutPerPoint: 0.21 },
-    { stake: 1.40, payoutPerPoint: 0.30 },
-    { stake: 2.80, payoutPerPoint: 0.60 },
-    { stake: 5.60, payoutPerPoint: 1.50 },
-    { stake: 11.20, payoutPerPoint: 3.00 },
-    { stake: 22.40, payoutPerPoint: 6.00 },
-    { stake: 44.80, payoutPerPoint: 12.00 }
-  ];
-  const DEFAULT_TURBO_PAYOUT_PER_POINT = 0.09;
 
   const STAKE_LADDER_TEMPLATE = [
-    0.35, 0.70, 1.40, 2.80, 5.60, 11.20, 22.40, 44.80
+    0.35, 0.45, 0.85, 1.74, 3.56, 7.30, 14.95, 30.65
   ];
 
-  let symbol = "R_100";
+  let symbol = "1HZ100V";
   const symbolDecimals = {};
 
   function decimalsForSymbol(sym) {
@@ -140,7 +129,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const RECONNECT_BASE_MS = 2000;
   const RECONNECT_MAX_MS = 30000;
 
-  let lastPayoutRatio = null;
   let recoveryLoss = 0;
   let currentStake = 0;
   let lastBalance = null;
@@ -160,7 +148,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let chainId = null;
   let prevDigit = null;
   let rollingPairCount = 0;
-  let nextTradeType = "TURBOSLONG/TURBOSSHORT";
+  let nextTradeType = "CALL/PUT";
   let emaSourceTickCount = 0;
   let emaSeedSamples = [];
   let fastEma = null;
@@ -359,12 +347,11 @@ document.addEventListener("DOMContentLoaded", () => {
       return false;
     }
 
-    const contractType = signal === "bullish" ? "TURBOSLONG" : "TURBOSSHORT";
-    const payoutPerPoint = getPayoutPerPoint(stake());
+    const contractType = signal === "bullish" ? "CALL" : "PUT";
     nextTradeType = contractType;
 
     appendLogLine(
-      `EMA ${signal} confirmed by closed 1-minute candle (body >20% of range) — requesting ${contractType} with payout/point $${payoutPerPoint.toFixed(2)}; Deriv will calculate the barrier.`,
+      `EMA ${signal} confirmed by closed 1-minute candle (body >20% of range) — requesting ${contractType}.`,
       "lime"
     );
     placeTrade(contractType);
@@ -437,7 +424,7 @@ document.addEventListener("DOMContentLoaded", () => {
       emaSeedSamples = [];
 
       appendLogLine(
-        `EMA 6/9 ready from every 5th tick; waiting for a fresh crossover.`,
+        `EMA 5/10 ready from every 5th tick; waiting for a fresh crossover.`,
         "#a78bfa"
       );
       return;
@@ -458,7 +445,7 @@ document.addEventListener("DOMContentLoaded", () => {
       pendingEmaSignal = "bullish";
       pendingEmaSignalCandleEpoch = strategyCandle.epoch;
       appendLogLine(
-        "Fresh bullish EMA 6/9 crossover — waiting for this candle to close.",
+        "Fresh bullish EMA 5/10 crossover — waiting for this candle to close.",
         "#38bdf8"
       );
     } else if (
@@ -468,7 +455,7 @@ document.addEventListener("DOMContentLoaded", () => {
       pendingEmaSignal = "bearish";
       pendingEmaSignalCandleEpoch = strategyCandle.epoch;
       appendLogLine(
-        "Fresh bearish EMA 6/9 crossover — waiting for this candle to close.",
+        "Fresh bearish EMA 5/10 crossover — waiting for this candle to close.",
         "#38bdf8"
       );
     }
@@ -476,69 +463,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function stake() {
     return getBaseStake();
-  }
-
-  function getPayoutPerPoint(amount) {
-    if (symbol !== "R_100") {
-      return DEFAULT_TURBO_PAYOUT_PER_POINT;
-    }
-
-    return TURBO_PAYOUT_PER_POINT_BY_STAKE.reduce(
-      (nearest, entry) =>
-        Math.abs(entry.stake - amount) < Math.abs(nearest.stake - amount)
-          ? entry
-          : nearest,
-      TURBO_PAYOUT_PER_POINT_BY_STAKE[0]
-    ).payoutPerPoint;
-  }
-
-  function retryWithAvailablePayout(payload) {
-    const details = payload.error?.details;
-    const choices = details?.payout_per_point_choices;
-
-    if (
-      !waitingProposal ||
-      !proposalVariants ||
-      details?.field !== "payout_per_point" ||
-      !Array.isArray(choices)
-    ) {
-      return false;
-    }
-
-    const previousRequest = proposalVariants[proposalAttempt - 1];
-    if (!previousRequest) return false;
-
-    const requestedPayout = Number(previousRequest.payout_per_point);
-    const validChoices = choices
-      .map(Number)
-      .filter(choice => Number.isFinite(choice) && choice > 0);
-
-    if (!Number.isFinite(requestedPayout) || !validChoices.length) {
-      return false;
-    }
-
-    const nearestChoice = validChoices.reduce((nearest, choice) =>
-      Math.abs(choice - requestedPayout) < Math.abs(nearest - requestedPayout)
-        ? choice
-        : nearest
-    );
-
-    const alreadyTried = proposalVariants
-      .slice(0, proposalAttempt)
-      .some(request => Number(request.payout_per_point) === nearestChoice);
-
-    if (alreadyTried) return false;
-
-    proposalVariants.push({
-      ...previousRequest,
-      payout_per_point: nearestChoice
-    });
-    appendLogLine(
-      `Deriv rejected payout/point $${requestedPayout.toFixed(2)}; retrying with the nearest available value $${nearestChoice.toFixed(2)}.`,
-      "orange"
-    );
-    sendNextProposalVariant();
-    return true;
   }
 
   function clearContractState() {
@@ -571,11 +495,10 @@ document.addEventListener("DOMContentLoaded", () => {
     rollingPairCount = 0;
     totalProfit = 0;
     recoveryLoss = 0;
-    lastPayoutRatio = null;
     currentStake = 0;
     lastBalance = null;
     stakeIndex = 0;
-    nextTradeType = "TURBOSLONG/TURBOSSHORT";
+    nextTradeType = "CALL/PUT";
     setActiveBaseStake(getStakeSequence()[0]);
     tickBuffer.length = 0;
     rollingDigits.length = 0;
@@ -667,7 +590,6 @@ document.addEventListener("DOMContentLoaded", () => {
     proposalVariants = null;
     proposalAttempt = 0;
     tickBuffer.length = 0;
-    lastPayoutRatio = null;
     rollingDigits.length = 0;
     resetStrategyScan();
 
@@ -695,7 +617,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function buildProposalVariants(contractType) {
     const amount = stake();
-    const payoutPerPoint = getPayoutPerPoint(amount);
 
     const base = {
       proposal: 1,
@@ -703,8 +624,7 @@ document.addEventListener("DOMContentLoaded", () => {
       currency: "USD",
       amount,
       basis: "stake",
-      payout_per_point: payoutPerPoint,
-      duration: TURBO_CONTRACT_DURATION_MINUTES,
+      duration: CONTRACT_DURATION_MINUTES,
       duration_unit: "m"
     };
 
@@ -780,14 +700,14 @@ document.addEventListener("DOMContentLoaded", () => {
       proposalVariants = buildProposalVariants(contractType);
     } catch (error) {
       tradeInFlight = false;
-      appendLogLine(`Cannot build Turbo proposal: ${error.message}`, "red");
+      appendLogLine(`Cannot build Rise/Fall proposal: ${error.message}`, "red");
       return;
     }
     proposalAttempt = 0;
     waitingProposal = true;
 
     appendLogLine(
-      `TRADE ${contractType} duration=${proposalVariants[0].duration}${proposalVariants[0].duration_unit} payout/point=$${proposalVariants[0].payout_per_point.toFixed(2)} stake=${proposalVariants[0].amount}; barrier calculated by Deriv`,
+      `TRADE ${contractType} duration=${proposalVariants[0].duration}${proposalVariants[0].duration_unit} stake=${proposalVariants[0].amount}`,
       "lime"
     );
 
@@ -985,8 +905,6 @@ document.addEventListener("DOMContentLoaded", () => {
             [
               "proposal",
               "contract_type",
-              "barrier",
-              "payout_per_point",
               "amount",
               "basis",
               "currency",
@@ -1009,10 +927,6 @@ document.addEventListener("DOMContentLoaded", () => {
               `Proposal validation details: ${JSON.stringify(payload.error.details)}`,
               "orange"
             );
-          }
-
-          if (retryWithAvailablePayout(payload)) {
-            return;
           }
 
           if (!handleValidationError(message)) {
@@ -1088,14 +1002,6 @@ document.addEventListener("DOMContentLoaded", () => {
             currentStake = Number(
               payload.proposal.ask_price || 0
             );
-
-            if (
-              payload.proposal.payout &&
-              currentStake > 0
-            ) {
-              lastPayoutRatio =
-                Number(payload.proposal.payout) / currentStake;
-            }
 
             sendMessage({
               buy: payload.proposal.id,
@@ -1196,7 +1102,7 @@ document.addEventListener("DOMContentLoaded", () => {
                   (stakeIndex + 1) % stakeSequence.length;
 
                 const nextStake = stakeSequence[stakeIndex];
-                nextTradeType = "TURBOSLONG/TURBOSSHORT";
+                nextTradeType = "CALL/PUT";
 
                 appendLogLine(
                   `LOSS ${pnl.toFixed(2)} | next base stake=${nextStake.toFixed(2)}` +
@@ -1204,7 +1110,7 @@ document.addEventListener("DOMContentLoaded", () => {
                       ? ` (digit=${resultDigit})`
                       : "") +
                     ` | next contract=${nextTradeType}` +
-                    ` | fresh pattern search`,
+                    ` | fresh EMA signal search`,
                   "red"
                 );
 
