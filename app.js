@@ -898,6 +898,37 @@ document.addEventListener("DOMContentLoaded", () => {
 
           appendLogLine(`Error: ${message}`, "red");
 
+          if (waitingProposal && payload.echo_req) {
+            const echoedRequest = {};
+            [
+              "proposal",
+              "contract_type",
+              "barrier",
+              "payout_per_point",
+              "amount",
+              "basis",
+              "currency",
+              "duration",
+              "duration_unit",
+              "underlying_symbol"
+            ].forEach(key => {
+              if (Object.prototype.hasOwnProperty.call(payload.echo_req, key)) {
+                echoedRequest[key] = payload.echo_req[key];
+              }
+            });
+            appendLogLine(
+              `Deriv echoed proposal request: ${JSON.stringify(echoedRequest)}`,
+              "orange"
+            );
+          }
+
+          if (waitingProposal && payload.error.details) {
+            appendLogLine(
+              `Proposal validation details: ${JSON.stringify(payload.error.details)}`,
+              "orange"
+            );
+          }
+
           if (!handleValidationError(message)) {
             tradeInFlight = false;
             waitingProposal = false;
