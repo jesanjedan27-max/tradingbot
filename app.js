@@ -74,11 +74,20 @@ document.addEventListener("DOMContentLoaded", () => {
   const TURBO_CONTRACT_DURATION_MINUTES = 1;
   const CANDLE_INTERVAL_SECONDS = 60;
   const MIN_CANDLE_BODY_RANGE_RATIO = 0.20;
-  const TURBO_REFERENCE_STAKE = 0.35;
-  const TURBO_REFERENCE_PAYOUT_PER_POINT = 0.09;
+  const TURBO_PAYOUT_PER_POINT_BY_STAKE = [
+    { stake: 0.35, payoutPerPoint: 0.09 },
+    { stake: 0.70, payoutPerPoint: 0.21 },
+    { stake: 1.40, payoutPerPoint: 0.30 },
+    { stake: 2.80, payoutPerPoint: 0.60 },
+    { stake: 5.60, payoutPerPoint: 1.50 },
+    { stake: 11.20, payoutPerPoint: 3.00 },
+    { stake: 22.40, payoutPerPoint: 6.00 },
+    { stake: 44.80, payoutPerPoint: 12.00 }
+  ];
+  const DEFAULT_TURBO_PAYOUT_PER_POINT = 0.09;
 
   const STAKE_LADDER_TEMPLATE = [
-    0.35, 0.35, 0.70, 1.40, 2.80, 5.60, 11.20, 22.40, 44.80
+    0.35, 0.70, 1.40, 2.80, 5.60, 11.20, 22.40, 44.80
   ];
 
   let symbol = "R_100";
@@ -471,15 +480,65 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function getPayoutPerPoint(amount) {
     if (symbol !== "R_100") {
-      return TURBO_REFERENCE_PAYOUT_PER_POINT;
+      return DEFAULT_TURBO_PAYOUT_PER_POINT;
     }
 
-    return Number(
-      (
-        (amount * TURBO_REFERENCE_PAYOUT_PER_POINT) /
-        TURBO_REFERENCE_STAKE
-      ).toFixed(2)
+    return TURBO_PAYOUT_PER_POINT_BY_STAKE.reduce(
+      (nearest, entry) =>
+        Math.abs(entry.stake - amount) < Math.abs(nearest.stake - amount)
+          ? entry
+          : nearest,
+      TURBO_PAYOUT_PER_POINT_BY_STAKE[0]
+    ).payoutPerPoint;
+  }
+
+  function retryWithAvailablePayout(payload) {
+    const details = payload.error?.details;
+    const choices = details?.payout_per_point_choices;
+
+    if (
+      !waitingProposal ||
+      !proposalVariants ||
+      details?.field !== "payout_per_point" ||
+      !Array.isArray(choices)
+    ) {
+      return false;
+    }
+
+    const previousRequest = proposalVariants[proposalAttempt - 1];
+    if (!previousRequest) return false;
+
+    const requestedPayout = Number(previousRequest.payout_per_point);
+    const validChoices = choices
+      .map(Number)
+      .filter(choice => Number.isFinite(choice) && choice > 0);
+
+    if (!Number.isFinite(requestedPayout) || !validChoices.length) {
+      return false;
+    }
+
+    const nearestChoice = validChoices.reduce((nearest, choice) =>
+      Math.abs(choice - requestedPayout) < Math.abs(nearest - requestedPayout)
+        ? choice
+        : nearest
     );
+
+    const alreadyTried = proposalVariants
+      .slice(0, proposalAttempt)
+      .some(request => Number(request.payout_per_point) === nearestChoice);
+
+    if (alreadyTried) return false;
+
+    proposalVariants.push({
+      ...previousRequest,
+      payout_per_point: nearestChoice
+    });
+    appendLogLine(
+      `Deriv rejected payout/point $${requestedPayout.toFixed(2)}; retrying with the nearest available value $${nearestChoice.toFixed(2)}.`,
+      "orange"
+    );
+    sendNextProposalVariant();
+    return true;
   }
 
   function clearContractState() {
@@ -950,6 +1009,10 @@ document.addEventListener("DOMContentLoaded", () => {
               `Proposal validation details: ${JSON.stringify(payload.error.details)}`,
               "orange"
             );
+          }
+
+          if (retryWithAvailablePayout(payload)) {
+            return;
           }
 
           if (!handleValidationError(message)) {
